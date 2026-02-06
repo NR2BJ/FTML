@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,8 @@ func NewStreamHandler(mediaPath string, hlsManager *ffmpeg.HLSManager) *StreamHa
 }
 
 func (h *StreamHandler) HLSHandler(w http.ResponseWriter, r *http.Request) {
-	path := chi.URLParam(r, "*")
+	raw := chi.URLParam(r, "*")
+	path, _ := url.PathUnescape(raw)
 
 	// Check if requesting a .ts segment or .m3u8 playlist
 	if strings.HasSuffix(path, ".ts") {
@@ -84,12 +86,20 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 
 	// Rewrite segment paths: "seg_00001.ts" -> "/api/stream/hls/VIDEO_PATH/seg_00001.ts?token=..."
 	token := r.URL.Query().Get("token")
+	// URL-encode each path segment for the rewritten URLs
+	pathParts := strings.Split(videoPath, "/")
+	encodedParts := make([]string, len(pathParts))
+	for i, p := range pathParts {
+		encodedParts[i] = url.PathEscape(p)
+	}
+	encodedVideoPath := strings.Join(encodedParts, "/")
+
 	content := string(data)
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
 		if strings.HasSuffix(strings.TrimSpace(line), ".ts") {
 			segName := strings.TrimSpace(line)
-			lines[i] = fmt.Sprintf("/api/stream/hls/%s/%s?token=%s", videoPath, segName, token)
+			lines[i] = fmt.Sprintf("/api/stream/hls/%s/%s?token=%s", encodedVideoPath, segName, token)
 		}
 	}
 
@@ -98,7 +108,8 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	w.Write([]byte(strings.Join(lines, "\n")))
 }
 
-func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, path string) {
+func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, rawPath string) {
+	path, _ := url.PathUnescape(rawPath)
 	// path format: "video/folder/file.mkv/seg_00001.ts"
 	parts := strings.Split(path, "/")
 	if len(parts) < 2 {
@@ -131,7 +142,7 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, pat
 }
 
 func (h *StreamHandler) DirectPlay(w http.ResponseWriter, r *http.Request) {
-	path := chi.URLParam(r, "*")
+	path := extractPath(r)
 	fullPath := filepath.Join(h.mediaPath, path)
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {

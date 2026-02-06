@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/video-stream/backend/internal/api/middleware"
 	"github.com/video-stream/backend/internal/db"
 )
@@ -29,7 +28,7 @@ func (h *UserHandler) SavePosition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := chi.URLParam(r, "*")
+	path := extractPath(r)
 	var req savePositionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request", http.StatusBadRequest)
@@ -51,7 +50,7 @@ func (h *UserHandler) GetPosition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := chi.URLParam(r, "*")
+	path := extractPath(r)
 	pos, err := h.db.GetWatchPosition(claims.UserID, path)
 	if err != nil {
 		jsonError(w, "failed to get position", http.StatusInternalServerError)

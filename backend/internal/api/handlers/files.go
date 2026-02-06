@@ -2,12 +2,27 @@ package handlers
 
 import (
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/video-stream/backend/internal/ffmpeg"
 	"github.com/video-stream/backend/internal/storage"
 )
+
+// extractPath extracts and URL-decodes the wildcard path from chi router
+func extractPath(r *http.Request) string {
+	path := chi.URLParam(r, "*")
+	decoded, err := url.PathUnescape(path)
+	if err != nil {
+		return path
+	}
+	// Clean any double slashes or trailing slashes
+	decoded = strings.TrimPrefix(decoded, "/")
+	decoded = strings.TrimSuffix(decoded, "/")
+	return decoded
+}
 
 type FilesHandler struct {
 	mediaPath string
@@ -19,7 +34,7 @@ func NewFilesHandler(mediaPath, dataPath string) *FilesHandler {
 }
 
 func (h *FilesHandler) GetTree(w http.ResponseWriter, r *http.Request) {
-	path := chi.URLParam(r, "*")
+	path := extractPath(r)
 	if path == "" {
 		path = "."
 	}
@@ -37,7 +52,7 @@ func (h *FilesHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *FilesHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
-	path := chi.URLParam(r, "*")
+	path := extractPath(r)
 	fullPath := filepath.Join(h.mediaPath, path)
 
 	if !storage.IsVideoFile(path) {
@@ -55,7 +70,7 @@ func (h *FilesHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *FilesHandler) GetThumbnail(w http.ResponseWriter, r *http.Request) {
-	path := chi.URLParam(r, "*")
+	path := extractPath(r)
 	fullPath := filepath.Join(h.mediaPath, path)
 	thumbDir := filepath.Join(h.dataPath, "thumbnails", path)
 
