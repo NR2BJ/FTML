@@ -1,0 +1,31 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
+      - ./data:/data
+    environment:
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
+      - JWT_SECRET=${JWT_SECRET:-change-this-secret}
+      - MEDIA_PATH=/media
+      - DATA_PATH=/data
+      - DB_PATH=/data/videostream.db
+      - PORT=8080
+    devices:
+      - /dev/dri:/dev/dri
+    restart: unless-stopped
