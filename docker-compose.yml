@@ -4,20 +4,22 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "80:80"
+      - "${FTML_PORT:-7979}:80"
     depends_on:
       - backend
+    networks:
+      - homeserver-net
     restart: unless-stopped
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     volumes:
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
-      - ./data:/data
+      - ftml_data:/data
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
@@ -28,4 +30,14 @@ services:
       - PORT=8080
     devices:
       - /dev/dri:/dev/dri
+    networks:
+      - homeserver-net
     restart: unless-stopped
+
+volumes:
+  ftml_data:
+    external: true
+
+networks:
+  homeserver-net:
+    external: true
