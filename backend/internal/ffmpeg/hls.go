@@ -3,6 +3,7 @@ package ffmpeg
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,7 +52,9 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 
 	args := []string{
 		"-hide_banner",
-		"-loglevel", "error",
+		"-loglevel", "warning",
+		"-analyzeduration", "20000000",
+		"-probesize", "10000000",
 	}
 
 	if startTime > 0 {
@@ -60,11 +63,14 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 
 	args = append(args,
 		"-i", inputPath,
+		"-map", "0:v:0",
+		"-map", "0:a:0?",
 		"-c:v", "libx264",
 		"-preset", "veryfast",
 		"-crf", "23",
 		"-maxrate", "15M",
 		"-bufsize", "30M",
+		"-pix_fmt", "yuv420p",
 		"-c:a", "aac",
 		"-b:a", "192k",
 		"-ac", "2",
@@ -73,14 +79,27 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 		"-hls_list_size", "0",
 		"-hls_segment_filename", filepath.Join(outputDir, "seg_%05d.ts"),
 		"-hls_flags", "independent_segments",
+		"-hls_playlist_type", "event",
 		filepath.Join(outputDir, "playlist.m3u8"),
 	)
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	cmd.Stderr = os.Stderr
+
+	// Log FFmpeg stderr for debugging
+	logFile, err := os.Create(filepath.Join(outputDir, "ffmpeg.log"))
+	if err != nil {
+		cmd.Stderr = os.Stderr
+	} else {
+		cmd.Stderr = logFile
+	}
+
+	log.Printf("[HLS] Starting transcode: session=%s input=%s", sessionID, inputPath)
 
 	if err := cmd.Start(); err != nil {
 		cancel()
+		if logFile != nil {
+			logFile.Close()
+		}
 		return nil, fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
@@ -95,7 +114,15 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 	m.sessions[sessionID] = session
 
 	go func() {
-		cmd.Wait()
+		err := cmd.Wait()
+		if logFile != nil {
+			logFile.Close()
+		}
+		if err != nil {
+			log.Printf("[HLS] FFmpeg exited with error: session=%s err=%v", sessionID, err)
+		} else {
+			log.Printf("[HLS] FFmpeg completed: session=%s", sessionID)
+		}
 	}()
 
 	return session, nil

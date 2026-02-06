@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import Hls from 'hls.js'
 import { getHLSUrl, getDirectUrl } from '@/api/stream'
+import { getFileInfo } from '@/api/files'
 import { usePlayerStore } from '@/stores/playerStore'
 import Controls from './Controls'
 import { formatDuration } from '@/utils/format'
@@ -26,6 +27,17 @@ export default function Player({ path }: PlayerProps) {
     setDuration,
     setCurrentFile,
   } = usePlayerStore()
+
+  // Fetch file info for duration
+  useEffect(() => {
+    getFileInfo(path)
+      .then(({ data }) => {
+        if (data.duration) {
+          setDuration(parseFloat(data.duration))
+        }
+      })
+      .catch(() => {})
+  }, [path, setDuration])
 
   // Initialize player
   useEffect(() => {
@@ -102,7 +114,7 @@ export default function Player({ path }: PlayerProps) {
 
   const handleLoadedMetadata = useCallback(() => {
     const video = videoRef.current
-    if (video) {
+    if (video && isFinite(video.duration) && video.duration > 0) {
       setDuration(video.duration)
     }
   }, [setDuration])
