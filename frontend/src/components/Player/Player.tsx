@@ -14,6 +14,7 @@ export default function Player({ path }: PlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const hlsRef = useRef<Hls | null>(null)
+  const probeDurationRef = useRef<number>(0)
   const [useHLS, setUseHLS] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -28,16 +29,25 @@ export default function Player({ path }: PlayerProps) {
     setCurrentFile,
   } = usePlayerStore()
 
-  // Fetch file info for duration
+  // Reset state and fetch file info when path changes
   useEffect(() => {
+    // Reset all player state for new video
+    setCurrentTime(0)
+    setDuration(0)
+    setPlaying(false)
+    probeDurationRef.current = 0
+
+    // Fetch real duration from FFprobe
     getFileInfo(path)
       .then(({ data }) => {
         if (data.duration) {
-          setDuration(parseFloat(data.duration))
+          const dur = parseFloat(data.duration)
+          probeDurationRef.current = dur
+          setDuration(dur)
         }
       })
       .catch(() => {})
-  }, [path, setDuration])
+  }, [path, setCurrentTime, setDuration, setPlaying])
 
   // Initialize player
   useEffect(() => {
@@ -115,7 +125,11 @@ export default function Player({ path }: PlayerProps) {
   const handleLoadedMetadata = useCallback(() => {
     const video = videoRef.current
     if (video && isFinite(video.duration) && video.duration > 0) {
-      setDuration(video.duration)
+      // Only update if video reports a longer duration than FFprobe
+      // (HLS initially reports only buffered segment length)
+      if (video.duration > probeDurationRef.current) {
+        setDuration(video.duration)
+      }
     }
   }, [setDuration])
 
