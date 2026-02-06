@@ -77,6 +77,9 @@ export default function Player({ path }: PlayerProps) {
       const hls = new Hls({
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
+        maxBufferHole: 0.5,
+        highBufferWatchdogPeriod: 3,
+        startFragPrefetch: true,
         xhrSetup: (xhr: XMLHttpRequest) => {
           xhr.setRequestHeader('Authorization', `Bearer ${token}`)
         },

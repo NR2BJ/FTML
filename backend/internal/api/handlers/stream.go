@@ -63,16 +63,29 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		return
 	}
 
-	// Wait for playlist to be ready
+	// Wait for playlist to be ready with at least 3 segments
+	// This prevents buffer underrun at the start of playback
 	playlistPath := filepath.Join(session.OutputDir, "playlist.m3u8")
-	for i := 0; i < 50; i++ {
-		if _, err := os.Stat(playlistPath); err == nil {
-			break
+	ready := false
+	for i := 0; i < 100; i++ {
+		data, err := os.ReadFile(playlistPath)
+		if err == nil {
+			// Count .ts segment lines to ensure enough buffer
+			segCount := 0
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasSuffix(strings.TrimSpace(line), ".ts") {
+					segCount++
+				}
+			}
+			if segCount >= 3 {
+				ready = true
+				break
+			}
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	if _, err := os.Stat(playlistPath); os.IsNotExist(err) {
+	if !ready {
 		jsonError(w, "transcoding not ready", http.StatusServiceUnavailable)
 		return
 	}
