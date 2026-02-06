@@ -48,8 +48,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, mediaPath, da
 			r.Get("/files/search", filesHandler.Search)
 
 			// Streaming
-			r.Get("/stream/hls/*", streamHandler.HLSMaster)
-			r.Get("/stream/segment/*", streamHandler.HLSSegment)
+			r.Get("/stream/hls/*", streamHandler.HLSHandler)
 			r.Get("/stream/direct/*", streamHandler.DirectPlay)
 
 			// User

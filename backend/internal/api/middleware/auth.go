@@ -15,19 +15,28 @@ const UserClaimsKey contextKey = "user_claims"
 func AuthMiddleware(jwtService *auth.JWTService) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var tokenStr string
+
+			// 1. Authorization header (API calls)
 			header := r.Header.Get("Authorization")
-			if header == "" {
-				http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
+			if header != "" {
+				parts := strings.SplitN(header, " ", 2)
+				if len(parts) == 2 && parts[0] == "Bearer" {
+					tokenStr = parts[1]
+				}
+			}
+
+			// 2. Query parameter fallback (for HLS/direct stream URLs)
+			if tokenStr == "" {
+				tokenStr = r.URL.Query().Get("token")
+			}
+
+			if tokenStr == "" {
+				http.Error(w, `{"error":"missing authorization"}`, http.StatusUnauthorized)
 				return
 			}
 
-			parts := strings.SplitN(header, " ", 2)
-			if len(parts) != 2 || parts[0] != "Bearer" {
-				http.Error(w, `{"error":"invalid authorization format"}`, http.StatusUnauthorized)
-				return
-			}
-
-			claims, err := jwtService.ValidateToken(parts[1])
+			claims, err := jwtService.ValidateToken(tokenStr)
 			if err != nil {
 				http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 				return

@@ -22,16 +22,38 @@ func NewStreamHandler(mediaPath string, hlsManager *ffmpeg.HLSManager) *StreamHa
 	return &StreamHandler{mediaPath: mediaPath, hlsManager: hlsManager}
 }
 
-func (h *StreamHandler) HLSMaster(w http.ResponseWriter, r *http.Request) {
+func (h *StreamHandler) HLSHandler(w http.ResponseWriter, r *http.Request) {
 	path := chi.URLParam(r, "*")
-	fullPath := filepath.Join(h.mediaPath, path)
+
+	// Check if requesting a .ts segment or .m3u8 playlist
+	if strings.HasSuffix(path, ".ts") {
+		h.serveSegment(w, r, path)
+		return
+	}
+
+	// Treat as playlist request - strip any trailing filename to get video path
+	videoPath := path
+	if strings.HasSuffix(path, ".m3u8") {
+		// Could be "video/path/playlist.m3u8" - strip the playlist filename
+		dir := filepath.Dir(path)
+		base := filepath.Base(path)
+		if base == "playlist.m3u8" {
+			videoPath = dir
+		}
+	}
+
+	h.servePlaylist(w, r, videoPath)
+}
+
+func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, videoPath string) {
+	fullPath := filepath.Join(h.mediaPath, videoPath)
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		jsonError(w, "file not found", http.StatusNotFound)
 		return
 	}
 
-	sessionID := generateSessionID(path)
+	sessionID := generateSessionID(videoPath)
 
 	session, err := h.hlsManager.GetOrCreateSession(sessionID, fullPath, 0)
 	if err != nil {
@@ -48,14 +70,36 @@ func (h *StreamHandler) HLSMaster(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond)
 	}
 
+	if _, err := os.Stat(playlistPath); os.IsNotExist(err) {
+		jsonError(w, "transcoding not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Read and rewrite playlist to use correct segment URLs
+	data, err := os.ReadFile(playlistPath)
+	if err != nil {
+		jsonError(w, "failed to read playlist", http.StatusInternalServerError)
+		return
+	}
+
+	// Rewrite segment paths: "seg_00001.ts" -> "/api/stream/hls/VIDEO_PATH/seg_00001.ts?token=..."
+	token := r.URL.Query().Get("token")
+	content := string(data)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if strings.HasSuffix(strings.TrimSpace(line), ".ts") {
+			segName := strings.TrimSpace(line)
+			lines[i] = fmt.Sprintf("/api/stream/hls/%s/%s?token=%s", videoPath, segName, token)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	http.ServeFile(w, r, playlistPath)
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write([]byte(strings.Join(lines, "\n")))
 }
 
-func (h *StreamHandler) HLSSegment(w http.ResponseWriter, r *http.Request) {
-	path := chi.URLParam(r, "*")
-	// path format: "video/path/seg_00001.ts"
-	// Split into video path and segment name
+func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, path string) {
+	// path format: "video/folder/file.mkv/seg_00001.ts"
 	parts := strings.Split(path, "/")
 	if len(parts) < 2 {
 		jsonError(w, "invalid segment path", http.StatusBadRequest)
@@ -68,15 +112,21 @@ func (h *StreamHandler) HLSSegment(w http.ResponseWriter, r *http.Request) {
 
 	segmentPath := filepath.Join(h.hlsManager.GetSessionDir(sessionID), segmentName)
 
-	// Wait for segment
-	for i := 0; i < 100; i++ {
-		if _, err := os.Stat(segmentPath); err == nil {
+	// Wait for segment to be ready
+	for i := 0; i < 150; i++ {
+		if info, err := os.Stat(segmentPath); err == nil && info.Size() > 0 {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 
+	if _, err := os.Stat(segmentPath); os.IsNotExist(err) {
+		jsonError(w, "segment not ready", http.StatusNotFound)
+		return
+	}
+
 	w.Header().Set("Content-Type", "video/mp2t")
+	w.Header().Set("Cache-Control", "max-age=3600")
 	http.ServeFile(w, r, segmentPath)
 }
 

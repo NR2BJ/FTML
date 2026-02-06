@@ -51,9 +51,13 @@ export default function Player({ path }: PlayerProps) {
 
     // Use HLS for other formats
     if (Hls.isSupported()) {
+      const token = localStorage.getItem('token') || ''
       const hls = new Hls({
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
+        xhrSetup: (xhr: XMLHttpRequest) => {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+        },
       })
       hlsRef.current = hls
       hls.loadSource(getHLSUrl(path))
