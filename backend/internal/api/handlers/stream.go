@@ -200,6 +200,25 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
+
+		// Handle #EXT-X-MAP:URI="init.mp4" (fmp4 init segment)
+		if strings.HasPrefix(trimmed, "#EXT-X-MAP:URI=") {
+			// Extract the filename from URI="..."
+			uriStart := strings.Index(trimmed, `"`)
+			uriEnd := strings.LastIndex(trimmed, `"`)
+			if uriStart >= 0 && uriEnd > uriStart {
+				segName := trimmed[uriStart+1 : uriEnd]
+				segURL := fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s&codec=%s",
+					encodedVideoPath, segName, token, quality, string(codec))
+				if startTime > 0 {
+					segURL += fmt.Sprintf("&start=%.0f", startTime)
+				}
+				lines[i] = fmt.Sprintf(`#EXT-X-MAP:URI="%s"`, segURL)
+			}
+			continue
+		}
+
+		// Handle segment lines (.ts, .m4s, .mp4)
 		if strings.HasSuffix(trimmed, ".ts") || strings.HasSuffix(trimmed, ".m4s") || strings.HasSuffix(trimmed, ".mp4") {
 			segName := trimmed
 			segURL := fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s&codec=%s",

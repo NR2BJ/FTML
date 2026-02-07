@@ -184,7 +184,7 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 	// Audio encoder
 	switch params.AudioCodec {
 	case "opus":
-		args = append(args, "-c:a", "libopus", "-b:a", "128k", "-ac", "2")
+		args = append(args, "-c:a", "libopus", "-b:a", "128k", "-vbr", "on", "-ac", "2")
 	default: // aac
 		args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
 	}
