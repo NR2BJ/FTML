@@ -1,17 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { usePlayerStore } from '@/stores/playerStore'
 
-const qualityOptions = [
-  { value: 'low', label: '720p', desc: '8 Mbps' },
-  { value: 'medium', label: '1080p', desc: '15 Mbps' },
-  { value: 'high', label: '1080p+', desc: '25 Mbps' },
-  { value: 'original', label: 'Original', desc: 'Direct play' },
-]
-
 export default function QualitySelector() {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const { quality, setQuality } = usePlayerStore()
+  const { quality, qualityPresets, setQuality } = usePlayerStore()
 
   // Close menu on outside click
   useEffect(() => {
@@ -25,7 +18,10 @@ export default function QualitySelector() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [open])
 
-  const currentLabel = qualityOptions.find((q) => q.value === quality)?.label || 'Auto'
+  const currentLabel = qualityPresets.find((q) => q.value === quality)?.label || quality
+
+  // Don't render if no presets loaded yet
+  if (qualityPresets.length === 0) return null
 
   return (
     <div className="relative" ref={menuRef}>
@@ -38,8 +34,8 @@ export default function QualitySelector() {
       </button>
 
       {open && (
-        <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg py-1 min-w-[140px] z-50">
-          {qualityOptions.map((opt) => (
+        <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg py-1 min-w-[160px] z-50">
+          {qualityPresets.map((opt) => (
             <button
               key={opt.value}
               onClick={() => {

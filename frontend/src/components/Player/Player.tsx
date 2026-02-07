@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import Hls from 'hls.js'
-import { getHLSUrl, getDirectUrl } from '@/api/stream'
+import { getHLSUrl, getDirectUrl, getPresets } from '@/api/stream'
 import { getFileInfo } from '@/api/files'
 import { saveWatchPosition, getWatchPosition } from '@/api/user'
 import { listSubtitles } from '@/api/subtitle'
@@ -47,6 +47,8 @@ export default function Player({ path }: PlayerProps) {
     setSubtitles,
     setActiveSubtitle,
     setSubtitleVisible,
+    setQuality,
+    setQualityPresets,
   } = usePlayerStore()
 
   // Helper to start HLS playback from a given time
@@ -176,7 +178,28 @@ export default function Player({ path }: PlayerProps) {
         }
       })
       .catch(() => {})
-  }, [path, setCurrentTime, setDuration, setPlaying, setResumePosition, setHasResumed, setMediaInfo, setSubtitles, setActiveSubtitle])
+
+    // Fetch quality presets for this video
+    getPresets(path)
+      .then((res) => {
+        const presets = res.data
+        if (presets && presets.length > 0) {
+          setQualityPresets(presets)
+          // If current quality isn't available in presets, select the highest transcode option
+          const savedQ = localStorage.getItem('ftml-quality') || '720p'
+          const available = presets.find((p) => p.value === savedQ)
+          if (!available) {
+            const transcodeOpts = presets.filter((p) => p.value !== 'original')
+            if (transcodeOpts.length > 0) {
+              setQuality(transcodeOpts[transcodeOpts.length - 1].value)
+            } else {
+              setQuality('original')
+            }
+          }
+        }
+      })
+      .catch(() => {})
+  }, [path, setCurrentTime, setDuration, setPlaying, setResumePosition, setHasResumed, setMediaInfo, setSubtitles, setActiveSubtitle, setQualityPresets, setQuality])
 
   // Resume playback from saved position after media is ready
   useEffect(() => {

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -23,6 +24,30 @@ func NewStreamHandler(mediaPath string, hlsManager *ffmpeg.HLSManager) *StreamHa
 	return &StreamHandler{mediaPath: mediaPath, hlsManager: hlsManager}
 }
 
+// PresetsHandler returns the available quality presets for a given video file.
+func (h *StreamHandler) PresetsHandler(w http.ResponseWriter, r *http.Request) {
+	path := extractPath(r)
+	fullPath := filepath.Join(h.mediaPath, path)
+
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		jsonError(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	info, err := ffmpeg.Probe(fullPath)
+	if err != nil {
+		// Return default presets if probe fails
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ffmpeg.GeneratePresets(nil))
+		return
+	}
+
+	presets := ffmpeg.GeneratePresets(info)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(presets)
+}
+
 func (h *StreamHandler) HLSHandler(w http.ResponseWriter, r *http.Request) {
 	raw := chi.URLParam(r, "*")
 	path, _ := url.PathUnescape(raw)
@@ -36,7 +61,6 @@ func (h *StreamHandler) HLSHandler(w http.ResponseWriter, r *http.Request) {
 	// Treat as playlist request - strip any trailing filename to get video path
 	videoPath := path
 	if strings.HasSuffix(path, ".m3u8") {
-		// Could be "video/path/playlist.m3u8" - strip the playlist filename
 		dir := filepath.Dir(path)
 		base := filepath.Base(path)
 		if base == "playlist.m3u8" {
@@ -57,7 +81,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 
 	quality := r.URL.Query().Get("quality")
 	if quality == "" {
-		quality = "medium"
+		quality = "720p"
 	}
 
 	// "original" quality means direct play - redirect
@@ -72,6 +96,21 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		fmt.Sscanf(st, "%f", &startTime)
 	}
 
+	// Probe the file to generate presets and find the matching transcode params
+	info, _ := ffmpeg.Probe(fullPath)
+	presets := ffmpeg.GeneratePresets(info)
+	params := ffmpeg.GetTranscodeParams(quality, presets)
+
+	// If quality not found in presets (e.g. legacy "medium"), use first available transcode preset
+	if params == nil && quality != "original" {
+		for _, p := range presets {
+			if p.Value != "original" {
+				params = ffmpeg.GetTranscodeParams(p.Value, presets)
+				break
+			}
+		}
+	}
+
 	sessionID := generateSessionID(videoPath, quality, startTime)
 
 	// If seeking, stop any existing sessions for the same video+quality at different times
@@ -79,20 +118,18 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		h.hlsManager.StopSessionsForPath(fullPath, quality, sessionID)
 	}
 
-	session, err := h.hlsManager.GetOrCreateSession(sessionID, fullPath, startTime, quality)
+	session, err := h.hlsManager.GetOrCreateSession(sessionID, fullPath, startTime, quality, params)
 	if err != nil {
 		jsonError(w, "failed to start transcoding: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Wait for playlist to be ready with at least 3 segments
-	// This prevents buffer underrun at the start of playback
 	playlistPath := filepath.Join(session.OutputDir, "playlist.m3u8")
 	ready := false
 	for i := 0; i < 100; i++ {
 		data, err := os.ReadFile(playlistPath)
 		if err == nil {
-			// Count .ts segment lines to ensure enough buffer
 			segCount := 0
 			for _, line := range strings.Split(string(data), "\n") {
 				if strings.HasSuffix(strings.TrimSpace(line), ".ts") {
@@ -119,9 +156,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		return
 	}
 
-	// Rewrite segment paths: "seg_00001.ts" -> "/api/stream/hls/VIDEO_PATH/seg_00001.ts?token=...&quality=..."
 	token := r.URL.Query().Get("token")
-	// URL-encode each path segment for the rewritten URLs
 	pathParts := strings.Split(videoPath, "/")
 	encodedParts := make([]string, len(pathParts))
 	for i, p := range pathParts {
@@ -149,7 +184,6 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 
 func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, rawPath string) {
 	path, _ := url.PathUnescape(rawPath)
-	// path format: "video/folder/file.mkv/seg_00001.ts"
 	parts := strings.Split(path, "/")
 	if len(parts) < 2 {
 		jsonError(w, "invalid segment path", http.StatusBadRequest)
@@ -160,7 +194,7 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 	videoPath := strings.Join(parts[:len(parts)-1], "/")
 	quality := r.URL.Query().Get("quality")
 	if quality == "" {
-		quality = "medium"
+		quality = "720p"
 	}
 	var startTime float64
 	if st := r.URL.Query().Get("start"); st != "" {

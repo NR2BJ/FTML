@@ -12,20 +12,6 @@ import (
 	"time"
 )
 
-type QualityPreset struct {
-	Name       string
-	Height     int    // 0 = original
-	MaxBitrate string
-	BufSize    string
-	CRF        int
-}
-
-var Presets = map[string]QualityPreset{
-	"low":    {Name: "720p", Height: 720, MaxBitrate: "8M", BufSize: "16M", CRF: 23},
-	"medium": {Name: "1080p", Height: 1080, MaxBitrate: "15M", BufSize: "30M", CRF: 23},
-	"high":   {Name: "1080p High", Height: 1080, MaxBitrate: "25M", BufSize: "50M", CRF: 18},
-}
-
 type HLSSession struct {
 	ID        string
 	InputPath string
@@ -54,7 +40,7 @@ func NewHLSManager(baseDir string) *HLSManager {
 	return m
 }
 
-func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime float64, quality string) (*HLSSession, error) {
+func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime float64, quality string, params *TranscodeParams) (*HLSSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -67,6 +53,16 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Fallback defaults if params not provided
+	if params == nil {
+		params = &TranscodeParams{
+			Height:     1080,
+			CRF:        16,
+			MaxBitrate: "20M",
+			BufSize:    "40M",
+		}
+	}
+
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "warning",
@@ -78,15 +74,9 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 		args = append(args, "-ss", fmt.Sprintf("%.2f", startTime))
 	}
 
-	// Determine quality settings
-	preset, ok := Presets[quality]
-	if !ok {
-		preset = Presets["medium"]
-	}
-
 	videoFilters := []string{}
-	if preset.Height > 0 {
-		videoFilters = append(videoFilters, fmt.Sprintf("scale=-2:%d", preset.Height))
+	if params.Height > 0 {
+		videoFilters = append(videoFilters, fmt.Sprintf("scale=-2:%d", params.Height))
 	}
 
 	args = append(args,
@@ -95,9 +85,9 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 		"-map", "0:a:0?",
 		"-c:v", "libx264",
 		"-preset", "veryfast",
-		"-crf", fmt.Sprintf("%d", preset.CRF),
-		"-maxrate", preset.MaxBitrate,
-		"-bufsize", preset.BufSize,
+		"-crf", fmt.Sprintf("%d", params.CRF),
+		"-maxrate", params.MaxBitrate,
+		"-bufsize", params.BufSize,
 		"-pix_fmt", "yuv420p",
 		"-g", "48",
 		"-keyint_min", "48",

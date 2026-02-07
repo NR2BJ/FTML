@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { MediaInfo } from '@/api/files'
 import { SubtitleEntry } from '@/api/subtitle'
+import { QualityOption } from '@/api/stream'
 
 interface PlayerState {
   currentFile: string | null
@@ -23,6 +24,7 @@ interface PlayerState {
   subtitleVisible: boolean
   // Quality
   quality: string
+  qualityPresets: QualityOption[]
   setCurrentFile: (path: string | null) => void
   setPlaying: (playing: boolean) => void
   setVolume: (volume: number) => void
@@ -38,6 +40,7 @@ interface PlayerState {
   setActiveSubtitle: (id: string | null) => void
   setSubtitleVisible: (v: boolean) => void
   setQuality: (q: string) => void
+  setQualityPresets: (presets: QualityOption[]) => void
 }
 
 export const usePlayerStore = create<PlayerState>((set) => ({
@@ -55,7 +58,8 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   subtitles: [],
   activeSubtitle: null,
   subtitleVisible: true,
-  quality: localStorage.getItem('ftml-quality') || 'medium',
+  quality: localStorage.getItem('ftml-quality') || '720p',
+  qualityPresets: [],
   setCurrentFile: (path) => set({ currentFile: path }),
   setPlaying: (playing) => set({ isPlaying: playing }),
   setVolume: (volume) => set({ volume }),
@@ -74,4 +78,5 @@ export const usePlayerStore = create<PlayerState>((set) => ({
     localStorage.setItem('ftml-quality', q)
     set({ quality: q })
   },
+  setQualityPresets: (presets) => set({ qualityPresets: presets }),
 }))
