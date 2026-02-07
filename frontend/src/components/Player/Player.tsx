@@ -357,6 +357,12 @@ export default function Player({ path }: PlayerProps) {
     const video = videoRef.current
     if (!video) return
 
+    // Wait for quality presets to load before starting any playback.
+    // This prevents direct play with "original" from localStorage before
+    // preset validation has a chance to redirect to a compatible quality.
+    const { qualityPresets: presets } = usePlayerStore.getState()
+    if (presets.length === 0) return
+
     // Wait for codec negotiation to complete before starting HLS
     // (original/passthrough quality doesn't need codec negotiation)
     if (quality !== 'original' && quality !== 'passthrough' && !negotiatedCodec) return

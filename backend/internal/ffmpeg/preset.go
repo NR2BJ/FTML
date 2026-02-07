@@ -153,15 +153,24 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 	}
 
 	// Same-resolution transcode option (useful when source codec isn't browser-compatible)
+	// Uses actual source height (e.g. "1608p") instead of closest tier to avoid
+	// dedup collision when the source height doesn't match a standard tier exactly.
 	if srcHeight >= 720 {
-		srcTierLabel := findClosestTierLabel(srcHeight)
-		srcTierValue := strings.ToLower(srcTierLabel)
+		// Use standard tier label if exact match (e.g. 1440→"1440p", 2160→"4K"),
+		// otherwise use actual height (e.g. 1608→"1608p")
+		srcLabel := fmt.Sprintf("%dp", srcHeight)
+		for _, tier := range resolutionTiers {
+			if tier.Height == srcHeight {
+				srcLabel = tier.Label
+				break
+			}
+		}
+		srcValue := strings.ToLower(srcLabel)
 
 		// Only add if not already present from Phase 1
-		// (happens when srcHeight is between two tiers, e.g. 1606 between 1440 and 2160)
 		alreadyExists := false
 		for _, opt := range options {
-			if opt.Value == srcTierValue {
+			if opt.Value == srcValue {
 				alreadyExists = true
 				break
 			}
@@ -173,8 +182,8 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 			bufSize := formatBitrateM(maxBitrate * 2)
 
 			options = append(options, QualityOption{
-				Value:      srcTierValue,
-				Label:      srcTierLabel,
+				Value:      srcValue,
+				Label:      srcLabel,
 				Desc:       fmt.Sprintf("~%s", formatBitrateHuman(maxBitrate)),
 				Height:     srcHeight,
 				CRF:        crf,
