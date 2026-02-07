@@ -169,7 +169,7 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
       <div className="ml-2 space-y-0.5">
         <div>Resolution: {stats.playResolution || 'N/A'}</div>
         {!isOriginal && <div>Codec: h264 + aac</div>}
-        <div>Bitrate: {fmtBitrate(stats.playBitrate)}</div>
+        <div>Bitrate: {fmtBitrate(stats.playBitrate)}{isOriginal && stats.playBitrate > 0 ? ' (avg)' : ''}</div>
         <div>Framerate: {stats.playFramerate > 0 ? `${stats.playFramerate} fps` : 'N/A'}</div>
       </div>
 
