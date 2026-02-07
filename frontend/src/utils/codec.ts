@@ -40,32 +40,19 @@ export function detectBrowserCodecs(): BrowserCodecSupport {
     }
   }
 
-  // Strict check: only accept 'probably' from canPlayType (reject 'maybe').
-  // Firefox returns 'maybe' for HEVC via system media frameworks even when
-  // it cannot actually play it (no MSE support, no real decode path).
-  const checkVideoStrict = (mime: string): boolean => {
-    try {
-      const v = document.createElement('video')
-      return v.canPlayType(mime) === 'probably'
-    } catch {
-      return false
-    }
-  }
-
   const check = (mime: string): boolean => {
     return checkMSE(mime) || checkVideo(mime)
-  }
-
-  // For codecs where canPlayType 'maybe' is unreliable (e.g. HEVC on Firefox),
-  // require either MSE support or a definitive 'probably' from canPlayType.
-  const checkStrict = (mime: string): boolean => {
-    return checkMSE(mime) || checkVideoStrict(mime)
   }
 
   return {
     // Video codecs
     h264: check('video/mp4; codecs="avc1.640028"'),
-    hevc: checkStrict('video/mp4; codecs="hev1.1.6.L93.B0"'),
+    // HEVC: MSE support only. canPlayType() is unreliable for HEVC —
+    // Linux Firefox returns 'maybe', macOS Firefox returns 'probably' via
+    // VideoToolbox, but neither can actually play MKV HEVC or use MSE HEVC.
+    // Only browsers with real MSE HEVC support (Safari, Chrome w/ HW) should
+    // report hevc=true, which controls original playback and codec negotiation.
+    hevc: checkMSE('video/mp4; codecs="hev1.1.6.L93.B0"'),
     av1: check('video/mp4; codecs="av01.0.08M.08"'),
     vp9: check('video/webm; codecs="vp09.00.10.08"'),
     // Audio codecs
