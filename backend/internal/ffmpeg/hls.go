@@ -61,16 +61,32 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 		return s, nil
 	}
 
-	// Check if this session previously failed with VAAPI and fell back to software.
-	// If so, skip VAAPI and use the cached SW encoder directly to avoid the
-	// VAAPI→fail→SW→heartbeat-timeout→recreate→VAAPI-again infinite loop.
+	// Check if this session previously failed and fell back to hybrid or software.
+	// Apply the cached fallback state to avoid repeating the failed path.
+	// Cache values: "hybrid:<vaapi_encoder>" or "sw:<sw_encoder>"
 	if params != nil && params.HWAccel != "" {
-		if fallbackEncoder, ok := m.fallbackCache[sessionID]; ok {
-			log.Printf("[HLS] Using cached SW fallback encoder: %s (skipping %s) session=%s",
-				fallbackEncoder, params.Encoder, sessionID)
-			params.Encoder = fallbackEncoder
-			params.HWAccel = ""
-			params.Device = ""
+		if fallbackState, ok := m.fallbackCache[sessionID]; ok {
+			if strings.HasPrefix(fallbackState, "hybrid:") {
+				// Hybrid: CPU decode + GPU encode. Keep VAAPI encoder and device.
+				encoder := strings.TrimPrefix(fallbackState, "hybrid:")
+				log.Printf("[HLS] Using cached hybrid fallback: encoder=%s (CPU decode + GPU encode) session=%s", encoder, sessionID)
+				params.Encoder = encoder
+				params.HWAccel = "" // Disable VAAPI decode
+				// params.Device stays (needed for -init_hw_device and hwupload)
+			} else if strings.HasPrefix(fallbackState, "sw:") {
+				// Full software: switch encoder, clear all hardware
+				encoder := strings.TrimPrefix(fallbackState, "sw:")
+				log.Printf("[HLS] Using cached SW fallback: encoder=%s (skipping VAAPI) session=%s", encoder, sessionID)
+				params.Encoder = encoder
+				params.HWAccel = ""
+				params.Device = ""
+			} else {
+				// Legacy format (bare encoder name) — treat as SW fallback
+				log.Printf("[HLS] Using cached SW fallback (legacy): encoder=%s session=%s", fallbackState, sessionID)
+				params.Encoder = fallbackState
+				params.HWAccel = ""
+				params.Device = ""
+			}
 		}
 	}
 
@@ -158,8 +174,8 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 			m.mu.RUnlock()
 
 			if !wasStopped && elapsed < 5*time.Second && params.HWAccel == "vaapi" {
-				log.Printf("[HLS] VAAPI failed fast, retrying with software encoder: session=%s", sessionID)
-				m.retryWithSoftware(sessionID, inputPath, outputDir, startTime, quality, codec, params)
+				log.Printf("[HLS] VAAPI failed fast, retrying with hybrid (CPU decode + GPU encode): session=%s", sessionID)
+				m.retryWithHybrid(sessionID, inputPath, outputDir, startTime, quality, codec, params)
 			} else if wasStopped {
 				log.Printf("[HLS] Session was intentionally stopped, skipping SW fallback: session=%s", sessionID)
 			}
@@ -184,6 +200,9 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 
 	isPassthrough := params.VideoCodec == "copy" || params.Encoder == "copy"
 	isVAAPI := !isPassthrough && params.HWAccel == "vaapi" && params.Device != ""
+	// Hybrid mode: CPU decode + GPU encode. Detected when HWAccel is cleared
+	// but Device is kept and encoder is still a VAAPI encoder (e.g. av1_vaapi).
+	isHybrid := !isPassthrough && !isVAAPI && params.Device != "" && strings.HasSuffix(params.Encoder, "_vaapi")
 
 	// Hardware device init for VAAPI (skip for passthrough)
 	if isVAAPI {
@@ -191,6 +210,14 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 			"-hwaccel", "vaapi",
 			"-hwaccel_device", params.Device,
 			"-hwaccel_output_format", "vaapi",
+		)
+	} else if isHybrid {
+		// Hybrid: CPU decodes, but GPU is needed for encoding and hwupload filter.
+		// -init_hw_device creates the VAAPI device, -filter_hw_device makes it
+		// available to filters (hwupload) without requiring hwaccel decode.
+		args = append(args,
+			"-init_hw_device", fmt.Sprintf("vaapi=hw:%s", params.Device),
+			"-filter_hw_device", "hw",
 		)
 	}
 
@@ -218,6 +245,8 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 		// Video filter and quality settings depend on encoder type
 		if isVAAPI {
 			args = appendVAAPIArgs(args, params)
+		} else if isHybrid {
+			args = appendHybridArgs(args, params)
 		} else {
 			args = appendSoftwareArgs(args, params)
 		}
@@ -274,6 +303,31 @@ func appendVAAPIArgs(args []string, params *TranscodeParams) []string {
 	)
 
 	// HEVC tag for browser compatibility (Safari/Chrome)
+	if params.VideoCodec == "hevc" {
+		args = append(args, "-tag:v", "hvc1")
+	}
+
+	return args
+}
+
+// appendHybridArgs adds arguments for hybrid mode (CPU decode + GPU encode).
+// The filter chain scales on CPU, converts to nv12, then uploads to VAAPI for encoding.
+func appendHybridArgs(args []string, params *TranscodeParams) []string {
+	// Filter chain: CPU scale → format nv12 → hwupload to VAAPI device
+	if params.Height > 0 {
+		args = append(args, "-vf", fmt.Sprintf("scale=-2:%d,format=nv12,hwupload", params.Height))
+	} else {
+		args = append(args, "-vf", "format=nv12,hwupload")
+	}
+
+	// Quality control: same as VAAPI (QP-based via -global_quality)
+	args = append(args,
+		"-global_quality", fmt.Sprintf("%d", params.CRF),
+		"-maxrate", params.MaxBitrate,
+		"-bufsize", params.BufSize,
+	)
+
+	// HEVC tag for browser compatibility
 	if params.VideoCodec == "hevc" {
 		args = append(args, "-tag:v", "hvc1")
 	}
@@ -340,6 +394,91 @@ func appendSoftwareArgs(args []string, params *TranscodeParams) []string {
 	return args
 }
 
+// retryWithHybrid restarts a failed VAAPI session using hybrid mode
+// (CPU decode + GPU encode). This is tried before full software fallback
+// because GPU encoding is much faster than CPU encoding.
+func (m *HLSManager) retryWithHybrid(sessionID, inputPath, outputDir string, startTime float64, quality, codec string, origParams *TranscodeParams) {
+	// Clean up failed output
+	os.RemoveAll(outputDir)
+	os.MkdirAll(outputDir, 0755)
+
+	// Build hybrid params: keep VAAPI encoder + device, clear hwaccel decode
+	hybridParams := *origParams
+	hybridParams.HWAccel = "" // Disable GPU decode (CPU will decode)
+	// hybridParams.Device stays (needed for -init_hw_device and hwupload filter)
+	// hybridParams.Encoder stays (e.g. av1_vaapi — GPU encodes)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	args := buildFFmpegArgs(inputPath, outputDir, startTime, &hybridParams)
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+
+	logFile, err := os.Create(filepath.Join(outputDir, "ffmpeg.log"))
+	if err != nil {
+		cmd.Stderr = os.Stderr
+	} else {
+		cmd.Stderr = logFile
+	}
+
+	log.Printf("[HLS] Retrying with hybrid (CPU decode + GPU encode): session=%s encoder=%s", sessionID, hybridParams.Encoder)
+
+	if err := cmd.Start(); err != nil {
+		cancel()
+		if logFile != nil {
+			logFile.Close()
+		}
+		log.Printf("[HLS] Hybrid fallback failed to start, trying full SW: session=%s err=%v", sessionID, err)
+		m.retryWithSoftware(sessionID, inputPath, outputDir, startTime, quality, codec, origParams)
+		return
+	}
+
+	// Update the session in-place and register in fallback cache
+	m.mu.Lock()
+	if s, ok := m.sessions[sessionID]; ok {
+		s.Cmd = cmd
+		s.Cancel = cancel
+		s.LastHeartbeat = time.Now()
+	}
+	m.fallbackCache[sessionID] = "hybrid:" + origParams.Encoder
+	m.fallbackCacheTime[sessionID] = time.Now()
+	m.mu.Unlock()
+
+	startedAt := time.Now()
+	go func() {
+		err := cmd.Wait()
+		if logFile != nil {
+			logFile.Close()
+		}
+		elapsed := time.Since(startedAt)
+		if err != nil {
+			m.mu.RLock()
+			s, exists := m.sessions[sessionID]
+			wasStopped := !exists || s.Stopped
+			m.mu.RUnlock()
+
+			if wasStopped {
+				log.Printf("[HLS] Hybrid fallback stopped (session cleaned up): session=%s", sessionID)
+			} else if elapsed < 5*time.Second {
+				// Hybrid also failed fast — fall through to full software
+				log.Printf("[HLS] Hybrid also failed fast (%v), trying full SW: session=%s", elapsed, sessionID)
+				m.retryWithSoftware(sessionID, inputPath, outputDir, startTime, quality, codec, origParams)
+			} else {
+				log.Printf("[HLS] Hybrid fallback failed: session=%s err=%v elapsed=%v", sessionID, err, elapsed)
+				logPath := filepath.Join(outputDir, "ffmpeg.log")
+				if logData, readErr := os.ReadFile(logPath); readErr == nil {
+					lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
+					start := len(lines) - 20
+					if start < 0 {
+						start = 0
+					}
+					log.Printf("[HLS] FFmpeg stderr:\n%s", strings.Join(lines[start:], "\n"))
+				}
+			}
+		} else {
+			log.Printf("[HLS] Hybrid fallback completed: session=%s encoder=%s", sessionID, hybridParams.Encoder)
+		}
+	}()
+}
+
 // retryWithSoftware restarts a failed VAAPI session using software encoding.
 func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, startTime float64, quality, codec string, origParams *TranscodeParams) {
 	// Map VAAPI encoders to software fallbacks
@@ -394,9 +533,9 @@ func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, s
 		s.Cancel = cancel
 		s.LastHeartbeat = time.Now() // Refresh heartbeat so SW fallback gets a full 45s window
 	}
-	// Remember that this session needed SW fallback, so if it gets recreated
-	// (e.g. after heartbeat timeout), we skip VAAPI and go straight to SW.
-	m.fallbackCache[sessionID] = fallback
+	// Remember that this session needed full SW fallback, so if it gets recreated
+	// (e.g. after heartbeat timeout), we skip VAAPI and hybrid, going straight to SW.
+	m.fallbackCache[sessionID] = "sw:" + fallback
 	m.fallbackCacheTime[sessionID] = time.Now()
 	m.mu.Unlock()
 
