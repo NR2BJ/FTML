@@ -150,11 +150,12 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		// 10bit H.264 can't be decoded via MSE — don't allow passthrough
 		if !(videoCodecNorm == "h264" && ffmpeg.Is10bit(info.PixFmt)) {
 			params = &ffmpeg.TranscodeParams{
-				Label:      "Passthrough",
-				VideoCodec: "copy",
-				AudioCodec: "aac",
-				Encoder:    "copy",
-				SegmentFmt: ffmpeg.GetSegmentFmt(videoCodecNorm),
+				Label:            "Passthrough",
+				VideoCodec:       "copy",
+				AudioCodec:       "aac",
+				Encoder:          "copy",
+				SegmentFmt:       ffmpeg.GetSegmentFmt(videoCodecNorm),
+				SourceVideoCodec: videoCodecNorm,
 			}
 		}
 	}

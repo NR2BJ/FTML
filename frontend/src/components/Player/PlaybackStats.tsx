@@ -155,6 +155,7 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
     : 'N/A'
   const audioStream = mediaInfo?.streams?.find((s: any) => s.codec_type === 'audio')
   const isOriginal = quality === 'original'
+  const isPassthrough = quality === 'passthrough'
   const isHLS = !!hlsRef.current
 
   return (
@@ -165,13 +166,18 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
         <div>Audio: {mediaInfo?.audio_codec || 'N/A'}{audioStream?.channels ? ` ${audioStream.channels}ch` : ''}{audioStream?.sample_rate ? ` ${audioStream.sample_rate}Hz` : ''}</div>
       </div>
 
-      <div className="font-bold text-green-400 mt-2 mb-1">Playback{isOriginal ? ' (Direct)' : ' (Transcode)'}</div>
+      <div className="font-bold text-green-400 mt-2 mb-1">Playback{isOriginal ? ' (Direct)' : isPassthrough ? ' (Passthrough)' : ' (Transcode)'}</div>
       <div className="ml-2 space-y-0.5">
         <div>Resolution: {stats.playResolution || 'N/A'}</div>
         {!isOriginal && (
           <>
-            <div>Codec: {(negotiatedCodec || 'h264').toUpperCase()} + AAC</div>
-            <div>Encoder: {negotiatedEncoder || 'N/A'}{hwaccel && hwaccel !== 'none' ? ` (${hwaccel})` : ''}</div>
+            <div>Codec: {isPassthrough
+              ? `${(mediaInfo?.video_codec || 'N/A').toUpperCase()} (Copy) + AAC`
+              : `${(negotiatedCodec || 'h264').toUpperCase()} + AAC`
+            }</div>
+            {!isPassthrough && (
+              <div>Encoder: {negotiatedEncoder || 'N/A'}{hwaccel && hwaccel !== 'none' ? ` (${hwaccel})` : ''}</div>
+            )}
           </>
         )}
         <div>Bitrate: {fmtBitrate(stats.playBitrate)}{isOriginal && stats.playBitrate > 0 ? ' (avg)' : ''}</div>

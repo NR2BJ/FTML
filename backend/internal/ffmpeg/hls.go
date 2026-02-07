@@ -238,6 +238,10 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 	if isPassthrough {
 		// Video passthrough: copy video stream as-is, only transcode audio
 		args = append(args, "-c:v", "copy")
+		// HEVC in fMP4 HLS requires hvc1 tag for browser compatibility
+		if params.SourceVideoCodec == "hevc" {
+			args = append(args, "-tag:v", "hvc1")
+		}
 	} else {
 		// Video encoder
 		args = append(args, "-c:v", params.Encoder)

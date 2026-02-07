@@ -22,6 +22,7 @@ type TranscodeParams struct {
 	Device           string `json:"device"`             // "/dev/dri/renderD128" or ""
 	SegmentFmt       string `json:"segment_fmt"`        // "mpegts" or "fmp4"
 	AudioStreamIndex int    `json:"audio_stream_index"` // which audio stream to use (0-based, audio-only index)
+	SourceVideoCodec string `json:"source_video_codec"` // for passthrough: normalized source codec ("hevc", "h264", etc.)
 }
 
 // QualityOption is returned to the frontend for the quality selector.
@@ -440,11 +441,12 @@ func GetTranscodeParams(quality string, presets []QualityOption, encoder *Encode
 					segFmt = "mpegts"
 				}
 				return &TranscodeParams{
-					Label:      p.Label,
-					VideoCodec: "copy",
-					AudioCodec: "aac",
-					Encoder:    "copy",
-					SegmentFmt: segFmt,
+					Label:            p.Label,
+					VideoCodec:       "copy",
+					AudioCodec:       "aac",
+					Encoder:          "copy",
+					SegmentFmt:       segFmt,
+					SourceVideoCodec: p.VideoCodec,
 				}
 			}
 		}
