@@ -14,17 +14,27 @@ type TranscodeParams struct {
 	CRF        int    `json:"crf"`
 	MaxBitrate string `json:"max_bitrate"` // e.g. "12M"
 	BufSize    string `json:"buf_size"`    // e.g. "24M"
+	// Codec fields (Phase 3)
+	VideoCodec string `json:"video_codec"` // "h264", "hevc", "av1", "vp9"
+	AudioCodec string `json:"audio_codec"` // "aac" or "opus"
+	Encoder    string `json:"encoder"`     // "h264_vaapi", "libx264", etc.
+	HWAccel    string `json:"hwaccel"`     // "vaapi" or ""
+	Device     string `json:"device"`      // "/dev/dri/renderD128" or ""
+	SegmentFmt string `json:"segment_fmt"` // "mpegts" or "fmp4"
 }
 
 // QualityOption is returned to the frontend for the quality selector.
 type QualityOption struct {
-	Value      string `json:"value"`       // "720p", "1080p", "original"
-	Label      string `json:"label"`       // "720p", "1080p", "Original"
-	Desc       string `json:"desc"`        // "~8 Mbps", "Direct play"
+	Value      string `json:"value"`                  // "720p", "1080p", "original"
+	Label      string `json:"label"`                  // "720p", "1080p", "Original"
+	Desc       string `json:"desc"`                   // "~8 Mbps", "Direct play"
 	Height     int    `json:"height"`
 	CRF        int    `json:"crf"`
 	MaxBitrate string `json:"max_bitrate"`
 	BufSize    string `json:"buf_size"`
+	VideoCodec string `json:"video_codec"`            // "h264", "hevc", "av1"
+	AudioCodec string `json:"audio_codec"`            // "aac", "opus"
+	CanOriginal bool  `json:"can_original,omitempty"` // Whether browser can play the original
 }
 
 // Standard resolution tiers
@@ -38,46 +48,89 @@ var resolutionTiers = []struct {
 	{2160, "4K"},
 }
 
-// CRF values per resolution for near-visually-lossless h264 quality.
-// Lower CRF = higher quality. These are generous for a personal server.
-var crfForHeight = map[int]int{
-	720:  17,
-	1080: 16,
-	1440: 15,
-	2160: 15,
+// CRF/QP values per codec per resolution for near-visually-lossless quality.
+// h264: CRF scale (lower=better), hevc: CRF scale, av1: QP for VAAPI, vp9: CRF scale
+var codecCRF = map[Codec]map[int]int{
+	CodecH264: {720: 17, 1080: 16, 1440: 15, 2160: 15},
+	CodecHEVC: {720: 22, 1080: 21, 1440: 20, 2160: 20},
+	CodecAV1:  {720: 30, 1080: 28, 1440: 27, 2160: 27},
+	CodecVP9:  {720: 25, 1080: 23, 1440: 22, 2160: 22},
 }
 
-// GeneratePresets creates quality options based on the source video's properties.
-// It returns transcode tiers from 720p up to (but not exceeding) the source resolution,
-// plus an "original" direct play option.
-func GeneratePresets(info *MediaInfo) []QualityOption {
+// Audio codec pairing per video codec.
+var codecAudio = map[Codec]string{
+	CodecH264: "aac",
+	CodecHEVC: "aac",
+	CodecAV1:  "opus",
+	CodecVP9:  "opus",
+}
+
+// HLS segment format per codec.
+// h264 → mpegts (.ts), hevc/av1/vp9 → fmp4 (.m4s)
+var codecSegmentFmt = map[Codec]string{
+	CodecH264: "mpegts",
+	CodecHEVC: "fmp4",
+	CodecAV1:  "fmp4",
+	CodecVP9:  "fmp4",
+}
+
+// Bitrate efficiency relative to h264.
+// A codec with ratio 0.65 needs only 65% of h264's bitrate for similar quality.
+var codecBitrateRatio = map[Codec]float64{
+	CodecH264: 1.0,
+	CodecHEVC: 0.65,
+	CodecAV1:  0.50,
+	CodecVP9:  0.65,
+}
+
+// GeneratePresets creates quality options based on the source video's properties
+// and the negotiated codec.
+func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser BrowserCodecs) []QualityOption {
 	if info == nil {
-		return defaultPresets()
+		return defaultPresets(codec, encoder)
 	}
 
 	srcHeight := info.Height
 	if srcHeight <= 0 {
-		return defaultPresets()
+		return defaultPresets(codec, encoder)
 	}
 
 	// Parse source bitrate (format-level, in bps)
 	srcBitrate := parseBitrate(info.BitRate)
 	if srcBitrate <= 0 {
-		// Estimate from file size and duration if available
 		srcBitrate = estimateBitrate(info)
+	}
+
+	crfMap := codecCRF[codec]
+	if crfMap == nil {
+		crfMap = codecCRF[CodecH264]
+	}
+	bitrateRatio := codecBitrateRatio[codec]
+	if bitrateRatio <= 0 {
+		bitrateRatio = 1.0
+	}
+	audioCodec := codecAudio[codec]
+	if audioCodec == "" {
+		audioCodec = "aac"
+	}
+	segFmt := codecSegmentFmt[codec]
+	if segFmt == "" {
+		segFmt = "mpegts"
 	}
 
 	var options []QualityOption
 
 	for _, tier := range resolutionTiers {
-		// Only include tiers that are strictly less than source height
-		// (we don't transcode to the same resolution - that's what original is for)
 		if tier.Height >= srcHeight {
 			continue
 		}
 
-		crf := crfForHeight[tier.Height]
-		maxBitrate := computeMaxBitrate(srcBitrate, srcHeight, tier.Height)
+		crf := crfMap[tier.Height]
+		if crf == 0 {
+			crf = crfMap[findClosestTierHeight(tier.Height)]
+		}
+		// Scale bitrate by codec efficiency
+		maxBitrate := computeMaxBitrate(srcBitrate, srcHeight, tier.Height) * bitrateRatio
 		maxBitrateStr := formatBitrateM(maxBitrate)
 		bufSize := formatBitrateM(maxBitrate * 2)
 
@@ -89,15 +142,16 @@ func GeneratePresets(info *MediaInfo) []QualityOption {
 			CRF:        crf,
 			MaxBitrate: maxBitrateStr,
 			BufSize:    bufSize,
+			VideoCodec: string(codec),
+			AudioCodec: audioCodec,
 		})
 	}
 
-	// If source is >= 1080p, also offer a "same resolution" transcode option
-	// (useful when source codec isn't browser-compatible)
+	// Same-resolution transcode option (useful when source codec isn't browser-compatible)
 	if srcHeight >= 720 {
 		srcTierLabel := findClosestTierLabel(srcHeight)
-		crf := crfForHeight[findClosestTierHeight(srcHeight)]
-		maxBitrate := computeMaxBitrate(srcBitrate, srcHeight, srcHeight)
+		crf := crfMap[findClosestTierHeight(srcHeight)]
+		maxBitrate := computeMaxBitrate(srcBitrate, srcHeight, srcHeight) * bitrateRatio
 		maxBitrateStr := formatBitrateM(maxBitrate)
 		bufSize := formatBitrateM(maxBitrate * 2)
 
@@ -109,30 +163,76 @@ func GeneratePresets(info *MediaInfo) []QualityOption {
 			CRF:        crf,
 			MaxBitrate: maxBitrateStr,
 			BufSize:    bufSize,
+			VideoCodec: string(codec),
+			AudioCodec: audioCodec,
 		})
 	}
 
-	// Always add original direct play
+	// Original direct play option — only if browser can play the source codec
+	canOriginal := canBrowserPlayCodec(info.VideoCodec, browser)
 	srcBitrateDesc := "Direct play"
 	if srcBitrate > 0 {
 		srcBitrateDesc = fmt.Sprintf("%s direct", formatBitrateHuman(srcBitrate))
 	}
 	options = append(options, QualityOption{
-		Value: "original",
-		Label: "Original",
-		Desc:  srcBitrateDesc,
+		Value:       "original",
+		Label:       "Original",
+		Desc:        srcBitrateDesc,
+		CanOriginal: canOriginal,
+		VideoCodec:  NormalizeCodecName(info.VideoCodec),
+		AudioCodec:  NormalizeAudioCodecName(info.AudioCodec),
 	})
 
 	return options
 }
 
+// canBrowserPlayCodec checks if the browser supports the source video codec.
+func canBrowserPlayCodec(ffprobeCodec string, browser BrowserCodecs) bool {
+	normalized := NormalizeCodecName(ffprobeCodec)
+	switch normalized {
+	case "h264":
+		return browser.H264
+	case "hevc":
+		return browser.HEVC
+	case "av1":
+		return browser.AV1
+	case "vp9":
+		return browser.VP9
+	default:
+		// Unknown codec: assume browser can't play it, offer transcode
+		return false
+	}
+}
+
+// NormalizeAudioCodecName maps FFprobe audio codec names to standard names.
+func NormalizeAudioCodecName(ffprobeCodec string) string {
+	switch strings.ToLower(ffprobeCodec) {
+	case "aac", "mp4a":
+		return "aac"
+	case "opus":
+		return "opus"
+	case "flac":
+		return "flac"
+	case "mp3", "mp3float":
+		return "mp3"
+	case "ac3", "eac3":
+		return "ac3"
+	case "dts":
+		return "dts"
+	case "vorbis":
+		return "vorbis"
+	default:
+		return strings.ToLower(ffprobeCodec)
+	}
+}
+
 // computeMaxBitrate calculates maxrate for a target resolution.
 // The approach: scale source bitrate by area ratio, then apply a generous 1.5x headroom
-// factor to account for h264 re-encoding overhead at near-lossless CRF.
-// The result is capped to not exceed 95% of source bitrate.
+// factor to account for re-encoding overhead at near-lossless CRF.
+// NOTE: This returns the h264-equivalent bitrate. Caller should multiply by codecBitrateRatio.
 func computeMaxBitrate(srcBitrate float64, srcHeight, targetHeight int) float64 {
 	if srcBitrate <= 0 || srcHeight <= 0 {
-		// Fallback defaults
+		// Fallback defaults (h264-equivalent)
 		switch {
 		case targetHeight <= 720:
 			return 10_000_000
@@ -151,9 +251,7 @@ func computeMaxBitrate(srcBitrate float64, srcHeight, targetHeight int) float64 
 	// Base estimate: source bitrate scaled by area ratio
 	estimated := srcBitrate * areaRatio
 
-	// For same-resolution transcode (hevc→h264), h264 typically needs ~1.5x the bitrate
-	// of a well-encoded hevc to maintain similar visual quality.
-	// Apply a generous 1.5x factor for all cases to ensure headroom.
+	// Apply a generous 1.5x factor for re-encoding overhead
 	estimated *= 1.5
 
 	// Cap at 95% of source bitrate (transcoding shouldn't use more than source)
@@ -248,19 +346,36 @@ func formatBitrateHuman(bps float64) string {
 }
 
 // GetTranscodeParams resolves a quality value (e.g. "720p") to TranscodeParams,
-// given the computed preset list. Returns nil if quality is "original" or not found.
-func GetTranscodeParams(quality string, presets []QualityOption) *TranscodeParams {
+// given the computed preset list and the encoder info. Returns nil if quality is "original".
+func GetTranscodeParams(quality string, presets []QualityOption, encoder *EncoderInfo) *TranscodeParams {
 	if quality == "original" {
 		return nil
 	}
 	for _, p := range presets {
-		if p.Value == quality {
+		if p.Value == quality && p.Value != "original" {
+			hwaccel := ""
+			device := ""
+			if encoder != nil {
+				hwaccel = encoder.HWAccel
+				device = encoder.Device
+			}
+			encoderName := "libx264"
+			if encoder != nil {
+				encoderName = encoder.Encoder
+			}
+
 			return &TranscodeParams{
 				Label:      p.Label,
 				Height:     p.Height,
 				CRF:        p.CRF,
 				MaxBitrate: p.MaxBitrate,
 				BufSize:    p.BufSize,
+				VideoCodec: p.VideoCodec,
+				AudioCodec: p.AudioCodec,
+				Encoder:    encoderName,
+				HWAccel:    hwaccel,
+				Device:     device,
+				SegmentFmt: codecSegmentFmt[Codec(p.VideoCodec)],
 			}
 		}
 	}
@@ -268,10 +383,38 @@ func GetTranscodeParams(quality string, presets []QualityOption) *TranscodeParam
 }
 
 // defaultPresets returns fallback presets when FFprobe data is unavailable.
-func defaultPresets() []QualityOption {
+func defaultPresets(codec Codec, encoder *EncoderInfo) []QualityOption {
+	crfMap := codecCRF[codec]
+	if crfMap == nil {
+		crfMap = codecCRF[CodecH264]
+	}
+	bitrateRatio := codecBitrateRatio[codec]
+	if bitrateRatio <= 0 {
+		bitrateRatio = 1.0
+	}
+	audioCodec := codecAudio[codec]
+	if audioCodec == "" {
+		audioCodec = "aac"
+	}
+
+	br720 := 10_000_000.0 * bitrateRatio
+	br1080 := 20_000_000.0 * bitrateRatio
+
 	return []QualityOption{
-		{Value: "720p", Label: "720p", Desc: "~10 Mbps", Height: 720, CRF: 17, MaxBitrate: "10M", BufSize: "20M"},
-		{Value: "1080p", Label: "1080p", Desc: "~20 Mbps", Height: 1080, CRF: 16, MaxBitrate: "20M", BufSize: "40M"},
-		{Value: "original", Label: "Original", Desc: "Direct play"},
+		{
+			Value: "720p", Label: "720p",
+			Desc:       fmt.Sprintf("~%s", formatBitrateHuman(br720)),
+			Height:     720, CRF: crfMap[720],
+			MaxBitrate: formatBitrateM(br720), BufSize: formatBitrateM(br720 * 2),
+			VideoCodec: string(codec), AudioCodec: audioCodec,
+		},
+		{
+			Value: "1080p", Label: "1080p",
+			Desc:       fmt.Sprintf("~%s", formatBitrateHuman(br1080)),
+			Height:     1080, CRF: crfMap[1080],
+			MaxBitrate: formatBitrateM(br1080), BufSize: formatBitrateM(br1080 * 2),
+			VideoCodec: string(codec), AudioCodec: audioCodec,
+		},
+		{Value: "original", Label: "Original", Desc: "Direct play", CanOriginal: true},
 	}
 }

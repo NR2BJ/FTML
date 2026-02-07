@@ -1,9 +1,10 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import Hls from 'hls.js'
-import { getHLSUrl, getDirectUrl, getPresets } from '@/api/stream'
+import { getHLSUrl, getDirectUrl, getPresets, getCapabilities } from '@/api/stream'
 import { getFileInfo } from '@/api/files'
 import { saveWatchPosition, getWatchPosition } from '@/api/user'
 import { listSubtitles } from '@/api/subtitle'
+import { detectBrowserCodecs } from '@/utils/codec'
 import { usePlayerStore } from '@/stores/playerStore'
 import Controls from './Controls'
 import PlaybackStats from './PlaybackStats'
@@ -35,6 +36,8 @@ export default function Player({ path }: PlayerProps) {
     subtitleVisible,
     quality,
     duration,
+    negotiatedCodec,
+    browserCodecs,
     setPlaying,
     setCurrentTime,
     setDuration,
@@ -49,7 +52,28 @@ export default function Player({ path }: PlayerProps) {
     setSubtitleVisible,
     setQuality,
     setQualityPresets,
+    setNegotiatedCodec,
+    setBrowserCodecs,
   } = usePlayerStore()
+
+  // One-time codec negotiation on mount
+  useEffect(() => {
+    const codecs = detectBrowserCodecs()
+    setBrowserCodecs(codecs)
+
+    getCapabilities(codecs)
+      .then(({ data }) => {
+        setNegotiatedCodec(
+          data.selected_codec,
+          data.selected_encoder,
+          data.hwaccel
+        )
+      })
+      .catch(() => {
+        // Fallback to h264
+        setNegotiatedCodec('h264', 'libx264', 'none')
+      })
+  }, [setBrowserCodecs, setNegotiatedCodec])
 
   // Helper to start HLS playback from a given time
   const startHLS = useCallback((videoEl: HTMLVideoElement, filePath: string, q: string, startTime: number = 0, autoPlay: boolean = false) => {
@@ -60,6 +84,9 @@ export default function Player({ path }: PlayerProps) {
     }
 
     hlsStartTimeRef.current = startTime
+
+    // Get the current negotiated codec from the store
+    const codec = usePlayerStore.getState().negotiatedCodec || undefined
 
     if (Hls.isSupported()) {
       const token = localStorage.getItem('token') || ''
@@ -74,7 +101,7 @@ export default function Player({ path }: PlayerProps) {
         },
       })
       hlsRef.current = hls
-      hls.loadSource(getHLSUrl(filePath, q, startTime))
+      hls.loadSource(getHLSUrl(filePath, q, startTime, codec))
       hls.attachMedia(videoEl)
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
@@ -89,7 +116,7 @@ export default function Player({ path }: PlayerProps) {
       setUseHLS(true)
     } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS
-      videoEl.src = getHLSUrl(filePath, q, startTime)
+      videoEl.src = getHLSUrl(filePath, q, startTime, codec)
       setUseHLS(true)
       if (autoPlay) {
         videoEl.addEventListener('canplay', () => videoEl.play(), { once: true })
@@ -179,17 +206,22 @@ export default function Player({ path }: PlayerProps) {
       })
       .catch(() => {})
 
-    // Fetch quality presets for this video
-    getPresets(path)
+    // Fetch quality presets for this video (with codec info)
+    const { negotiatedCodec: codec, browserCodecs: bc } = usePlayerStore.getState()
+    getPresets(path, codec || undefined, bc || undefined)
       .then((res) => {
         const presets = res.data
         if (presets && presets.length > 0) {
-          setQualityPresets(presets)
+          // Filter out "original" if browser can't play it
+          const filteredPresets = presets.filter(
+            (p) => p.value !== 'original' || p.can_original !== false
+          )
+          setQualityPresets(filteredPresets)
           // If current quality isn't available in presets, select the highest transcode option
           const savedQ = localStorage.getItem('ftml-quality') || '720p'
-          const available = presets.find((p) => p.value === savedQ)
+          const available = filteredPresets.find((p) => p.value === savedQ)
           if (!available) {
-            const transcodeOpts = presets.filter((p) => p.value !== 'original')
+            const transcodeOpts = filteredPresets.filter((p) => p.value !== 'original')
             if (transcodeOpts.length > 0) {
               setQuality(transcodeOpts[transcodeOpts.length - 1].value)
             } else {
@@ -272,9 +304,8 @@ export default function Player({ path }: PlayerProps) {
       hlsRef.current = null
     }
 
-    // Direct play for browser-compatible formats or "original" quality
-    const ext = path.substring(path.lastIndexOf('.')).toLowerCase()
-    if (quality === 'original' || ext === '.mp4' || ext === '.webm') {
+    // Direct play only when user explicitly selects "original" quality
+    if (quality === 'original') {
       video.src = getDirectUrl(path)
       setUseHLS(false)
       hlsStartTimeRef.current = 0
@@ -288,7 +319,7 @@ export default function Player({ path }: PlayerProps) {
       return
     }
 
-    // Use HLS for other formats
+    // Use HLS for all transcode qualities
     // For quality switch, start from the saved position
     if (savedAbsTime > 0) {
       startHLS(video, path, quality, savedAbsTime, wasPlaying)

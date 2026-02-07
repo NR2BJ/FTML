@@ -19,7 +19,7 @@ interface RuntimeStats {
 }
 
 export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) {
-  const { showStats, mediaInfo, currentTime, duration, quality } = usePlayerStore()
+  const { showStats, mediaInfo, currentTime, duration, quality, negotiatedCodec, negotiatedEncoder, hwaccel } = usePlayerStore()
   const [stats, setStats] = useState<RuntimeStats>({
     playResolution: '',
     playBitrate: 0,
@@ -168,7 +168,12 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
       <div className="font-bold text-green-400 mt-2 mb-1">Playback{isOriginal ? ' (Direct)' : ' (Transcode)'}</div>
       <div className="ml-2 space-y-0.5">
         <div>Resolution: {stats.playResolution || 'N/A'}</div>
-        {!isOriginal && <div>Codec: h264 + aac</div>}
+        {!isOriginal && (
+          <>
+            <div>Codec: {(negotiatedCodec || 'h264').toUpperCase()} + {negotiatedCodec === 'av1' || negotiatedCodec === 'vp9' ? 'opus' : 'aac'}</div>
+            <div>Encoder: {negotiatedEncoder || 'N/A'}{hwaccel && hwaccel !== 'none' ? ` (${hwaccel})` : ''}</div>
+          </>
+        )}
         <div>Bitrate: {fmtBitrate(stats.playBitrate)}{isOriginal && stats.playBitrate > 0 ? ' (avg)' : ''}</div>
         <div>Framerate: {stats.playFramerate > 0 ? `${stats.playFramerate} fps` : 'N/A'}</div>
       </div>
