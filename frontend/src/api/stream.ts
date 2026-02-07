@@ -14,6 +14,8 @@ export interface QualityOption {
   video_codec: string
   audio_codec: string
   can_original?: boolean
+  can_original_video?: boolean
+  can_original_audio?: boolean
 }
 
 export interface CapabilitiesResponse {
@@ -42,6 +44,10 @@ export const getCapabilities = (browserCodecs: BrowserCodecSupport) =>
       hevc: browserCodecs.hevc,
       av1: browserCodecs.av1,
       vp9: browserCodecs.vp9,
+      aac: browserCodecs.aac,
+      opus: browserCodecs.opus,
+      flac: browserCodecs.flac,
+      ac3: browserCodecs.ac3,
     },
   })
 
@@ -53,17 +59,24 @@ export const getPresets = (path: string, codec?: string, browserCodecs?: Browser
     params.hevc = String(browserCodecs.hevc)
     params.av1 = String(browserCodecs.av1)
     params.vp9 = String(browserCodecs.vp9)
+    params.aac = String(browserCodecs.aac)
+    params.opus = String(browserCodecs.opus)
+    params.flac = String(browserCodecs.flac)
+    params.ac3 = String(browserCodecs.ac3)
   }
   return client.get<QualityOption[]>(`/stream/presets/${path}`, { params })
 }
 
-export const getHLSUrl = (path: string, quality: string = '720p', startTime: number = 0, codec?: string) => {
+export const getHLSUrl = (path: string, quality: string = '720p', startTime: number = 0, codec?: string, audioTrack: number = 0) => {
   let url = `/api/stream/hls/${path}?token=${getToken()}&quality=${quality}`
   if (startTime > 0) {
     url += `&start=${Math.floor(startTime)}`
   }
   if (codec) {
     url += `&codec=${codec}`
+  }
+  if (audioTrack > 0) {
+    url += `&audio=${audioTrack}`
   }
   return url
 }

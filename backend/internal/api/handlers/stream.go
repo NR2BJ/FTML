@@ -33,6 +33,10 @@ func (h *StreamHandler) CapabilitiesHandler(w http.ResponseWriter, r *http.Reque
 		HEVC: r.URL.Query().Get("hevc") == "true",
 		AV1:  r.URL.Query().Get("av1") == "true",
 		VP9:  r.URL.Query().Get("vp9") == "true",
+		AAC:  r.URL.Query().Get("aac") != "false", // default true for AAC
+		Opus: r.URL.Query().Get("opus") == "true",
+		FLAC: r.URL.Query().Get("flac") == "true",
+		AC3:  r.URL.Query().Get("ac3") == "true",
 	}
 
 	caps := ffmpeg.GetCapabilities()
@@ -124,6 +128,12 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		fmt.Sscanf(st, "%f", &startTime)
 	}
 
+	// Parse audio stream index
+	audioStreamIdx := 0
+	if audioStr := r.URL.Query().Get("audio"); audioStr != "" {
+		fmt.Sscanf(audioStr, "%d", &audioStreamIdx)
+	}
+
 	// Parse codec params
 	codec, encoder, browser := parseCodecParams(r)
 
@@ -133,13 +143,18 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	params := ffmpeg.GetTranscodeParams(quality, presets, encoder)
 
 	// If quality not found in presets, use first available transcode preset
-	if params == nil && quality != "original" {
+	if params == nil && quality != "original" && quality != "passthrough" {
 		for _, p := range presets {
-			if p.Value != "original" {
+			if p.Value != "original" && p.Value != "passthrough" {
 				params = ffmpeg.GetTranscodeParams(p.Value, presets, encoder)
 				break
 			}
 		}
+	}
+
+	// Apply audio stream index to params
+	if params != nil {
+		params.AudioStreamIndex = audioStreamIdx
 	}
 
 	sessionID := generateSessionID(videoPath, quality, startTime, string(codec))
@@ -300,10 +315,16 @@ func (h *StreamHandler) DirectPlay(w http.ResponseWriter, r *http.Request) {
 // parseCodecParams extracts codec, encoder info, and browser capabilities from request.
 func parseCodecParams(r *http.Request) (ffmpeg.Codec, *ffmpeg.EncoderInfo, ffmpeg.BrowserCodecs) {
 	browser := ffmpeg.BrowserCodecs{
+		// Video
 		H264: r.URL.Query().Get("h264") != "false", // default true for h264
 		HEVC: r.URL.Query().Get("hevc") == "true",
 		AV1:  r.URL.Query().Get("av1") == "true",
 		VP9:  r.URL.Query().Get("vp9") == "true",
+		// Audio
+		AAC:  r.URL.Query().Get("aac") != "false", // default true for AAC
+		Opus: r.URL.Query().Get("opus") == "true",
+		FLAC: r.URL.Query().Get("flac") == "true",
+		AC3:  r.URL.Query().Get("ac3") == "true",
 	}
 
 	codecStr := r.URL.Query().Get("codec")

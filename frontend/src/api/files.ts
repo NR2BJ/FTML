@@ -13,6 +13,18 @@ export interface TreeResponse {
   entries: FileEntry[]
 }
 
+export interface AudioStreamInfo {
+  index: number          // absolute stream index in the file
+  stream_index: number   // audio-only index (0, 1, 2...)
+  codec_name: string
+  channels: number
+  channel_layout?: string
+  sample_rate?: string
+  bit_rate?: string
+  language?: string
+  title?: string
+}
+
 export interface MediaInfo {
   duration: string
   size: string
@@ -23,6 +35,7 @@ export interface MediaInfo {
   height: number
   frame_rate: string
   streams: any[]
+  audio_streams?: AudioStreamInfo[]
 }
 
 export const getTree = (path = '') =>

@@ -15,26 +15,29 @@ type TranscodeParams struct {
 	MaxBitrate string `json:"max_bitrate"` // e.g. "12M"
 	BufSize    string `json:"buf_size"`    // e.g. "24M"
 	// Codec fields (Phase 3)
-	VideoCodec string `json:"video_codec"` // "h264", "hevc", "av1", "vp9"
-	AudioCodec string `json:"audio_codec"` // "aac" or "opus"
-	Encoder    string `json:"encoder"`     // "h264_vaapi", "libx264", etc.
-	HWAccel    string `json:"hwaccel"`     // "vaapi" or ""
-	Device     string `json:"device"`      // "/dev/dri/renderD128" or ""
-	SegmentFmt string `json:"segment_fmt"` // "mpegts" or "fmp4"
+	VideoCodec       string `json:"video_codec"`        // "h264", "hevc", "av1", "vp9", or "copy" for passthrough
+	AudioCodec       string `json:"audio_codec"`        // "aac" or "opus"
+	Encoder          string `json:"encoder"`            // "h264_vaapi", "libx264", "copy", etc.
+	HWAccel          string `json:"hwaccel"`            // "vaapi" or ""
+	Device           string `json:"device"`             // "/dev/dri/renderD128" or ""
+	SegmentFmt       string `json:"segment_fmt"`        // "mpegts" or "fmp4"
+	AudioStreamIndex int    `json:"audio_stream_index"` // which audio stream to use (0-based, audio-only index)
 }
 
 // QualityOption is returned to the frontend for the quality selector.
 type QualityOption struct {
-	Value      string `json:"value"`                  // "720p", "1080p", "original"
-	Label      string `json:"label"`                  // "720p", "1080p", "Original"
-	Desc       string `json:"desc"`                   // "~8 Mbps", "Direct play"
-	Height     int    `json:"height"`
-	CRF        int    `json:"crf"`
-	MaxBitrate string `json:"max_bitrate"`
-	BufSize    string `json:"buf_size"`
-	VideoCodec string `json:"video_codec"`            // "h264", "hevc", "av1"
-	AudioCodec string `json:"audio_codec"`            // "aac", "opus"
-	CanOriginal bool  `json:"can_original,omitempty"` // Whether browser can play the original
+	Value            string `json:"value"`                            // "720p", "1080p", "original", "passthrough"
+	Label            string `json:"label"`                            // "720p", "1080p", "Original"
+	Desc             string `json:"desc"`                             // "~8 Mbps", "Direct play"
+	Height           int    `json:"height"`
+	CRF              int    `json:"crf"`
+	MaxBitrate       string `json:"max_bitrate"`
+	BufSize          string `json:"buf_size"`
+	VideoCodec       string `json:"video_codec"`                     // "h264", "hevc", "av1"
+	AudioCodec       string `json:"audio_codec"`                     // "aac", "opus"
+	CanOriginal      bool   `json:"can_original,omitempty"`          // Whether browser can play full original (video+audio)
+	CanOriginalVideo bool   `json:"can_original_video,omitempty"`    // Whether browser can play original video codec
+	CanOriginalAudio bool   `json:"can_original_audio,omitempty"`    // Whether browser can play original audio codec
 }
 
 // Standard resolution tiers
@@ -170,20 +173,50 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 		})
 	}
 
-	// Original direct play option — only if browser can play the source codec
-	canOriginal := canBrowserPlayCodec(info.VideoCodec, browser)
+	// Original direct play option — check both video AND audio codec compatibility
+	canVideoOriginal := canBrowserPlayCodec(info.VideoCodec, browser)
+	canAudioOriginal := CanBrowserPlayAudio(info.AudioCodec, browser)
+	canOriginal := canVideoOriginal && canAudioOriginal
+
 	srcBitrateDesc := "Direct play"
 	if srcBitrate > 0 {
 		srcBitrateDesc = fmt.Sprintf("%s direct", formatBitrateHuman(srcBitrate))
 	}
 	options = append(options, QualityOption{
-		Value:       "original",
-		Label:       "Original",
-		Desc:        srcBitrateDesc,
-		CanOriginal: canOriginal,
-		VideoCodec:  NormalizeCodecName(info.VideoCodec),
-		AudioCodec:  NormalizeAudioCodecName(info.AudioCodec),
+		Value:            "original",
+		Label:            "Original",
+		Desc:             srcBitrateDesc,
+		CanOriginal:      canOriginal,
+		CanOriginalVideo: canVideoOriginal,
+		CanOriginalAudio: canAudioOriginal,
+		VideoCodec:       NormalizeCodecName(info.VideoCodec),
+		AudioCodec:       NormalizeAudioCodecName(info.AudioCodec),
 	})
+
+	// Passthrough option: video copy + audio transcode (AAC)
+	// Only when browser can play the video codec but NOT the audio codec
+	if canVideoOriginal && !canAudioOriginal {
+		ptDesc := "Video direct, audio AAC"
+		if srcBitrate > 0 {
+			ptDesc = fmt.Sprintf("%s video + AAC audio", formatBitrateHuman(srcBitrate))
+		}
+		// Determine the right segment format for the video codec
+		videoCodecNorm := NormalizeCodecName(info.VideoCodec)
+		ptSegFmt := codecSegmentFmt[Codec(videoCodecNorm)]
+		if ptSegFmt == "" {
+			ptSegFmt = "mpegts"
+		}
+		options = append(options, QualityOption{
+			Value:            "passthrough",
+			Label:            "Original (Audio Convert)",
+			Desc:             ptDesc,
+			CanOriginal:      false,
+			CanOriginalVideo: true,
+			CanOriginalAudio: false,
+			VideoCodec:       videoCodecNorm,
+			AudioCodec:       "aac",
+		})
+	}
 
 	return options
 }
@@ -203,28 +236,6 @@ func canBrowserPlayCodec(ffprobeCodec string, browser BrowserCodecs) bool {
 	default:
 		// Unknown codec: assume browser can't play it, offer transcode
 		return false
-	}
-}
-
-// NormalizeAudioCodecName maps FFprobe audio codec names to standard names.
-func NormalizeAudioCodecName(ffprobeCodec string) string {
-	switch strings.ToLower(ffprobeCodec) {
-	case "aac", "mp4a":
-		return "aac"
-	case "opus":
-		return "opus"
-	case "flac":
-		return "flac"
-	case "mp3", "mp3float":
-		return "mp3"
-	case "ac3", "eac3":
-		return "ac3"
-	case "dts":
-		return "dts"
-	case "vorbis":
-		return "vorbis"
-	default:
-		return strings.ToLower(ffprobeCodec)
 	}
 }
 
@@ -353,6 +364,27 @@ func GetTranscodeParams(quality string, presets []QualityOption, encoder *Encode
 	if quality == "original" {
 		return nil
 	}
+
+	// Passthrough: video copy + audio transcode
+	if quality == "passthrough" {
+		for _, p := range presets {
+			if p.Value == "passthrough" {
+				segFmt := codecSegmentFmt[Codec(p.VideoCodec)]
+				if segFmt == "" {
+					segFmt = "mpegts"
+				}
+				return &TranscodeParams{
+					Label:      p.Label,
+					VideoCodec: "copy",
+					AudioCodec: "aac",
+					Encoder:    "copy",
+					SegmentFmt: segFmt,
+				}
+			}
+		}
+		return nil
+	}
+
 	for _, p := range presets {
 		if p.Value == quality && p.Value != "original" {
 			hwaccel := ""

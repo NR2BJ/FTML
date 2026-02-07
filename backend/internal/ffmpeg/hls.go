@@ -33,14 +33,21 @@ type HLSManager struct {
 	mu       sync.RWMutex
 	sessions map[string]*HLSSession
 	baseDir  string
+	// fallbackCache remembers which sessions had to fall back to software encoding.
+	// When a session is re-created (e.g. after heartbeat timeout), we skip VAAPI
+	// and go straight to the cached SW encoder to avoid the VAAPI→fail→SW→timeout loop.
+	fallbackCache     map[string]string    // sessionID → SW encoder name
+	fallbackCacheTime map[string]time.Time // sessionID → when the entry was added
 }
 
 func NewHLSManager(baseDir string) *HLSManager {
 	hlsDir := filepath.Join(baseDir, "hls")
 	os.MkdirAll(hlsDir, 0755)
 	m := &HLSManager{
-		sessions: make(map[string]*HLSSession),
-		baseDir:  hlsDir,
+		sessions:          make(map[string]*HLSSession),
+		baseDir:           hlsDir,
+		fallbackCache:     make(map[string]string),
+		fallbackCacheTime: make(map[string]time.Time),
 	}
 	go m.cleanup()
 	return m
@@ -52,6 +59,19 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 
 	if s, ok := m.sessions[sessionID]; ok {
 		return s, nil
+	}
+
+	// Check if this session previously failed with VAAPI and fell back to software.
+	// If so, skip VAAPI and use the cached SW encoder directly to avoid the
+	// VAAPI→fail→SW→heartbeat-timeout→recreate→VAAPI-again infinite loop.
+	if params != nil && params.HWAccel != "" {
+		if fallbackEncoder, ok := m.fallbackCache[sessionID]; ok {
+			log.Printf("[HLS] Using cached SW fallback encoder: %s (skipping %s) session=%s",
+				fallbackEncoder, params.Encoder, sessionID)
+			params.Encoder = fallbackEncoder
+			params.HWAccel = ""
+			params.Device = ""
+		}
 	}
 
 	outputDir := filepath.Join(m.baseDir, sessionID)
@@ -152,7 +172,8 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 }
 
 // buildFFmpegArgs constructs the FFmpeg command line based on transcode params.
-// Supports VAAPI hardware encoding, software encoding, and different segment formats.
+// Supports VAAPI hardware encoding, software encoding, video passthrough (copy),
+// and different segment formats.
 func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *TranscodeParams) []string {
 	args := []string{
 		"-hide_banner",
@@ -161,9 +182,10 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 		"-probesize", "10000000",
 	}
 
-	isVAAPI := params.HWAccel == "vaapi" && params.Device != ""
+	isPassthrough := params.VideoCodec == "copy" || params.Encoder == "copy"
+	isVAAPI := !isPassthrough && params.HWAccel == "vaapi" && params.Device != ""
 
-	// Hardware device init for VAAPI
+	// Hardware device init for VAAPI (skip for passthrough)
 	if isVAAPI {
 		args = append(args,
 			"-hwaccel", "vaapi",
@@ -177,24 +199,32 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 		args = append(args, "-ss", fmt.Sprintf("%.2f", startTime))
 	}
 
+	// Audio stream mapping: use the specified audio stream index
+	audioMap := fmt.Sprintf("0:a:%d?", params.AudioStreamIndex)
+
 	args = append(args,
 		"-i", inputPath,
 		"-map", "0:v:0",
-		"-map", "0:a:0?",
+		"-map", audioMap,
 	)
 
-	// Video encoder
-	args = append(args, "-c:v", params.Encoder)
-
-	// Video filter and quality settings depend on encoder type
-	if isVAAPI {
-		args = appendVAAPIArgs(args, params)
+	if isPassthrough {
+		// Video passthrough: copy video stream as-is, only transcode audio
+		args = append(args, "-c:v", "copy")
 	} else {
-		args = appendSoftwareArgs(args, params)
-	}
+		// Video encoder
+		args = append(args, "-c:v", params.Encoder)
 
-	// Keyframe interval (consistent across codecs for HLS segment alignment)
-	args = append(args, "-g", "48", "-keyint_min", "48")
+		// Video filter and quality settings depend on encoder type
+		if isVAAPI {
+			args = appendVAAPIArgs(args, params)
+		} else {
+			args = appendSoftwareArgs(args, params)
+		}
+
+		// Keyframe interval (consistent across codecs for HLS segment alignment)
+		args = append(args, "-g", "48", "-keyint_min", "48")
+	}
 
 	// Audio encoder — always use AAC for maximum compatibility
 	args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
@@ -357,12 +387,17 @@ func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, s
 		return
 	}
 
-	// Update the session in-place
+	// Update the session in-place and register in fallback cache
 	m.mu.Lock()
 	if s, ok := m.sessions[sessionID]; ok {
 		s.Cmd = cmd
 		s.Cancel = cancel
+		s.LastHeartbeat = time.Now() // Refresh heartbeat so SW fallback gets a full 45s window
 	}
+	// Remember that this session needed SW fallback, so if it gets recreated
+	// (e.g. after heartbeat timeout), we skip VAAPI and go straight to SW.
+	m.fallbackCache[sessionID] = fallback
+	m.fallbackCacheTime[sessionID] = time.Now()
 	m.mu.Unlock()
 
 	go func() {
@@ -451,6 +486,9 @@ func (m *HLSManager) StopSession(sessionID string) {
 		s.Cancel()
 		os.RemoveAll(s.OutputDir)
 		delete(m.sessions, sessionID)
+		// Clean fallback cache on explicit stop (user switched quality/seek/navigation)
+		delete(m.fallbackCache, sessionID)
+		delete(m.fallbackCacheTime, sessionID)
 		log.Printf("[HLS] Stopped session: %s", sessionID)
 	}
 }
@@ -471,6 +509,9 @@ func (m *HLSManager) StopSessionsForPath(inputPath, quality, codec, excludeID st
 			s.Cancel()
 			os.RemoveAll(s.OutputDir)
 			delete(m.sessions, id)
+			// Clean fallback cache on explicit stop (seek to new position)
+			delete(m.fallbackCache, id)
+			delete(m.fallbackCacheTime, id)
 			log.Printf("[HLS] Stopped old session: %s (replaced by seek)", id)
 		}
 	}
@@ -531,6 +572,13 @@ func (m *HLSManager) cleanup() {
 				os.RemoveAll(s.OutputDir)
 				delete(m.sessions, id)
 				log.Printf("[HLS] Stopped session: %s (heartbeat timeout 45s)", id)
+			}
+		}
+		// Purge stale fallback cache entries (30-minute TTL to prevent memory leaks)
+		for id, t := range m.fallbackCacheTime {
+			if now.Sub(t) > 30*time.Minute {
+				delete(m.fallbackCache, id)
+				delete(m.fallbackCacheTime, id)
 			}
 		}
 		m.mu.Unlock()

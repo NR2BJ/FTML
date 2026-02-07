@@ -3,6 +3,7 @@ import { usePlayerStore } from '@/stores/playerStore'
 import { Play, Pause, Volume2, VolumeX, Maximize, SkipBack, SkipForward, BarChart2 } from 'lucide-react'
 import { formatDuration } from '@/utils/format'
 import SubtitleSelector from './SubtitleSelector'
+import AudioSelector from './AudioSelector'
 import QualitySelector from './QualitySelector'
 
 interface ControlsProps {
@@ -102,6 +103,9 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
         </span>
 
         <div className="flex-1" />
+
+        {/* Audio Track */}
+        <AudioSelector />
 
         {/* Subtitles */}
         <SubtitleSelector />

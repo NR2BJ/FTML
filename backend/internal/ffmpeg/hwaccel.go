@@ -210,12 +210,63 @@ func testSoftwareEncoder(encoder string) bool {
 	return err == nil
 }
 
-// BrowserCodecs holds browser codec support flags.
+// BrowserCodecs holds browser codec support flags (video + audio).
 type BrowserCodecs struct {
+	// Video
 	H264 bool `json:"h264"`
 	HEVC bool `json:"hevc"`
 	AV1  bool `json:"av1"`
 	VP9  bool `json:"vp9"`
+	// Audio
+	AAC  bool `json:"aac"`
+	Opus bool `json:"opus"`
+	FLAC bool `json:"flac"`
+	AC3  bool `json:"ac3"`
+}
+
+// CanBrowserPlayAudio checks if the browser can play the given audio codec natively.
+func CanBrowserPlayAudio(audioCodec string, browser BrowserCodecs) bool {
+	normalized := NormalizeAudioCodecName(audioCodec)
+	switch normalized {
+	case "aac":
+		return browser.AAC
+	case "opus":
+		return browser.Opus
+	case "flac":
+		return browser.FLAC
+	case "ac3":
+		return browser.AC3
+	case "mp3":
+		return true // MP3 is universally supported
+	default:
+		// Unknown audio codecs (DTS, TrueHD, PCM, etc): assume not supported
+		return false
+	}
+}
+
+// NormalizeAudioCodecName maps FFprobe audio codec names to standard names.
+// (Moved here from preset.go for shared use)
+func NormalizeAudioCodecName(ffprobeCodec string) string {
+	switch strings.ToLower(ffprobeCodec) {
+	case "aac", "mp4a":
+		return "aac"
+	case "opus":
+		return "opus"
+	case "flac":
+		return "flac"
+	case "mp3", "mp3float":
+		return "mp3"
+	case "ac3", "eac3":
+		return "ac3"
+	case "dts", "dts-hd", "truehd":
+		return "dts"
+	case "vorbis":
+		return "vorbis"
+	case "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le":
+		return "pcm"
+	default:
+		return strings.ToLower(ffprobeCodec)
+	}
 }
 
 // NegotiateCodec picks the best codec from the intersection of

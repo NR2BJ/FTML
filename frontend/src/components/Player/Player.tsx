@@ -38,6 +38,7 @@ export default function Player({ path }: PlayerProps) {
     activeSubtitle,
     subtitleVisible,
     quality,
+    audioTrack,
     duration,
     negotiatedCodec,
     browserCodecs,
@@ -119,8 +120,9 @@ export default function Player({ path }: PlayerProps) {
 
     hlsStartTimeRef.current = startTime
 
-    // Get the current negotiated codec from the store
-    const codec = usePlayerStore.getState().negotiatedCodec || undefined
+    // Get the current negotiated codec and audio track from the store
+    const { negotiatedCodec: storeCodec, audioTrack: storeAudioTrack } = usePlayerStore.getState()
+    const codec = storeCodec || undefined
 
     // Compute session ID and start heartbeat
     // The backend uses fullPath (mediaPath + videoPath) for the session ID,
@@ -142,7 +144,7 @@ export default function Player({ path }: PlayerProps) {
         },
       })
       hlsRef.current = hls
-      hls.loadSource(getHLSUrl(filePath, q, startTime, codec))
+      hls.loadSource(getHLSUrl(filePath, q, startTime, codec, storeAudioTrack))
       hls.attachMedia(videoEl)
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
@@ -157,7 +159,7 @@ export default function Player({ path }: PlayerProps) {
       setUseHLS(true)
     } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS
-      videoEl.src = getHLSUrl(filePath, q, startTime, codec)
+      videoEl.src = getHLSUrl(filePath, q, startTime, codec, storeAudioTrack)
       setUseHLS(true)
       if (autoPlay) {
         videoEl.addEventListener('canplay', () => videoEl.play(), { once: true })
@@ -253,20 +255,23 @@ export default function Player({ path }: PlayerProps) {
       .then((res) => {
         const presets = res.data
         if (presets && presets.length > 0) {
-          // Filter out "original" if browser can't play it
-          const filteredPresets = presets.filter(
-            (p) => p.value !== 'original' || p.can_original !== false
-          )
-          setQualityPresets(filteredPresets)
+          // Keep all presets - QualitySelector handles disabling original when audio incompatible
+          setQualityPresets(presets)
           // If current quality isn't available in presets, select the highest transcode option
           const savedQ = localStorage.getItem('ftml-quality') || '720p'
-          const available = filteredPresets.find((p) => p.value === savedQ)
+          const available = presets.find((p) => p.value === savedQ)
           if (!available) {
-            const transcodeOpts = filteredPresets.filter((p) => p.value !== 'original')
-            if (transcodeOpts.length > 0) {
-              setQuality(transcodeOpts[transcodeOpts.length - 1].value)
+            // Prefer passthrough over regular transcode if available
+            const passthrough = presets.find((p) => p.value === 'passthrough')
+            if (passthrough) {
+              setQuality('passthrough')
             } else {
-              setQuality('original')
+              const transcodeOpts = presets.filter((p) => p.value !== 'original' && p.value !== 'passthrough')
+              if (transcodeOpts.length > 0) {
+                setQuality(transcodeOpts[transcodeOpts.length - 1].value)
+              } else {
+                setQuality('original')
+              }
             }
           }
         }
@@ -332,8 +337,8 @@ export default function Player({ path }: PlayerProps) {
     if (!video) return
 
     // Wait for codec negotiation to complete before starting HLS
-    // (original quality doesn't need codec negotiation)
-    if (quality !== 'original' && !negotiatedCodec) return
+    // (original/passthrough quality doesn't need codec negotiation)
+    if (quality !== 'original' && quality !== 'passthrough' && !negotiatedCodec) return
 
     setCurrentFile(path)
     setError(null)
@@ -382,7 +387,7 @@ export default function Player({ path }: PlayerProps) {
       // Stop session on unmount or when dependencies change (quality switch)
       stopCurrentSession()
     }
-  }, [path, quality, negotiatedCodec, setCurrentFile, startHLS, stopCurrentSession])
+  }, [path, quality, audioTrack, negotiatedCodec, setCurrentFile, startHLS, stopCurrentSession])
 
   // Sync volume/muted/playbackRate
   useEffect(() => {

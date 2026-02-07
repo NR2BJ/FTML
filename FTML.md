@@ -931,3 +931,32 @@ server {
 - 브라우저가 원본 코덱을 지원하면 트랜스코딩 없이 직접 스트리밍
 - 대역폭 절약 + 화질 손실 없음
 - MediaCapabilities API로 브라우저 지원 여부 감지
+
+---
+
+## 미뤄진 작업 / TODO
+
+> 개발 과정에서 식별되었으나 현재 Phase에서 구현하지 않은 항목들.
+> 우선순위에 따라 향후 Phase에서 구현 예정.
+
+### 트랜스코딩 관련
+
+| # | 항목 | 상세 | 우선순위 |
+|---|------|------|----------|
+| 1 | VAAPI 10bit 하이브리드 모드 | CPU decode + VAAPI encode로 10bit H.264/HEVC 소스 처리. 현재는 SW fallback으로 우회 중. | 중 |
+| 2 | QSV / NVENC / AMF 지원 | VAAPI 외 다른 HW 가속기 10bit 호환성 테스트 및 지원. 멀티 GPU 환경 대응. | 중 |
+| 3 | Opus 오디오 코덱 옵션 | AAC 외 Opus 트랜스코딩 지원 (fmp4 컨테이너 전용). 커스텀 인코딩 옵션에서 선택 가능하도록. | 낮 |
+| 4 | 커스텀 인코딩 설정 UI | 사용자가 코덱, 비트레이트, 오디오 코덱, CRF 등을 직접 지정하는 고급 설정 페이지. | 낮 |
+
+### 사용자 기능 관련
+
+| # | 항목 | 상세 | 우선순위 |
+|---|------|------|----------|
+| 5 | 시청 기록 목록 조회 | `GET /api/user/history` 구현. DB에 `watch_history` 테이블과 `SaveWatchPosition`/`GetWatchPosition`은 구현됨. 목록 조회(`GetWatchHistory`)는 미구현. | 높 |
+| 6 | 시청 기록 삭제 | `DELETE /api/user/history/{path}` 또는 전체 삭제. 개별/전체 삭제 기능. | 높 |
+| 7 | 시청 기록 UI | History 페이지에서 영상 목록, 진행률 표시, 이어보기 링크, 삭제 버튼. | 높 |
+
+### 참고
+- 시청 기록 관련은 FTML.md 섹션 7 (관리자 대시보드)과 섹션 8 (사용자 기능)에 스펙이 정의되어 있음
+- API 스펙에 `GET /api/user/history`는 정의되어 있으나 아직 구현되지 않음
+- `PUT /api/user/history/{path}` (재생 위치 저장)만 현재 동작 중
