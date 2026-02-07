@@ -8,7 +8,6 @@ import { usePlayerStore } from '@/stores/playerStore'
 import Controls from './Controls'
 import PlaybackStats from './PlaybackStats'
 import SubtitleDisplay from './SubtitleDisplay'
-import { formatDuration } from '@/utils/format'
 
 interface PlayerProps {
   path: string
@@ -20,6 +19,7 @@ export default function Player({ path }: PlayerProps) {
   const hlsRef = useRef<Hls | null>(null)
   const probeDurationRef = useRef<number>(0)
   const lastSavedTimeRef = useRef<number>(0)
+  const hlsStartTimeRef = useRef<number>(0) // HLS transcode start offset
   const [useHLS, setUseHLS] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -49,6 +49,89 @@ export default function Player({ path }: PlayerProps) {
     setSubtitleVisible,
   } = usePlayerStore()
 
+  // Helper to start HLS playback from a given time
+  const startHLS = useCallback((videoEl: HTMLVideoElement, filePath: string, q: string, startTime: number = 0, autoPlay: boolean = false) => {
+    // Cleanup previous HLS instance
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
+    }
+
+    hlsStartTimeRef.current = startTime
+
+    if (Hls.isSupported()) {
+      const token = localStorage.getItem('token') || ''
+      const hls = new Hls({
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        maxBufferHole: 0.5,
+        highBufferWatchdogPeriod: 3,
+        startFragPrefetch: true,
+        xhrSetup: (xhr: XMLHttpRequest) => {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+        },
+      })
+      hlsRef.current = hls
+      hls.loadSource(getHLSUrl(filePath, q, startTime))
+      hls.attachMedia(videoEl)
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (data.fatal) {
+          setError(`Playback error: ${data.type}`)
+        }
+      })
+      if (autoPlay) {
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          videoEl.play()
+        })
+      }
+      setUseHLS(true)
+    } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari native HLS
+      videoEl.src = getHLSUrl(filePath, q, startTime)
+      setUseHLS(true)
+      if (autoPlay) {
+        videoEl.addEventListener('canplay', () => videoEl.play(), { once: true })
+      }
+    } else {
+      setError('HLS is not supported in this browser')
+    }
+  }, [])
+
+  // Seek to absolute time. If beyond buffered range in HLS, restart transcoding.
+  const seek = useCallback((absTime: number) => {
+    const video = videoRef.current
+    if (!video) return
+
+    const fullDur = probeDurationRef.current || duration
+    const clampedTime = Math.max(0, Math.min(absTime, fullDur))
+
+    // For direct play (not HLS), just seek directly
+    if (!useHLS) {
+      video.currentTime = clampedTime
+      return
+    }
+
+    // Calculate the relative time within the current HLS session
+    const relativeTime = clampedTime - hlsStartTimeRef.current
+
+    // Check if the target is within the currently available buffered range
+    let maxBufferedEnd = 0
+    for (let i = 0; i < video.buffered.length; i++) {
+      maxBufferedEnd = Math.max(maxBufferedEnd, video.buffered.end(i))
+    }
+
+    // If the seek target is within range (or close enough), seek directly
+    // Allow seeking up to 5s beyond current buffer (it will load)
+    if (relativeTime >= 0 && relativeTime <= maxBufferedEnd + 5) {
+      video.currentTime = relativeTime
+      return
+    }
+
+    // Beyond the buffered range: restart HLS from the new position
+    const wasPlaying = !video.paused
+    startHLS(video, path, quality, clampedTime, wasPlaying)
+  }, [path, quality, duration, useHLS, startHLS])
+
   // Reset state and fetch file info when path changes
   useEffect(() => {
     // Reset all player state for new video
@@ -62,6 +145,7 @@ export default function Player({ path }: PlayerProps) {
     setActiveSubtitle(null)
     probeDurationRef.current = 0
     lastSavedTimeRef.current = 0
+    hlsStartTimeRef.current = 0
 
     // Fetch real duration and media info from FFprobe
     getFileInfo(path)
@@ -94,7 +178,7 @@ export default function Player({ path }: PlayerProps) {
       .catch(() => {})
   }, [path, setCurrentTime, setDuration, setPlaying, setResumePosition, setHasResumed, setMediaInfo, setSubtitles, setActiveSubtitle])
 
-  // Seek to resume position after media is ready
+  // Resume playback from saved position after media is ready
   useEffect(() => {
     const video = videoRef.current
     if (!video || hasResumed || resumePosition === null) return
@@ -103,7 +187,8 @@ export default function Player({ path }: PlayerProps) {
       const dur = probeDurationRef.current || video.duration
       // Don't resume if near the end (within last 10 seconds)
       if (resumePosition > 0 && resumePosition < dur - 10) {
-        video.currentTime = resumePosition
+        // Use the seek function which handles HLS restarts for far positions
+        seek(resumePosition)
       }
       setHasResumed(true)
     }
@@ -115,7 +200,7 @@ export default function Player({ path }: PlayerProps) {
       video.addEventListener('canplay', handleCanPlay, { once: true })
       return () => video.removeEventListener('canplay', handleCanPlay)
     }
-  }, [resumePosition, hasResumed, setHasResumed])
+  }, [resumePosition, hasResumed, setHasResumed, seek])
 
   // Auto-save watch position every 10 seconds + on pause
   useEffect(() => {
@@ -123,11 +208,11 @@ export default function Player({ path }: PlayerProps) {
     if (!video) return
 
     const savePosition = () => {
-      const time = video.currentTime
+      const absTime = video.currentTime + hlsStartTimeRef.current
       const dur = probeDurationRef.current || video.duration
-      if (time > 0 && dur > 0 && Math.abs(time - lastSavedTimeRef.current) > 2) {
-        lastSavedTimeRef.current = time
-        saveWatchPosition(path, time, dur).catch(() => {})
+      if (absTime > 0 && dur > 0 && Math.abs(absTime - lastSavedTimeRef.current) > 2) {
+        lastSavedTimeRef.current = absTime
+        saveWatchPosition(path, absTime, dur).catch(() => {})
       }
     }
 
@@ -153,8 +238,9 @@ export default function Player({ path }: PlayerProps) {
     setCurrentFile(path)
     setError(null)
 
-    // Save current time for quality switches (not new videos)
-    const savedTime = video.currentTime || 0
+    // Save current absolute time for quality switches (not new videos)
+    const prevStartOffset = hlsStartTimeRef.current
+    const savedAbsTime = (video.currentTime || 0) + prevStartOffset
     const wasPlaying = !video.paused
 
     // Cleanup previous HLS instance
@@ -168,10 +254,11 @@ export default function Player({ path }: PlayerProps) {
     if (quality === 'original' || ext === '.mp4' || ext === '.webm') {
       video.src = getDirectUrl(path)
       setUseHLS(false)
+      hlsStartTimeRef.current = 0
       // Seek back if quality switch
-      if (savedTime > 0) {
+      if (savedAbsTime > 0) {
         video.addEventListener('loadedmetadata', () => {
-          video.currentTime = savedTime
+          video.currentTime = savedAbsTime
           if (wasPlaying) video.play()
         }, { once: true })
       }
@@ -179,40 +266,11 @@ export default function Player({ path }: PlayerProps) {
     }
 
     // Use HLS for other formats
-    if (Hls.isSupported()) {
-      const token = localStorage.getItem('token') || ''
-      const hls = new Hls({
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
-        maxBufferHole: 0.5,
-        highBufferWatchdogPeriod: 3,
-        startFragPrefetch: true,
-        xhrSetup: (xhr: XMLHttpRequest) => {
-          xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-        },
-      })
-      hlsRef.current = hls
-      hls.loadSource(getHLSUrl(path, quality))
-      hls.attachMedia(video)
-      hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          setError(`Playback error: ${data.type}`)
-        }
-      })
-      // Seek back if quality switch
-      if (savedTime > 0) {
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          video.currentTime = savedTime
-          if (wasPlaying) video.play()
-        })
-      }
-      setUseHLS(true)
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      // Safari native HLS
-      video.src = getHLSUrl(path, quality)
-      setUseHLS(true)
+    // For quality switch, start from the saved position
+    if (savedAbsTime > 0) {
+      startHLS(video, path, quality, savedAbsTime, wasPlaying)
     } else {
-      setError('HLS is not supported in this browser')
+      startHLS(video, path, quality, 0, false)
     }
 
     return () => {
@@ -221,7 +279,7 @@ export default function Player({ path }: PlayerProps) {
         hlsRef.current = null
       }
     }
-  }, [path, quality, setCurrentFile])
+  }, [path, quality, setCurrentFile, startHLS])
 
   // Sync volume/muted/playbackRate
   useEffect(() => {
@@ -235,20 +293,21 @@ export default function Player({ path }: PlayerProps) {
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current
     if (video) {
-      setCurrentTime(video.currentTime)
+      // Report absolute time (HLS video.currentTime is relative to transcode start)
+      setCurrentTime(video.currentTime + hlsStartTimeRef.current)
     }
   }, [setCurrentTime])
 
   const handleLoadedMetadata = useCallback(() => {
     const video = videoRef.current
     if (video && isFinite(video.duration) && video.duration > 0) {
-      // Only update if video reports a longer duration than FFprobe
-      // (HLS initially reports only buffered segment length)
-      if (video.duration > probeDurationRef.current) {
+      // For direct play, use the video's reported duration
+      // For HLS, prefer FFprobe duration since video.duration only reflects transcoded portion
+      if (!useHLS && video.duration > probeDurationRef.current) {
         setDuration(video.duration)
       }
     }
-  }, [setDuration])
+  }, [setDuration, useHLS])
 
   const handlePlay = useCallback(() => setPlaying(true), [setPlaying])
   const handlePause = useCallback(() => setPlaying(false), [setPlaying])
@@ -260,13 +319,6 @@ export default function Player({ path }: PlayerProps) {
       video.play()
     } else {
       video.pause()
-    }
-  }, [])
-
-  const seek = useCallback((time: number) => {
-    const video = videoRef.current
-    if (video) {
-      video.currentTime = time
     }
   }, [])
 
@@ -287,6 +339,10 @@ export default function Player({ path }: PlayerProps) {
       if (!video) return
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
 
+      // Current absolute time (video.currentTime is relative to HLS start offset)
+      const absTime = video.currentTime + hlsStartTimeRef.current
+      const fullDur = probeDurationRef.current || duration
+
       switch (e.key) {
         case ' ':
           e.preventDefault()
@@ -294,11 +350,11 @@ export default function Player({ path }: PlayerProps) {
           break
         case 'ArrowLeft':
           e.preventDefault()
-          video.currentTime -= 5
+          seek(absTime - 5)
           break
         case 'ArrowRight':
           e.preventDefault()
-          video.currentTime += 5
+          seek(absTime + 5)
           break
         case 'ArrowUp':
           e.preventDefault()
@@ -318,11 +374,11 @@ export default function Player({ path }: PlayerProps) {
           break
         case 'j':
         case 'J':
-          video.currentTime -= 10
+          seek(absTime - 10)
           break
         case 'l':
         case 'L':
-          video.currentTime += 10
+          seek(absTime + 10)
           break
         case 'i':
         case 'I':
@@ -355,10 +411,10 @@ export default function Player({ path }: PlayerProps) {
           break
         }
         default:
-          // 0-9: jump to percentage position
-          if (e.key >= '0' && e.key <= '9' && duration > 0) {
+          // 0-9: jump to percentage of full duration
+          if (e.key >= '0' && e.key <= '9' && fullDur > 0) {
             const pct = parseInt(e.key) * 10
-            video.currentTime = (pct / 100) * duration
+            seek((pct / 100) * fullDur)
           }
           break
       }
@@ -366,7 +422,7 @@ export default function Player({ path }: PlayerProps) {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [togglePlay, toggleFullscreen, showStats, setShowStats, subtitleVisible, setSubtitleVisible, playbackRate, setPlaybackRate, duration])
+  }, [togglePlay, toggleFullscreen, seek, showStats, setShowStats, subtitleVisible, setSubtitleVisible, playbackRate, setPlaybackRate, duration])
 
   if (error) {
     return (

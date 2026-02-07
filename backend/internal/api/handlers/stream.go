@@ -66,9 +66,20 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		return
 	}
 
-	sessionID := generateSessionID(videoPath, quality)
+	// Parse optional start time for seeking
+	var startTime float64
+	if st := r.URL.Query().Get("start"); st != "" {
+		fmt.Sscanf(st, "%f", &startTime)
+	}
 
-	session, err := h.hlsManager.GetOrCreateSession(sessionID, fullPath, 0, quality)
+	sessionID := generateSessionID(videoPath, quality, startTime)
+
+	// If seeking, stop any existing sessions for the same video+quality at different times
+	if startTime > 0 {
+		h.hlsManager.StopSessionsForPath(fullPath, quality, sessionID)
+	}
+
+	session, err := h.hlsManager.GetOrCreateSession(sessionID, fullPath, startTime, quality)
 	if err != nil {
 		jsonError(w, "failed to start transcoding: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -123,7 +134,11 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	for i, line := range lines {
 		if strings.HasSuffix(strings.TrimSpace(line), ".ts") {
 			segName := strings.TrimSpace(line)
-			lines[i] = fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s", encodedVideoPath, segName, token, quality)
+			segURL := fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s", encodedVideoPath, segName, token, quality)
+			if startTime > 0 {
+				segURL += fmt.Sprintf("&start=%.0f", startTime)
+			}
+			lines[i] = segURL
 		}
 	}
 
@@ -147,7 +162,11 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 	if quality == "" {
 		quality = "medium"
 	}
-	sessionID := generateSessionID(videoPath, quality)
+	var startTime float64
+	if st := r.URL.Query().Get("start"); st != "" {
+		fmt.Sscanf(st, "%f", &startTime)
+	}
+	sessionID := generateSessionID(videoPath, quality, startTime)
 
 	segmentPath := filepath.Join(h.hlsManager.GetSessionDir(sessionID), segmentName)
 
@@ -181,7 +200,8 @@ func (h *StreamHandler) DirectPlay(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, fullPath)
 }
 
-func generateSessionID(path, quality string) string {
-	h := sha256.Sum256([]byte(path + "|" + quality))
+func generateSessionID(path, quality string, startTime float64) string {
+	key := fmt.Sprintf("%s|%s|%.0f", path, quality, startTime)
+	h := sha256.Sum256([]byte(key))
 	return fmt.Sprintf("%x", h[:8])
 }

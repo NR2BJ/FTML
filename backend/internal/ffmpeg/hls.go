@@ -29,6 +29,8 @@ var Presets = map[string]QualityPreset{
 type HLSSession struct {
 	ID        string
 	InputPath string
+	VideoPath string // original relative path (for matching on seek)
+	Quality   string
 	OutputDir string
 	Cmd       *exec.Cmd
 	Cancel    context.CancelFunc
@@ -142,6 +144,7 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 	session := &HLSSession{
 		ID:        sessionID,
 		InputPath: inputPath,
+		Quality:   quality,
 		OutputDir: outputDir,
 		Cmd:       cmd,
 		Cancel:    cancel,
@@ -176,6 +179,22 @@ func (m *HLSManager) StopSession(sessionID string) {
 		s.Cancel()
 		os.RemoveAll(s.OutputDir)
 		delete(m.sessions, sessionID)
+	}
+}
+
+// StopSessionsForPath stops all sessions for a given video file and quality
+// except the one with the given excludeID. Used when seeking to a new position.
+func (m *HLSManager) StopSessionsForPath(inputPath, quality, excludeID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id, s := range m.sessions {
+		if id != excludeID && s.InputPath == inputPath && s.Quality == quality {
+			s.Cancel()
+			os.RemoveAll(s.OutputDir)
+			delete(m.sessions, id)
+			log.Printf("[HLS] Stopped old session: %s (replaced by seek)", id)
+		}
 	}
 }
 

@@ -33,7 +33,11 @@ export default function SubtitleSettings({ onClose }: SubtitleSettingsProps) {
   } = useSubtitleSettings()
 
   return (
-    <div className="absolute bottom-12 right-0 bg-gray-900/95 border border-gray-700 rounded-lg p-4 min-w-[240px] z-50">
+    <div
+      className="absolute bottom-12 right-0 bg-gray-900/95 border border-gray-700 rounded-lg p-4 min-w-[240px] z-50"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
       <div className="flex items-center justify-between mb-3">
         <span className="text-sm font-medium text-white">Subtitle Settings</span>
         <button
@@ -76,7 +80,8 @@ export default function SubtitleSettings({ onClose }: SubtitleSettingsProps) {
           step="10"
           value={fontSize}
           onChange={(e) => setFontSize(parseInt(e.target.value))}
-          className="w-full h-1 accent-primary-500"
+          onMouseDown={(e) => e.stopPropagation()}
+          className="w-full h-2 accent-primary-500 cursor-pointer appearance-none bg-gray-600 rounded-full"
         />
       </div>
 
@@ -122,7 +127,8 @@ export default function SubtitleSettings({ onClose }: SubtitleSettingsProps) {
           step="0.05"
           value={bgOpacity}
           onChange={(e) => setBgOpacity(parseFloat(e.target.value))}
-          className="w-full h-1 accent-primary-500"
+          onMouseDown={(e) => e.stopPropagation()}
+          className="w-full h-2 accent-primary-500 cursor-pointer appearance-none bg-gray-600 rounded-full"
         />
       </div>
 
