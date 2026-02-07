@@ -7,6 +7,9 @@ import { isVideoFile, formatBytes, formatDuration } from '@/utils/format'
 interface DetailsViewProps {
   entries: FileEntry[]
   onClickEntry: (entry: FileEntry) => void
+  selectedPaths?: Set<string>
+  onSelectionChange?: (paths: Set<string>) => void
+  onContextMenu?: (e: React.MouseEvent, entries: FileEntry[]) => void
 }
 
 // Extract cell value for a given column
@@ -61,9 +64,16 @@ function needsMediaInfo(columnId: string): boolean {
 
 type SortDir = 'asc' | 'desc'
 
-export default function DetailsView({ entries, onClickEntry }: DetailsViewProps) {
+export default function DetailsView({
+  entries,
+  onClickEntry,
+  selectedPaths = new Set(),
+  onSelectionChange,
+  onContextMenu,
+}: DetailsViewProps) {
   const { columns, toggleColumn, resizeColumn, reorderColumns } = useBrowseStore()
   const visibleColumns = columns.filter((c) => c.visible)
+  const lastClickedRef = useRef<number | null>(null)
 
   // Sorting
   const [sortCol, setSortCol] = useState<string>('name')
@@ -246,8 +256,73 @@ export default function DetailsView({ entries, onClickEntry }: DetailsViewProps)
     setDragOverCol(null)
   }
 
+  // Selection helpers
+  const hasSelection = onSelectionChange !== undefined
+  const allVideoSelected = hasSelection && sortedEntries
+    .filter(e => !e.is_dir && isVideoFile(e.name))
+    .every(e => selectedPaths.has(e.path))
+  const someSelected = hasSelection && selectedPaths.size > 0
+
+  const toggleSelection = (path: string) => {
+    if (!onSelectionChange) return
+    const next = new Set(selectedPaths)
+    if (next.has(path)) next.delete(path)
+    else next.add(path)
+    onSelectionChange(next)
+  }
+
+  const toggleAll = () => {
+    if (!onSelectionChange) return
+    const videoEntries = sortedEntries.filter(e => !e.is_dir && isVideoFile(e.name))
+    if (allVideoSelected) {
+      // Deselect all
+      onSelectionChange(new Set())
+    } else {
+      // Select all videos
+      onSelectionChange(new Set(videoEntries.map(e => e.path)))
+    }
+  }
+
+  const handleRowContextMenu = (e: React.MouseEvent, entry: FileEntry) => {
+    if (!onContextMenu || !isVideoFile(entry.name) || entry.is_dir) return
+    e.preventDefault()
+    // If right-clicked item is not selected, select only it
+    if (!selectedPaths.has(entry.path)) {
+      onSelectionChange?.(new Set([entry.path]))
+      const selected = [entry]
+      onContextMenu(e, selected)
+    } else {
+      // Use currently selected entries
+      const selected = sortedEntries.filter(e => selectedPaths.has(e.path))
+      onContextMenu(e, selected)
+    }
+  }
+
+  const handleCheckboxClick = (e: React.MouseEvent, entry: FileEntry, idx: number) => {
+    e.stopPropagation()
+    if (!onSelectionChange) return
+
+    if (e.shiftKey && lastClickedRef.current !== null) {
+      // Range selection
+      const start = Math.min(lastClickedRef.current, idx)
+      const end = Math.max(lastClickedRef.current, idx)
+      const next = new Set(selectedPaths)
+      for (let i = start; i <= end; i++) {
+        const e = sortedEntries[i]
+        if (!e.is_dir && isVideoFile(e.name)) {
+          next.add(e.path)
+        }
+      }
+      onSelectionChange(next)
+    } else {
+      toggleSelection(entry.path)
+    }
+    lastClickedRef.current = idx
+  }
+
   // Build grid template - Name column is flexible, others are fixed width
-  const gridTemplate = visibleColumns
+  const checkboxCol = hasSelection ? '28px ' : ''
+  const gridTemplate = checkboxCol + visibleColumns
     .map((c) => c.id === 'name' ? `minmax(150px, 1fr)` : `${c.width}px`)
     .join(' ')
 
@@ -259,6 +334,17 @@ export default function DetailsView({ entries, onClickEntry }: DetailsViewProps)
         style={{ gridTemplateColumns: gridTemplate }}
         onContextMenu={handleHeaderContextMenu}
       >
+        {/* Select-all checkbox */}
+        {hasSelection && (
+          <div className="flex items-center justify-center">
+            <input
+              type="checkbox"
+              checked={allVideoSelected && someSelected}
+              onChange={toggleAll}
+              className="w-3.5 h-3.5 rounded border-dark-500 bg-dark-800 text-primary-500 focus:ring-0 cursor-pointer accent-primary-500"
+            />
+          </div>
+        )}
         {visibleColumns.map((col, idx) => (
           <div
             key={col.id}
@@ -288,7 +374,7 @@ export default function DetailsView({ entries, onClickEntry }: DetailsViewProps)
       </div>
 
       {/* Rows */}
-      {sortedEntries.map((entry) => {
+      {sortedEntries.map((entry, rowIdx) => {
         const isVideo = !entry.is_dir && isVideoFile(entry.name)
         const Icon = entry.is_dir ? Folder : isVideo ? FileVideo : File
         const iconColor = entry.is_dir
@@ -298,14 +384,34 @@ export default function DetailsView({ entries, onClickEntry }: DetailsViewProps)
           : 'text-gray-500'
         const info = mediaInfoMap.get(entry.path)
         const isLoading = loadingPaths.has(entry.path)
+        const isSelected = hasSelection && selectedPaths.has(entry.path)
 
         return (
-          <button
+          <div
             key={entry.path}
             onClick={() => onClickEntry(entry)}
-            className="grid px-2 py-1.5 hover:bg-dark-800 transition-colors text-left w-full border-b border-dark-800 last:border-b-0 group"
+            onContextMenu={(e) => handleRowContextMenu(e, entry)}
+            className={`grid px-2 py-1.5 hover:bg-dark-800 transition-colors text-left w-full border-b border-dark-800 last:border-b-0 group cursor-pointer ${
+              isSelected ? 'bg-primary-900/20 border-l-2 border-l-primary-500' : ''
+            }`}
             style={{ gridTemplateColumns: gridTemplate }}
           >
+            {/* Row checkbox */}
+            {hasSelection && (
+              <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                {isVideo ? (
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => {}}
+                    onClick={(e) => handleCheckboxClick(e, entry, rowIdx)}
+                    className="w-3.5 h-3.5 rounded border-dark-500 bg-dark-800 text-primary-500 focus:ring-0 cursor-pointer accent-primary-500"
+                  />
+                ) : (
+                  <div className="w-3.5 h-3.5" />
+                )}
+              </div>
+            )}
             {visibleColumns.map((col) => {
               // Name column gets special treatment with icon
               if (col.id === 'name') {
@@ -334,7 +440,7 @@ export default function DetailsView({ entries, onClickEntry }: DetailsViewProps)
                 </div>
               )
             })}
-          </button>
+          </div>
         )
       })}
 

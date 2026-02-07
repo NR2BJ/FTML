@@ -12,26 +12,36 @@ import (
 	"sync"
 
 	"github.com/video-stream/backend/internal/db"
+	"github.com/video-stream/backend/internal/gpu"
 )
 
 // Available whisper.cpp models on HuggingFace
 var whisperModels = []WhisperModelDef{
-	{Name: "ggml-large-v3-turbo.bin", Label: "Large V3 Turbo", Size: "1.6 GB", SizeBytes: 1624236544, Description: "Best speed/quality balance (recommended)"},
-	{Name: "ggml-large-v3.bin", Label: "Large V3", Size: "3.1 GB", SizeBytes: 3094623232, Description: "Best quality, slowest"},
-	{Name: "ggml-medium.bin", Label: "Medium", Size: "1.5 GB", SizeBytes: 1533774592, Description: "Good quality, moderate speed"},
-	{Name: "ggml-small.bin", Label: "Small", Size: "488 MB", SizeBytes: 487601664, Description: "Fast, decent quality"},
-	{Name: "ggml-base.bin", Label: "Base", Size: "148 MB", SizeBytes: 147951465, Description: "Very fast, basic quality"},
-	{Name: "ggml-tiny.bin", Label: "Tiny", Size: "78 MB", SizeBytes: 77691713, Description: "Fastest, low quality"},
+	// Full-precision models
+	{Name: "ggml-large-v3-turbo.bin", Label: "Large V3 Turbo", Size: "1.6 GB", SizeBytes: 1624236544, Description: "Best speed/quality balance (recommended)", VRAMRequired: 3_000_000_000, Quantized: false},
+	{Name: "ggml-large-v3.bin", Label: "Large V3", Size: "3.1 GB", SizeBytes: 3094623232, Description: "Best quality, slowest", VRAMRequired: 5_000_000_000, Quantized: false},
+	{Name: "ggml-medium.bin", Label: "Medium", Size: "1.5 GB", SizeBytes: 1533774592, Description: "Good quality, moderate speed", VRAMRequired: 2_500_000_000, Quantized: false},
+	{Name: "ggml-small.bin", Label: "Small", Size: "488 MB", SizeBytes: 487601664, Description: "Fast, decent quality", VRAMRequired: 1_000_000_000, Quantized: false},
+	{Name: "ggml-base.bin", Label: "Base", Size: "148 MB", SizeBytes: 147951465, Description: "Very fast, basic quality", VRAMRequired: 400_000_000, Quantized: false},
+	{Name: "ggml-tiny.bin", Label: "Tiny", Size: "78 MB", SizeBytes: 77691713, Description: "Fastest, low quality", VRAMRequired: 200_000_000, Quantized: false},
+	// Quantized models
+	{Name: "ggml-large-v3-turbo-q5_0.bin", Label: "Large V3 Turbo (Q5)", Size: "547 MB", SizeBytes: 547000000, Description: "Quantized turbo — good quality, much less VRAM", VRAMRequired: 1_200_000_000, Quantized: true},
+	{Name: "ggml-large-v3-turbo-q8_0.bin", Label: "Large V3 Turbo (Q8)", Size: "876 MB", SizeBytes: 876000000, Description: "Quantized turbo — near-original quality", VRAMRequired: 1_800_000_000, Quantized: true},
+	{Name: "ggml-large-v3-q5_0.bin", Label: "Large V3 (Q5)", Size: "1.1 GB", SizeBytes: 1100000000, Description: "Quantized large — good quality, fits 6GB VRAM", VRAMRequired: 2_200_000_000, Quantized: true},
+	{Name: "ggml-medium-q5_0.bin", Label: "Medium (Q5)", Size: "539 MB", SizeBytes: 539000000, Description: "Quantized medium — decent quality, fast", VRAMRequired: 1_100_000_000, Quantized: true},
+	{Name: "ggml-small-q5_1.bin", Label: "Small (Q5)", Size: "195 MB", SizeBytes: 195000000, Description: "Quantized small — fast, compact", VRAMRequired: 500_000_000, Quantized: true},
 }
 
 const huggingfaceBaseURL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 
 type WhisperModelDef struct {
-	Name        string `json:"name"`
-	Label       string `json:"label"`
-	Size        string `json:"size"`
-	SizeBytes   int64  `json:"size_bytes"`
-	Description string `json:"description"`
+	Name         string `json:"name"`
+	Label        string `json:"label"`
+	Size         string `json:"size"`
+	SizeBytes    int64  `json:"size_bytes"`
+	Description  string `json:"description"`
+	VRAMRequired int64  `json:"vram_required"` // bytes needed for inference
+	Quantized    bool   `json:"quantized"`
 }
 
 type WhisperModelStatus struct {
@@ -39,6 +49,7 @@ type WhisperModelStatus struct {
 	Downloaded bool    `json:"downloaded"`
 	Active     bool    `json:"active"`
 	Progress   float64 `json:"progress,omitempty"` // 0-1 if downloading
+	FitsVRAM   *bool   `json:"fits_vram,omitempty"` // nil=unknown, true/false
 }
 
 type WhisperModelsHandler struct {
@@ -69,6 +80,9 @@ func NewWhisperModelsHandler(modelPath string, database *db.Database) *WhisperMo
 func (h *WhisperModelsHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 	activeModel := h.database.GetSetting("whisper_model", "ggml-large-v3.bin")
 
+	// Detect GPU VRAM for fits_vram field
+	gpuInfo := gpu.DetectGPU()
+
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -94,11 +108,24 @@ func (h *WhisperModelsHandler) ListModels(w http.ResponseWriter, r *http.Request
 			status.Progress = ds.Progress
 		}
 
+		// Check VRAM fit
+		if gpuInfo.VRAMTotal > 0 && def.VRAMRequired > 0 {
+			fits := gpuInfo.VRAMTotal >= def.VRAMRequired
+			status.FitsVRAM = &fits
+		}
+
 		result = append(result, status)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+// GPUInfo returns detected GPU information
+func (h *WhisperModelsHandler) GPUInfo(w http.ResponseWriter, r *http.Request) {
+	info := gpu.DetectGPU()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
 }
 
 // DownloadModel starts downloading a model from HuggingFace

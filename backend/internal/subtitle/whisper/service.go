@@ -1,6 +1,7 @@
 package whisper
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -48,7 +49,7 @@ func (s *Service) RegisterEngine(name string, engine Transcriber) {
 }
 
 // HandleJob processes a transcription job
-func (s *Service) HandleJob(j *job.Job, updateProgress func(float64)) error {
+func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func(float64)) error {
 	var params job.TranscribeParams
 	if err := json.Unmarshal(j.Params, &params); err != nil {
 		return fmt.Errorf("unmarshal params: %w", err)
@@ -68,7 +69,7 @@ func (s *Service) HandleJob(j *job.Job, updateProgress func(float64)) error {
 	log.Printf("[whisper] starting transcription: engine=%s file=%s language=%s",
 		params.Engine, j.FilePath, params.Language)
 
-	result, err := engine.Transcribe(nil, TranscribeRequest{
+	result, err := engine.Transcribe(ctx, TranscribeRequest{
 		FilePath: fullPath,
 		Language: params.Language,
 		Model:    params.Model,

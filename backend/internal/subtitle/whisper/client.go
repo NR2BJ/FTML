@@ -56,7 +56,73 @@ func (c *WhisperCppClient) Transcribe(ctx context.Context, req TranscribeRequest
 	return result, nil
 }
 
+// isOOMError checks if an error response indicates GPU out-of-memory
+func isOOMError(body string) bool {
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "out of memory") ||
+		strings.Contains(lower, "allocation") ||
+		strings.Contains(lower, "oom") ||
+		strings.Contains(lower, "memory") && strings.Contains(lower, "failed") ||
+		strings.Contains(lower, "sycl") && strings.Contains(lower, "error")
+}
+
+// isRetryableError checks if an HTTP error is transient and worth retrying
+func isRetryableError(statusCode int, err error) bool {
+	if err != nil {
+		errStr := err.Error()
+		return strings.Contains(errStr, "connection refused") ||
+			strings.Contains(errStr, "connection reset") ||
+			strings.Contains(errStr, "EOF") ||
+			strings.Contains(errStr, "timeout")
+	}
+	return statusCode == 502 || statusCode == 503 || statusCode == 504
+}
+
 func (c *WhisperCppClient) sendToServer(ctx context.Context, audioPath, language string, updateProgress func(float64)) (*TranscribeResult, error) {
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 2s, 4s, 8s
+			backoff := time.Duration(1<<uint(attempt)) * time.Second
+			log.Printf("[whisper] retry %d/%d after %v", attempt, maxRetries, backoff)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		result, err := c.doSendToServer(ctx, audioPath, language, updateProgress)
+		if err == nil {
+			return result, nil
+		}
+
+		lastErr = err
+
+		// Don't retry OOM errors — they will always fail
+		if isOOMError(err.Error()) {
+			return nil, fmt.Errorf("GPU out of memory — try a smaller model or quantized variant: %w", err)
+		}
+
+		// Don't retry context cancellation
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		// Only retry on transient errors
+		if !isRetryableError(0, err) {
+			return nil, err
+		}
+
+		log.Printf("[whisper] transient error (attempt %d/%d): %v", attempt+1, maxRetries+1, err)
+	}
+
+	return nil, fmt.Errorf("whisper server failed after %d attempts: %w", maxRetries+1, lastErr)
+}
+
+func (c *WhisperCppClient) doSendToServer(ctx context.Context, audioPath, language string, updateProgress func(float64)) (*TranscribeResult, error) {
 	// Build multipart form
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
@@ -111,7 +177,16 @@ func (c *WhisperCppClient) sendToServer(ctx context.Context, audioPath, language
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("whisper server error (status %d): %s", resp.StatusCode, string(body))
+		bodyStr := string(body)
+		// Check for OOM in response body
+		if isOOMError(bodyStr) {
+			return nil, fmt.Errorf("GPU out of memory (status %d): %s", resp.StatusCode, bodyStr)
+		}
+		// Check if retryable server error
+		if isRetryableError(resp.StatusCode, nil) {
+			return nil, fmt.Errorf("whisper server request: status %d: %s", resp.StatusCode, bodyStr)
+		}
+		return nil, fmt.Errorf("whisper server error (status %d): %s", resp.StatusCode, bodyStr)
 	}
 
 	vtt := string(body)

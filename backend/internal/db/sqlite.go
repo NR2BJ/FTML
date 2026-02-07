@@ -66,6 +66,13 @@ func (d *Database) migrate() error {
 		started_at DATETIME,
 		completed_at DATETIME
 	);
+
+	CREATE TABLE IF NOT EXISTS translation_presets (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		prompt TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := d.db.Exec(schema)
 	return err
@@ -184,4 +191,52 @@ func (d *Database) Close() error {
 // DB returns the underlying sql.DB for use by other packages (e.g., job queue)
 func (d *Database) DB() *sql.DB {
 	return d.db
+}
+
+// TranslationPreset represents a saved custom translation prompt
+type TranslationPreset struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Prompt    string `json:"prompt"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ListTranslationPresets returns all saved presets ordered by creation time
+func (d *Database) ListTranslationPresets() ([]TranslationPreset, error) {
+	rows, err := d.db.Query("SELECT id, name, prompt, created_at FROM translation_presets ORDER BY created_at ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var presets []TranslationPreset
+	for rows.Next() {
+		var p TranslationPreset
+		if err := rows.Scan(&p.ID, &p.Name, &p.Prompt, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		presets = append(presets, p)
+	}
+	if presets == nil {
+		presets = []TranslationPreset{}
+	}
+	return presets, nil
+}
+
+// CreateTranslationPreset saves a new custom translation preset
+func (d *Database) CreateTranslationPreset(name, prompt string) (int64, error) {
+	result, err := d.db.Exec(
+		"INSERT INTO translation_presets (name, prompt) VALUES (?, ?)",
+		name, prompt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// DeleteTranslationPreset removes a saved preset by ID
+func (d *Database) DeleteTranslationPreset(id int64) error {
+	_, err := d.db.Exec("DELETE FROM translation_presets WHERE id = ?", id)
+	return err
 }

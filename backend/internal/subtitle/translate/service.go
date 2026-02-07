@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -46,7 +47,7 @@ func NewService(mediaPath, subtitlePath, geminiKey, openAIKey, deeplKey string) 
 }
 
 // HandleJob processes a translation job
-func (s *Service) HandleJob(j *job.Job, updateProgress func(float64)) error {
+func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func(float64)) error {
 	var params job.TranslateParams
 	if err := json.Unmarshal(j.Params, &params); err != nil {
 		return fmt.Errorf("unmarshal params: %w", err)
@@ -76,7 +77,7 @@ func (s *Service) HandleJob(j *job.Job, updateProgress func(float64)) error {
 	sourceLang := detectSourceLang(params.SubtitleID)
 
 	// Translate
-	translated, err := engine.Translate(nil, cues, TranslateOptions{
+	translated, err := engine.Translate(ctx, cues, TranslateOptions{
 		SourceLang:   sourceLang,
 		TargetLang:   params.TargetLang,
 		Preset:       params.Preset,

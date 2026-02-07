@@ -6,9 +6,19 @@ export interface WhisperModel {
   size: string
   size_bytes: number
   description: string
+  vram_required: number
+  quantized: boolean
   downloaded: boolean
   active: boolean
   progress?: number
+  fits_vram?: boolean | null
+}
+
+export interface GPUInfo {
+  device: string
+  vram_total: number
+  vram_free: number
+  driver: string
 }
 
 export interface DownloadProgress {
@@ -31,3 +41,6 @@ export const setActiveModel = (model: string) =>
 
 export const deleteWhisperModel = (model: string) =>
   client.delete('/whisper/models', { data: { model } })
+
+export const getGPUInfo = () =>
+  client.get<GPUInfo>('/gpu/info')

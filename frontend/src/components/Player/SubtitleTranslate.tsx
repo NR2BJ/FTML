@@ -1,7 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Languages, Loader2, X, Check, AlertCircle } from 'lucide-react'
+import { Languages, Loader2, X, Check, AlertCircle, Save, Trash2 } from 'lucide-react'
 import { usePlayerStore } from '@/stores/playerStore'
-import { translateSubtitle, getJob, listSubtitles, type Job, type SubtitleEntry } from '@/api/subtitle'
+import {
+  translateSubtitle,
+  getJob,
+  listSubtitles,
+  listPresets,
+  createPreset,
+  deletePreset,
+  type Job,
+  type SubtitleEntry,
+  type TranslationPreset,
+} from '@/api/subtitle'
 
 const ENGINES = [
   { value: 'gemini', label: 'Gemini' },
@@ -9,10 +19,11 @@ const ENGINES = [
   { value: 'deepl', label: 'DeepL' },
 ]
 
-const PRESETS = [
+const BUILT_IN_PRESETS = [
   { value: 'anime', label: 'Anime' },
   { value: 'movie', label: 'Movie / Drama' },
   { value: 'documentary', label: 'Documentary' },
+  { value: 'custom', label: 'Custom Prompt' },
 ]
 
 const TARGET_LANGS = [
@@ -35,10 +46,19 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
   const [engine, setEngine] = useState('gemini')
   const [targetLang, setTargetLang] = useState('ko')
   const [preset, setPreset] = useState('anime')
+  const [customPrompt, setCustomPrompt] = useState('')
+  const [savedPresets, setSavedPresets] = useState<TranslationPreset[]>([])
+  const [saveName, setSaveName] = useState('')
+  const [showSaveInput, setShowSaveInput] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
   const [error, setError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Load saved presets
+  useEffect(() => {
+    listPresets().then(({ data }) => setSavedPresets(data || [])).catch(() => {})
+  }, [])
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -69,15 +89,66 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
     return stopPolling
   }, [jobId, currentFile, setSubtitles, stopPolling])
 
+  const handlePresetChange = (value: string) => {
+    setPreset(value)
+    // If selecting a saved preset, populate the custom prompt
+    const saved = savedPresets.find(p => `saved:${p.id}` === value)
+    if (saved) {
+      setCustomPrompt(saved.prompt)
+    } else if (value !== 'custom') {
+      setCustomPrompt('')
+    }
+  }
+
+  const handleSavePreset = async () => {
+    if (!saveName.trim() || !customPrompt.trim()) return
+    try {
+      await createPreset(saveName.trim(), customPrompt.trim())
+      const { data } = await listPresets()
+      setSavedPresets(data || [])
+      setShowSaveInput(false)
+      setSaveName('')
+    } catch {
+      setError('Failed to save preset')
+    }
+  }
+
+  const handleDeletePreset = async (id: number) => {
+    try {
+      await deletePreset(id)
+      const { data } = await listPresets()
+      setSavedPresets(data || [])
+      // Reset to anime if current preset was deleted
+      if (preset === `saved:${id}`) {
+        setPreset('anime')
+        setCustomPrompt('')
+      }
+    } catch {
+      setError('Failed to delete preset')
+    }
+  }
+
   const handleTranslate = async () => {
     if (!currentFile) return
     setError(null)
     try {
+      // Determine actual preset and custom prompt to send
+      let actualPreset = preset
+      let actualPrompt = customPrompt
+      if (preset.startsWith('saved:')) {
+        actualPreset = 'custom'
+      } else if (preset === 'custom') {
+        actualPreset = 'custom'
+      } else {
+        actualPrompt = ''
+      }
+
       const { data } = await translateSubtitle(currentFile, {
         subtitle_id: sourceSubtitle.id,
         target_lang: targetLang,
         engine,
-        preset,
+        preset: actualPreset,
+        custom_prompt: actualPrompt || undefined,
       })
       setJobId(data.job_id)
     } catch (err: unknown) {
@@ -89,9 +160,10 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
   const isProcessing = job && (job.status === 'pending' || job.status === 'running')
   const isDone = job?.status === 'completed'
   const isFailed = job?.status === 'failed'
+  const isCustom = preset === 'custom' || preset.startsWith('saved:')
 
   return (
-    <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg p-3 min-w-[240px] z-50">
+    <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg p-3 min-w-[280px] max-w-[340px] z-50">
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium text-white flex items-center gap-1.5">
           <Languages className="w-4 h-4" />
@@ -138,17 +210,88 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
 
           {/* Preset (only for LLM engines) */}
           {engine !== 'deepl' && (
-            <div className="mb-3">
+            <div className="mb-2">
               <label className="text-xs text-gray-400 block mb-0.5">Style Preset</label>
               <select
                 value={preset}
-                onChange={(e) => setPreset(e.target.value)}
+                onChange={(e) => handlePresetChange(e.target.value)}
                 className="w-full bg-gray-800 text-sm text-white rounded px-2 py-1 border border-gray-600"
               >
-                {PRESETS.map((p) => (
+                {BUILT_IN_PRESETS.map((p) => (
                   <option key={p.value} value={p.value}>{p.label}</option>
                 ))}
+                {savedPresets.length > 0 && (
+                  <optgroup label="Saved Presets">
+                    {savedPresets.map((p) => (
+                      <option key={`saved:${p.id}`} value={`saved:${p.id}`}>{p.name}</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
+            </div>
+          )}
+
+          {/* Custom prompt textarea */}
+          {engine !== 'deepl' && isCustom && (
+            <div className="mb-2">
+              <label className="text-xs text-gray-400 block mb-0.5">Custom Instructions</label>
+              <textarea
+                value={customPrompt}
+                onChange={(e) => setCustomPrompt(e.target.value)}
+                placeholder="E.g., Use casual speech. Keep honorifics like -san. Localize food names..."
+                className="w-full bg-gray-800 text-xs text-white rounded px-2 py-1.5 border border-gray-600 resize-none h-16"
+              />
+              {/* Save preset button */}
+              <div className="flex items-center gap-1 mt-1">
+                {!showSaveInput ? (
+                  <button
+                    onClick={() => setShowSaveInput(true)}
+                    disabled={!customPrompt.trim()}
+                    className="text-xs text-gray-400 hover:text-primary-400 flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <Save className="w-3 h-3" />
+                    Save as Preset
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-1 flex-1">
+                    <input
+                      type="text"
+                      value={saveName}
+                      onChange={(e) => setSaveName(e.target.value)}
+                      placeholder="Preset name"
+                      className="flex-1 bg-gray-800 text-xs text-white rounded px-2 py-1 border border-gray-600"
+                      onKeyDown={(e) => e.key === 'Enter' && handleSavePreset()}
+                      autoFocus
+                    />
+                    <button
+                      onClick={handleSavePreset}
+                      disabled={!saveName.trim()}
+                      className="text-xs text-primary-400 hover:text-primary-300 disabled:opacity-50"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => { setShowSaveInput(false); setSaveName('') }}
+                      className="text-xs text-gray-400 hover:text-gray-300"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+                {/* Delete saved preset */}
+                {preset.startsWith('saved:') && (
+                  <button
+                    onClick={() => {
+                      const id = parseInt(preset.replace('saved:', ''))
+                      if (!isNaN(id)) handleDeletePreset(id)
+                    }}
+                    className="text-xs text-gray-500 hover:text-red-400 ml-auto"
+                    title="Delete this preset"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
             </div>
           )}
 

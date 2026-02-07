@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getTree, getThumbnailUrl, type FileEntry } from '@/api/files'
-import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid } from 'lucide-react'
+import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid, CheckSquare } from 'lucide-react'
 import { isVideoFile, formatBytes } from '@/utils/format'
 import { useBrowseStore } from '@/stores/browseStore'
 import DetailsView from '@/components/Browse/DetailsView'
+import ContextMenu from '@/components/Browse/ContextMenu'
+import BatchSubtitleDialog from '@/components/Browse/BatchSubtitleDialog'
 
 // ── Thumbnail component ──
 
@@ -57,14 +59,37 @@ function Thumbnail({ path, iconSize }: { path: string; iconSize: number }) {
 
 // ── Icons View (slider-controlled size) ──
 
-function IconsView({ entries, onClickEntry, iconSize }: {
+function IconsView({ entries, onClickEntry, iconSize, selectedPaths, onSelectionChange, onContextMenu }: {
   entries: FileEntry[]
   onClickEntry: (e: FileEntry) => void
   iconSize: number
+  selectedPaths: Set<string>
+  onSelectionChange: (paths: Set<string>) => void
+  onContextMenu: (e: React.MouseEvent, entries: FileEntry[]) => void
 }) {
   // Scale font and padding based on icon size
   const fontSize = Math.max(11, Math.min(14, iconSize * 0.07))
   const padding = Math.max(4, Math.min(12, iconSize * 0.05))
+
+  const handleContextMenu = (e: React.MouseEvent, entry: FileEntry) => {
+    if (!isVideoFile(entry.name) || entry.is_dir) return
+    e.preventDefault()
+    if (!selectedPaths.has(entry.path)) {
+      onSelectionChange(new Set([entry.path]))
+      onContextMenu(e, [entry])
+    } else {
+      const selected = entries.filter(en => selectedPaths.has(en.path))
+      onContextMenu(e, selected)
+    }
+  }
+
+  const toggleSelection = (e: React.MouseEvent, entry: FileEntry) => {
+    e.stopPropagation()
+    const next = new Set(selectedPaths)
+    if (next.has(entry.path)) next.delete(entry.path)
+    else next.add(entry.path)
+    onSelectionChange(next)
+  }
 
   return (
     <div
@@ -75,13 +100,39 @@ function IconsView({ entries, onClickEntry, iconSize }: {
         const isVideo = !entry.is_dir && isVideoFile(entry.name)
         const Icon = entry.is_dir ? Folder : isVideo ? FileVideo : File
         const iconColor = entry.is_dir ? 'text-yellow-400' : isVideo ? 'text-blue-400' : 'text-gray-500'
+        const isSelected = selectedPaths.has(entry.path)
 
         return (
           <button
             key={entry.path}
             onClick={() => onClickEntry(entry)}
-            className="bg-dark-900 border border-dark-700 rounded-lg overflow-hidden hover:bg-dark-800 hover:border-dark-600 transition-colors text-left group"
+            onContextMenu={(e) => handleContextMenu(e, entry)}
+            className={`bg-dark-900 border rounded-lg overflow-hidden hover:bg-dark-800 hover:border-dark-600 transition-colors text-left group relative ${
+              isSelected ? 'border-primary-500 bg-primary-900/10' : 'border-dark-700'
+            }`}
           >
+            {/* Selection checkbox overlay */}
+            {isVideo && (
+              <div
+                className={`absolute top-1.5 right-1.5 z-10 transition-opacity ${
+                  isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-70'
+                }`}
+                onClick={(e) => toggleSelection(e, entry)}
+              >
+                <div className={`w-5 h-5 rounded border flex items-center justify-center ${
+                  isSelected
+                    ? 'bg-primary-500 border-primary-500'
+                    : 'bg-dark-900/80 border-dark-500'
+                }`}>
+                  {isSelected && (
+                    <svg className="w-3 h-3 text-white" viewBox="0 0 12 12" fill="none">
+                      <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </div>
+              </div>
+            )}
+
             {isVideo ? (
               <div className="relative aspect-video bg-dark-800 overflow-hidden">
                 <Thumbnail path={entry.path} iconSize={iconSize} />
@@ -124,12 +175,17 @@ function IconsView({ entries, onClickEntry, iconSize }: {
 
 // ── Main Browse Page ──
 
+type BatchMode = 'generate' | 'translate' | 'generate-translate'
+
 export default function Browse() {
   const params = useParams()
   const path = params['*'] || ''
   const navigate = useNavigate()
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: FileEntry[] } | null>(null)
+  const [batchDialog, setBatchDialog] = useState<{ mode: BatchMode; files: FileEntry[] } | null>(null)
 
   const { viewMode, iconSize, setViewMode, setIconSize } = useBrowseStore()
 
@@ -139,6 +195,11 @@ export default function Browse() {
       .then(({ data }) => setEntries(data.entries || []))
       .catch(() => setEntries([]))
       .finally(() => setLoading(false))
+  }, [path])
+
+  // Reset selection when changing directory
+  useEffect(() => {
+    setSelectedPaths(new Set())
   }, [path])
 
   const handleClick = (entry: FileEntry) => {
@@ -154,6 +215,19 @@ export default function Browse() {
     parts.pop()
     navigate(parts.length > 0 ? `/browse/${parts.join('/')}` : '/')
   }
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, contextEntries: FileEntry[]) => {
+    setContextMenu({ x: e.clientX, y: e.clientY, entries: contextEntries })
+  }, [])
+
+  const openBatchDialog = (mode: BatchMode) => {
+    const files = entries.filter(e => selectedPaths.has(e.path))
+    if (files.length > 0) {
+      setBatchDialog({ mode, files })
+    }
+  }
+
+  const selectedCount = selectedPaths.size
 
   if (loading) {
     return <div className="text-gray-400">Loading...</div>
@@ -177,6 +251,22 @@ export default function Browse() {
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
+          {/* Selected count + batch action */}
+          {selectedCount > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-primary-400 flex items-center gap-1">
+                <CheckSquare className="w-3.5 h-3.5" />
+                {selectedCount} selected
+              </span>
+              <button
+                onClick={() => setSelectedPaths(new Set())}
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+
           {/* Icon size slider (only in icons mode) */}
           {viewMode === 'icons' && (
             <div className="flex items-center gap-2">
@@ -224,10 +314,23 @@ export default function Browse() {
 
       {/* Content */}
       {viewMode === 'icons' && (
-        <IconsView entries={entries} onClickEntry={handleClick} iconSize={iconSize} />
+        <IconsView
+          entries={entries}
+          onClickEntry={handleClick}
+          iconSize={iconSize}
+          selectedPaths={selectedPaths}
+          onSelectionChange={setSelectedPaths}
+          onContextMenu={handleContextMenu}
+        />
       )}
       {viewMode === 'details' && (
-        <DetailsView entries={entries} onClickEntry={handleClick} />
+        <DetailsView
+          entries={entries}
+          onClickEntry={handleClick}
+          selectedPaths={selectedPaths}
+          onSelectionChange={setSelectedPaths}
+          onContextMenu={handleContextMenu}
+        />
       )}
 
       {entries.length === 0 && (
@@ -235,6 +338,28 @@ export default function Browse() {
           <Folder className="w-16 h-16 mx-auto mb-4 opacity-30" />
           <p>This folder is empty</p>
         </div>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          selectedEntries={contextMenu.entries}
+          onClose={() => setContextMenu(null)}
+          onGenerateSubtitles={() => openBatchDialog('generate')}
+          onTranslateSubtitles={() => openBatchDialog('translate')}
+          onGenerateAndTranslate={() => openBatchDialog('generate-translate')}
+        />
+      )}
+
+      {/* Batch Subtitle Dialog */}
+      {batchDialog && (
+        <BatchSubtitleDialog
+          mode={batchDialog.mode}
+          files={batchDialog.files}
+          onClose={() => setBatchDialog(null)}
+        />
       )}
     </div>
   )

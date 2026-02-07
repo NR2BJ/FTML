@@ -58,3 +58,32 @@ export const listJobs = () =>
 
 export const cancelJob = (jobId: string) =>
   client.delete(`/jobs/${jobId}`)
+
+// Translation Presets
+export interface TranslationPreset {
+  id: number
+  name: string
+  prompt: string
+  created_at: string
+}
+
+export const listPresets = () =>
+  client.get<TranslationPreset[]>('/presets')
+
+export const createPreset = (name: string, prompt: string) =>
+  client.post<{ id: number; name: string }>('/presets', { name, prompt })
+
+export const deletePreset = (id: number) =>
+  client.delete(`/presets/${id}`)
+
+// Batch Operations
+export interface BatchResult {
+  job_ids: string[]
+  skipped?: string[]
+}
+
+export const batchGenerate = (paths: string[], params: Omit<GenerateParams, 'path'>) =>
+  client.post<BatchResult>('/subtitle/batch-generate', { paths, ...params })
+
+export const batchTranslate = (paths: string[], params: { target_lang: string; engine: string; preset: string; custom_prompt?: string }) =>
+  client.post<BatchResult>('/subtitle/batch-translate', { paths, ...params })

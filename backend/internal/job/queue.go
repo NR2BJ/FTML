@@ -250,7 +250,7 @@ func (q *JobQueue) processJob(jobID string) {
 	// Run handler in a goroutine with context awareness
 	done := make(chan error, 1)
 	go func() {
-		done <- handler(job, updateProgress)
+		done <- handler(ctx, job, updateProgress)
 	}()
 
 	select {

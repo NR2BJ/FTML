@@ -451,3 +451,154 @@ func (h *SubtitleHandler) TranslateSubtitle(w http.ResponseWriter, r *http.Reque
 		"job_id": j.ID,
 	})
 }
+
+// BatchGenerate creates transcription jobs for multiple files
+func (h *SubtitleHandler) BatchGenerate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paths    []string `json:"paths"`
+		Engine   string   `json:"engine"`
+		Model    string   `json:"model"`
+		Language string   `json:"language"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Paths) == 0 {
+		jsonError(w, "paths required", http.StatusBadRequest)
+		return
+	}
+
+	// Defaults
+	if req.Engine == "" {
+		req.Engine = "whisper.cpp"
+	}
+	if req.Model == "" {
+		req.Model = h.database.GetSetting("whisper_model", "large-v3")
+		req.Model = strings.TrimPrefix(req.Model, "ggml-")
+		req.Model = strings.TrimSuffix(req.Model, ".bin")
+	}
+	if req.Language == "" {
+		req.Language = h.database.GetSetting("whisper_language", "auto")
+	}
+
+	var jobIDs []string
+	var skipped []string
+
+	for _, path := range req.Paths {
+		fullPath := filepath.Join(h.mediaPath, path)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			skipped = append(skipped, path)
+			continue
+		}
+
+		params := job.TranscribeParams{
+			Engine:   req.Engine,
+			Model:    req.Model,
+			Language: req.Language,
+		}
+
+		j, err := h.jobQueue.Enqueue(job.JobTranscribe, path, params)
+		if err != nil {
+			skipped = append(skipped, path)
+			continue
+		}
+		jobIDs = append(jobIDs, j.ID)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"job_ids": jobIDs,
+		"skipped": skipped,
+	})
+}
+
+// BatchTranslate creates translation jobs for multiple files
+func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paths        []string `json:"paths"`
+		TargetLang   string   `json:"target_lang"`
+		Engine       string   `json:"engine"`
+		Preset       string   `json:"preset"`
+		CustomPrompt string   `json:"custom_prompt,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Paths) == 0 {
+		jsonError(w, "paths required", http.StatusBadRequest)
+		return
+	}
+	if req.TargetLang == "" {
+		jsonError(w, "target_lang required", http.StatusBadRequest)
+		return
+	}
+	if req.Engine == "" {
+		req.Engine = "gemini"
+	}
+	if req.Preset == "" {
+		req.Preset = "movie"
+	}
+
+	var jobIDs []string
+	var skipped []string
+
+	for _, path := range req.Paths {
+		// Find the first generated subtitle for this file
+		hash := videoHash(path)
+		genDir := filepath.Join(h.subtitlePath, hash)
+		subtitleID := ""
+
+		genEntries, err := os.ReadDir(genDir)
+		if err == nil {
+			for _, entry := range genEntries {
+				name := entry.Name()
+				if strings.HasPrefix(name, "whisper_") && strings.HasSuffix(name, ".vtt") {
+					subtitleID = "generated:" + name
+					break
+				}
+			}
+			// Also try translate files as source
+			if subtitleID == "" {
+				for _, entry := range genEntries {
+					name := entry.Name()
+					if strings.HasSuffix(name, ".vtt") {
+						subtitleID = "generated:" + name
+						break
+					}
+				}
+			}
+		}
+
+		if subtitleID == "" {
+			skipped = append(skipped, path)
+			continue
+		}
+
+		params := job.TranslateParams{
+			SubtitleID:   subtitleID,
+			TargetLang:   req.TargetLang,
+			Engine:       req.Engine,
+			Preset:       req.Preset,
+			CustomPrompt: req.CustomPrompt,
+		}
+
+		j, err := h.jobQueue.Enqueue(job.JobTranslate, path, params)
+		if err != nil {
+			skipped = append(skipped, path)
+			continue
+		}
+		jobIDs = append(jobIDs, j.ID)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"job_ids": jobIDs,
+		"skipped": skipped,
+	})
+}

@@ -1,6 +1,7 @@
 package job
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 )
@@ -69,4 +70,4 @@ type TranslateResult struct {
 }
 
 // JobHandler processes a job. Implementations are provided by whisper/translate packages.
-type JobHandler func(job *Job, updateProgress func(float64)) error
+type JobHandler func(ctx context.Context, job *Job, updateProgress func(float64)) error

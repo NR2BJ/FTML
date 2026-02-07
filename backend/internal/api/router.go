@@ -33,6 +33,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	jobHandler := handlers.NewJobHandler(jobQueue)
 	settingsHandler := handlers.NewSettingsHandler(database)
 	whisperModelsHandler := handlers.NewWhisperModelsHandler(cfg.WhisperModelPath, database)
+	presetsHandler := handlers.NewPresetsHandler(database)
 
 	// Public routes
 	r.Route("/api", func(r chi.Router) {
@@ -69,6 +70,8 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			r.Get("/subtitle/content/*", subtitleHandler.ServeSubtitle)
 			r.Post("/subtitle/generate/*", subtitleHandler.GenerateSubtitle)
 			r.Post("/subtitle/translate/*", subtitleHandler.TranslateSubtitle)
+			r.Post("/subtitle/batch-generate", subtitleHandler.BatchGenerate)
+			r.Post("/subtitle/batch-translate", subtitleHandler.BatchTranslate)
 
 			// Jobs
 			r.Get("/jobs", jobHandler.ListJobs)
@@ -85,6 +88,14 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			r.Get("/whisper/models/progress", whisperModelsHandler.DownloadProgress)
 			r.Post("/whisper/models/active", whisperModelsHandler.SetActiveModel)
 			r.Delete("/whisper/models", whisperModelsHandler.DeleteModel)
+
+			// GPU Info
+			r.Get("/gpu/info", whisperModelsHandler.GPUInfo)
+
+			// Translation Presets
+			r.Get("/presets", presetsHandler.ListPresets)
+			r.Post("/presets", presetsHandler.CreatePreset)
+			r.Delete("/presets/{id}", presetsHandler.DeletePreset)
 
 			// User
 			r.Put("/user/history/*", userHandler.SavePosition)
