@@ -3,6 +3,7 @@ package ffmpeg
 import (
 	"encoding/json"
 	"os/exec"
+	"strings"
 )
 
 type ProbeResult struct {
@@ -11,10 +12,11 @@ type ProbeResult struct {
 }
 
 type ProbeFormat struct {
-	Filename string `json:"filename"`
-	Duration string `json:"duration"`
-	Size     string `json:"size"`
-	BitRate  string `json:"bit_rate"`
+	Filename   string `json:"filename"`
+	FormatName string `json:"format_name"` // e.g. "matroska,webm", "mov,mp4,m4a,3gp,3g2,mj2"
+	Duration   string `json:"duration"`
+	Size       string `json:"size"`
+	BitRate    string `json:"bit_rate"`
 }
 
 type ProbeStream struct {
@@ -49,6 +51,7 @@ type MediaInfo struct {
 	Duration     string            `json:"duration"`
 	Size         string            `json:"size"`
 	BitRate      string            `json:"bit_rate"`
+	Container    string            `json:"container"` // normalized: "mkv", "mp4", "avi", etc.
 	VideoCodec   string            `json:"video_codec"`
 	AudioCodec   string            `json:"audio_codec"`
 	Width        int               `json:"width"`
@@ -78,10 +81,11 @@ func Probe(filePath string) (*MediaInfo, error) {
 	}
 
 	info := &MediaInfo{
-		Duration: result.Format.Duration,
-		Size:     result.Format.Size,
-		BitRate:  result.Format.BitRate,
-		Streams:  result.Streams,
+		Duration:  result.Format.Duration,
+		Size:      result.Format.Size,
+		BitRate:   result.Format.BitRate,
+		Container: normalizeContainerName(result.Format.FormatName),
+		Streams:   result.Streams,
 	}
 
 	audioIdx := 0
@@ -118,4 +122,28 @@ func Probe(filePath string) (*MediaInfo, error) {
 	}
 
 	return info, nil
+}
+
+// normalizeContainerName maps ffprobe format_name to a simple container name.
+// ffprobe returns comma-separated format names like "matroska,webm" or "mov,mp4,m4a,3gp,3g2,mj2".
+func normalizeContainerName(formatName string) string {
+	f := strings.ToLower(strings.TrimSpace(formatName))
+	switch {
+	case strings.Contains(f, "matroska"):
+		return "mkv"
+	case strings.Contains(f, "mov") || strings.Contains(f, "mp4"):
+		return "mp4"
+	case strings.Contains(f, "avi"):
+		return "avi"
+	case strings.Contains(f, "webm"):
+		return "webm"
+	case strings.Contains(f, "mpegts"):
+		return "ts"
+	default:
+		// Return first format name for unknown containers
+		if idx := strings.Index(f, ","); idx > 0 {
+			return f[:idx]
+		}
+		return f
+	}
 }

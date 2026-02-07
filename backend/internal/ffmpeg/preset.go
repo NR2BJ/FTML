@@ -195,10 +195,11 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 		}
 	}
 
-	// Original direct play option — check both video AND audio codec compatibility
-	canVideoOriginal := canBrowserPlayCodec(info.VideoCodec, browser)
-	canAudioOriginal := CanBrowserPlayAudio(info.AudioCodec, browser)
-	canOriginal := canVideoOriginal && canAudioOriginal
+	// Original direct play: requires both codec AND container support.
+	// MKV files can never be direct-played by browsers.
+	canDirectPlayVideo := canBrowserDirectPlay(info.VideoCodec, info.Container, browser)
+	canDirectPlayAudio := CanBrowserPlayAudio(info.AudioCodec, browser)
+	canOriginal := canDirectPlayVideo && canDirectPlayAudio
 
 	srcBitrateDesc := "Direct play"
 	if srcBitrate > 0 {
@@ -209,32 +210,48 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 		Label:            "Original",
 		Desc:             srcBitrateDesc,
 		CanOriginal:      canOriginal,
-		CanOriginalVideo: canVideoOriginal,
-		CanOriginalAudio: canAudioOriginal,
+		CanOriginalVideo: canDirectPlayVideo,
+		CanOriginalAudio: canDirectPlayAudio,
 		VideoCodec:       NormalizeCodecName(info.VideoCodec),
 		AudioCodec:       NormalizeAudioCodecName(info.AudioCodec),
 	})
 
-	// Passthrough option: video copy + audio transcode (AAC)
-	// Only when browser can play the video codec but NOT the audio codec
-	if canVideoOriginal && !canAudioOriginal {
-		ptDesc := "Video direct, audio AAC"
-		if srcBitrate > 0 {
-			ptDesc = fmt.Sprintf("%s video + AAC audio", formatBitrateHuman(srcBitrate))
-		}
+	// Passthrough option: video copy (+ audio transcode if needed) via HLS.
+	// This only needs codec support (not container), because HLS remuxes into fmp4/mpegts.
+	// Generated when:
+	//  1. Browser can decode the video codec but audio is incompatible, OR
+	//  2. Browser can decode both but container is incompatible (e.g. MKV HEVC)
+	canDecodeVideo := canBrowserDecodeCodec(info.VideoCodec, browser)
+	needsPassthrough := canDecodeVideo && (!canDirectPlayAudio || !canDirectPlayVideo)
+	if needsPassthrough {
 		// Determine the right segment format for the video codec
 		videoCodecNorm := NormalizeCodecName(info.VideoCodec)
 		ptSegFmt := codecSegmentFmt[Codec(videoCodecNorm)]
 		if ptSegFmt == "" {
 			ptSegFmt = "mpegts"
 		}
+
+		ptLabel := "Original (Audio Convert)"
+		ptDesc := "Video direct, audio AAC"
+		if srcBitrate > 0 {
+			ptDesc = fmt.Sprintf("%s video + AAC audio", formatBitrateHuman(srcBitrate))
+		}
+		// If audio is already compatible, this is a container remux, not audio conversion
+		if canDirectPlayAudio {
+			ptLabel = "Original (Remux)"
+			ptDesc = "Video direct, remuxed"
+			if srcBitrate > 0 {
+				ptDesc = fmt.Sprintf("%s remuxed", formatBitrateHuman(srcBitrate))
+			}
+		}
+
 		options = append(options, QualityOption{
 			Value:            "passthrough",
-			Label:            "Original (Audio Convert)",
+			Label:            ptLabel,
 			Desc:             ptDesc,
 			CanOriginal:      false,
 			CanOriginalVideo: true,
-			CanOriginalAudio: false,
+			CanOriginalAudio: canDirectPlayAudio,
 			VideoCodec:       videoCodecNorm,
 			AudioCodec:       "aac",
 		})
@@ -243,8 +260,9 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 	return options
 }
 
-// canBrowserPlayCodec checks if the browser supports the source video codec.
-func canBrowserPlayCodec(ffprobeCodec string, browser BrowserCodecs) bool {
+// canBrowserDecodeCodec checks if the browser can decode the given video codec.
+// Used for passthrough (video copy via HLS) where the container is always fmp4/mpegts.
+func canBrowserDecodeCodec(ffprobeCodec string, browser BrowserCodecs) bool {
 	normalized := NormalizeCodecName(ffprobeCodec)
 	switch normalized {
 	case "h264":
@@ -256,9 +274,20 @@ func canBrowserPlayCodec(ffprobeCodec string, browser BrowserCodecs) bool {
 	case "vp9":
 		return browser.VP9
 	default:
-		// Unknown codec: assume browser can't play it, offer transcode
 		return false
 	}
+}
+
+// canBrowserDirectPlay checks if the browser can play the original file directly.
+// This requires BOTH codec support AND a browser-compatible container (MP4, WebM).
+// MKV, AVI, etc. can NEVER be direct-played regardless of codec support because
+// browsers don't support these container formats in <video> elements.
+func canBrowserDirectPlay(ffprobeCodec string, container string, browser BrowserCodecs) bool {
+	// Container check: browsers can only direct-play MP4/MOV and WebM containers.
+	if container != "" && container != "mp4" && container != "webm" {
+		return false
+	}
+	return canBrowserDecodeCodec(ffprobeCodec, browser)
 }
 
 // computeMaxBitrate calculates maxrate for a target resolution.
