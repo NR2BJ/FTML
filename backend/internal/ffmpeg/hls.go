@@ -181,13 +181,8 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 	// Keyframe interval (consistent across codecs for HLS segment alignment)
 	args = append(args, "-g", "48", "-keyint_min", "48")
 
-	// Audio encoder
-	switch params.AudioCodec {
-	case "opus":
-		args = append(args, "-c:a", "libopus", "-b:a", "128k", "-vbr", "on", "-ac", "2")
-	default: // aac
-		args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
-	}
+	// Audio encoder — always use AAC for maximum compatibility
+	args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
 
 	// HLS output
 	args = append(args, "-f", "hls", "-hls_time", "4", "-hls_list_size", "0")

@@ -34,5 +34,7 @@ export const getFileInfo = (path: string) =>
 export const searchFiles = (query: string) =>
   client.get<{ query: string; results: FileEntry[] }>(`/files/search?q=${encodeURIComponent(query)}`)
 
-export const getThumbnailUrl = (path: string) =>
-  `/api/files/thumbnail/${path}`
+export const getThumbnailUrl = (path: string) => {
+  const token = localStorage.getItem('token') || ''
+  return `/api/files/thumbnail/${encodeURI(path)}?token=${encodeURIComponent(token)}`
+}

@@ -170,7 +170,7 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
         <div>Resolution: {stats.playResolution || 'N/A'}</div>
         {!isOriginal && (
           <>
-            <div>Codec: {(negotiatedCodec || 'h264').toUpperCase()} + {negotiatedCodec === 'av1' || negotiatedCodec === 'vp9' ? 'opus' : 'aac'}</div>
+            <div>Codec: {(negotiatedCodec || 'h264').toUpperCase()} + AAC</div>
             <div>Encoder: {negotiatedEncoder || 'N/A'}{hwaccel && hwaccel !== 'none' ? ` (${hwaccel})` : ''}</div>
           </>
         )}

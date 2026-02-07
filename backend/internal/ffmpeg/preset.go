@@ -58,11 +58,13 @@ var codecCRF = map[Codec]map[int]int{
 }
 
 // Audio codec pairing per video codec.
+// Using AAC for all codecs: universally supported, reliable in all containers,
+// and avoids libopus initialization issues in FFmpeg.
 var codecAudio = map[Codec]string{
 	CodecH264: "aac",
 	CodecHEVC: "aac",
-	CodecAV1:  "opus",
-	CodecVP9:  "opus",
+	CodecAV1:  "aac",
+	CodecVP9:  "aac",
 }
 
 // HLS segment format per codec.
