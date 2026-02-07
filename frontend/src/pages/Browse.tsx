@@ -1,30 +1,24 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getTree, getThumbnailUrl, type FileEntry } from '@/api/files'
-import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid, Grid3X3, Image } from 'lucide-react'
+import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid } from 'lucide-react'
 import { isVideoFile, formatBytes } from '@/utils/format'
+import { useBrowseStore } from '@/stores/browseStore'
+import DetailsView from '@/components/Browse/DetailsView'
 
-type ViewMode = 'details' | 'grid' | 'small-icons' | 'large-icons'
+// ── Thumbnail component ──
 
-const VIEW_MODES: { value: ViewMode; icon: typeof List; label: string }[] = [
-  { value: 'details', icon: List, label: '자세히' },
-  { value: 'small-icons', icon: Grid3X3, label: '작은 아이콘' },
-  { value: 'grid', icon: LayoutGrid, label: '격자' },
-  { value: 'large-icons', icon: Image, label: '큰 아이콘' },
-]
-
-// ── Thumbnail component (shared by grid/icon views) ──
-
-function Thumbnail({ path, size = 'md' }: { path: string; size?: 'sm' | 'md' | 'lg' }) {
+function Thumbnail({ path, iconSize }: { path: string; iconSize: number }) {
   const [error, setError] = useState(false)
   const [loaded, setLoaded] = useState(false)
 
-  const iconSize = size === 'sm' ? 'w-6 h-6' : size === 'md' ? 'w-10 h-10' : 'w-14 h-14'
+  // Scale play button based on icon size
+  const playSize = Math.max(20, Math.min(48, iconSize * 0.22))
 
   if (error) {
     return (
       <div className="absolute inset-0 flex items-center justify-center">
-        <FileVideo className={`${iconSize} text-dark-600`} />
+        <FileVideo className="w-8 h-8 text-dark-600" />
       </div>
     )
   }
@@ -41,57 +35,42 @@ function Thumbnail({ path, size = 'md' }: { path: string; size?: 'sm' | 'md' | '
       />
       {!loaded && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <FileVideo className={`${iconSize} text-dark-600 animate-pulse`} />
+          <FileVideo className="w-8 h-8 text-dark-600 animate-pulse" />
         </div>
       )}
+      {/* Play overlay on hover */}
+      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
+        <div
+          className="rounded-full bg-white/90 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+          style={{ width: playSize, height: playSize }}
+        >
+          <Play
+            className="text-black"
+            fill="currentColor"
+            style={{ width: playSize * 0.5, height: playSize * 0.5, marginLeft: playSize * 0.05 }}
+          />
+        </div>
+      </div>
     </>
   )
 }
 
-// ── Details View (list) ──
+// ── Icons View (slider-controlled size) ──
 
-function DetailsView({ entries, onClickEntry }: { entries: FileEntry[]; onClickEntry: (e: FileEntry) => void }) {
+function IconsView({ entries, onClickEntry, iconSize }: {
+  entries: FileEntry[]
+  onClickEntry: (e: FileEntry) => void
+  iconSize: number
+}) {
+  // Scale font and padding based on icon size
+  const fontSize = Math.max(11, Math.min(14, iconSize * 0.07))
+  const padding = Math.max(4, Math.min(12, iconSize * 0.05))
+
   return (
-    <div className="bg-dark-900 border border-dark-700 rounded-lg overflow-hidden">
-      {/* Header */}
-      <div className="grid grid-cols-[1fr_100px] sm:grid-cols-[1fr_100px_120px] px-4 py-2 border-b border-dark-700 text-xs text-gray-500 uppercase tracking-wider">
-        <span>Name</span>
-        <span className="text-right">Size</span>
-        <span className="text-right hidden sm:block">Type</span>
-      </div>
-      {/* Rows */}
-      {entries.map((entry) => {
-        const isVideo = !entry.is_dir && isVideoFile(entry.name)
-        const Icon = entry.is_dir ? Folder : isVideo ? FileVideo : File
-        const iconColor = entry.is_dir ? 'text-yellow-400' : isVideo ? 'text-blue-400' : 'text-gray-500'
-        const fileType = entry.is_dir ? 'Folder' : entry.name.split('.').pop()?.toUpperCase() || 'File'
-
-        return (
-          <button
-            key={entry.path}
-            onClick={() => onClickEntry(entry)}
-            className="grid grid-cols-[1fr_100px] sm:grid-cols-[1fr_100px_120px] px-4 py-2 hover:bg-dark-800 transition-colors text-left w-full border-b border-dark-800 last:border-b-0 group"
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <Icon className={`w-4 h-4 ${iconColor} shrink-0`} />
-              <span className="text-sm text-gray-200 truncate group-hover:text-white">{entry.name}</span>
-            </div>
-            <span className="text-sm text-gray-500 text-right">
-              {!entry.is_dir && entry.size ? formatBytes(entry.size) : ''}
-            </span>
-            <span className="text-sm text-gray-500 text-right hidden sm:block">{fileType}</span>
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Small Icons View ──
-
-function SmallIconsView({ entries, onClickEntry }: { entries: FileEntry[]; onClickEntry: (e: FileEntry) => void }) {
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+    <div
+      className="grid gap-2"
+      style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${iconSize}px, 1fr))` }}
+    >
       {entries.map((entry) => {
         const isVideo = !entry.is_dir && isVideoFile(entry.name)
         const Icon = entry.is_dir ? Folder : isVideo ? FileVideo : File
@@ -105,140 +84,33 @@ function SmallIconsView({ entries, onClickEntry }: { entries: FileEntry[]; onCli
           >
             {isVideo ? (
               <div className="relative aspect-video bg-dark-800 overflow-hidden">
-                <Thumbnail path={entry.path} size="sm" />
-                {/* Play icon on hover */}
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                  <Play className="w-4 h-4 text-white opacity-0 group-hover:opacity-100 transition-opacity" fill="currentColor" />
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-center py-3 bg-dark-800">
-                <Icon className={`w-8 h-8 ${iconColor}`} />
-              </div>
-            )}
-            <div className="px-2 py-1.5">
-              <p className="text-xs text-gray-300 truncate group-hover:text-white" title={entry.name}>
-                {entry.name}
-              </p>
-            </div>
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Grid View (medium cards) ──
-
-function GridView({ entries, onClickEntry }: { entries: FileEntry[]; onClickEntry: (e: FileEntry) => void }) {
-  // Separate dirs from files for grid view
-  const dirs = entries.filter(e => e.is_dir)
-  const files = entries.filter(e => !e.is_dir)
-
-  return (
-    <>
-      {/* Directories - compact */}
-      {dirs.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 mb-4">
-          {dirs.map((entry) => (
-            <button
-              key={entry.path}
-              onClick={() => onClickEntry(entry)}
-              className="bg-dark-900 border border-dark-700 rounded-lg px-3 py-2.5 hover:bg-dark-800 hover:border-dark-600 transition-colors text-left group"
-            >
-              <div className="flex items-center gap-2">
-                <Folder className="w-5 h-5 text-yellow-400 shrink-0" />
-                <p className="text-sm text-gray-200 truncate group-hover:text-white">
-                  {entry.name}
-                </p>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-      {/* Files - medium thumbnail cards */}
-      {files.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-          {files.map((entry) => {
-            const isVideo = isVideoFile(entry.name)
-            return (
-              <button
-                key={entry.path}
-                onClick={() => onClickEntry(entry)}
-                className="bg-dark-900 border border-dark-700 rounded-lg overflow-hidden hover:bg-dark-800 hover:border-dark-600 transition-all text-left group hover:scale-[1.02]"
-              >
-                {isVideo ? (
-                  <div className="relative aspect-video bg-dark-800 overflow-hidden">
-                    <Thumbnail path={entry.path} size="md" />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                      <div className="w-12 h-12 rounded-full bg-white/90 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg">
-                        <Play className="w-5 h-5 text-black ml-0.5" fill="currentColor" />
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center py-8 bg-dark-800">
-                    <File className="w-12 h-12 text-gray-500" />
-                  </div>
-                )}
-                <div className="p-3">
-                  <p className="text-sm text-gray-200 truncate group-hover:text-white" title={entry.name}>
-                    {entry.name}
-                  </p>
-                  {entry.size && (
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {formatBytes(entry.size)}
-                    </p>
-                  )}
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </>
-  )
-}
-
-// ── Large Icons View ──
-
-function LargeIconsView({ entries, onClickEntry }: { entries: FileEntry[]; onClickEntry: (e: FileEntry) => void }) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {entries.map((entry) => {
-        const isVideo = !entry.is_dir && isVideoFile(entry.name)
-        const Icon = entry.is_dir ? Folder : File
-
-        return (
-          <button
-            key={entry.path}
-            onClick={() => onClickEntry(entry)}
-            className="bg-dark-900 border border-dark-700 rounded-xl overflow-hidden hover:bg-dark-800 hover:border-dark-600 transition-all text-left group hover:scale-[1.01]"
-          >
-            {isVideo ? (
-              <div className="relative aspect-video bg-dark-800 overflow-hidden">
-                <Thumbnail path={entry.path} size="lg" />
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                  <div className="w-16 h-16 rounded-full bg-white/90 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-xl">
-                    <Play className="w-7 h-7 text-black ml-1" fill="currentColor" />
-                  </div>
-                </div>
+                <Thumbnail path={entry.path} iconSize={iconSize} />
               </div>
             ) : entry.is_dir ? (
-              <div className="flex items-center justify-center py-16 bg-dark-800">
-                <Folder className="w-20 h-20 text-yellow-400/70" />
+              <div className="flex items-center justify-center aspect-video bg-dark-800">
+                <Folder
+                  className="text-yellow-400/70"
+                  style={{ width: iconSize * 0.3, height: iconSize * 0.3 }}
+                />
               </div>
             ) : (
-              <div className="flex items-center justify-center py-16 bg-dark-800">
-                <Icon className="w-20 h-20 text-gray-600" />
+              <div className="flex items-center justify-center aspect-video bg-dark-800">
+                <Icon
+                  className={iconColor}
+                  style={{ width: iconSize * 0.25, height: iconSize * 0.25 }}
+                />
               </div>
             )}
-            <div className="p-4">
-              <p className="text-base text-gray-200 truncate group-hover:text-white" title={entry.name}>
+            <div style={{ padding: `${padding}px ${padding + 2}px` }}>
+              <p
+                className="text-gray-300 truncate group-hover:text-white"
+                style={{ fontSize }}
+                title={entry.name}
+              >
                 {entry.name}
               </p>
-              {!entry.is_dir && entry.size && (
-                <p className="text-sm text-gray-500 mt-1">
+              {iconSize >= 180 && !entry.is_dir && entry.size && (
+                <p className="text-gray-600 mt-0.5" style={{ fontSize: fontSize - 1 }}>
                   {formatBytes(entry.size)}
                 </p>
               )}
@@ -258,9 +130,8 @@ export default function Browse() {
   const navigate = useNavigate()
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(true)
-  const [viewMode, setViewMode] = useState<ViewMode>(() =>
-    (localStorage.getItem('ftml-view-mode') as ViewMode) || 'grid'
-  )
+
+  const { viewMode, iconSize, setViewMode, setIconSize } = useBrowseStore()
 
   useEffect(() => {
     setLoading(true)
@@ -269,11 +140,6 @@ export default function Browse() {
       .catch(() => setEntries([]))
       .finally(() => setLoading(false))
   }, [path])
-
-  const handleViewMode = (mode: ViewMode) => {
-    setViewMode(mode)
-    localStorage.setItem('ftml-view-mode', mode)
-  }
 
   const handleClick = (entry: FileEntry) => {
     if (entry.is_dir) {
@@ -295,9 +161,9 @@ export default function Browse() {
 
   return (
     <div>
-      {/* Header: back button + view mode toggles */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4 gap-3">
+        <div className="flex items-center gap-2 min-w-0">
           {path && (
             <>
               <button onClick={goUp} className="text-gray-400 hover:text-white transition-colors">
@@ -310,37 +176,58 @@ export default function Browse() {
           )}
         </div>
 
-        {/* View mode toggles */}
-        <div className="flex items-center gap-1 bg-dark-900 border border-dark-700 rounded-lg p-0.5">
-          {VIEW_MODES.map(({ value, icon: ModeIcon, label }) => (
+        <div className="flex items-center gap-3 shrink-0">
+          {/* Icon size slider (only in icons mode) */}
+          {viewMode === 'icons' && (
+            <div className="flex items-center gap-2">
+              <LayoutGrid className="w-3.5 h-3.5 text-gray-500" />
+              <input
+                type="range"
+                min="100"
+                max="400"
+                step="10"
+                value={iconSize}
+                onChange={(e) => setIconSize(parseInt(e.target.value, 10))}
+                className="w-24 h-1 bg-dark-700 rounded-lg appearance-none cursor-pointer accent-primary-500"
+              />
+              <LayoutGrid className="w-4.5 h-4.5 text-gray-500" />
+            </div>
+          )}
+
+          {/* View mode toggles */}
+          <div className="flex items-center gap-0.5 bg-dark-900 border border-dark-700 rounded-lg p-0.5">
             <button
-              key={value}
-              onClick={() => handleViewMode(value)}
-              title={label}
+              onClick={() => setViewMode('icons')}
+              title="Icons"
               className={`p-1.5 rounded transition-colors ${
-                viewMode === value
+                viewMode === 'icons'
                   ? 'bg-primary-600 text-white'
                   : 'text-gray-500 hover:text-gray-300 hover:bg-dark-800'
               }`}
             >
-              <ModeIcon className="w-4 h-4" />
+              <LayoutGrid className="w-4 h-4" />
             </button>
-          ))}
+            <button
+              onClick={() => setViewMode('details')}
+              title="Details"
+              className={`p-1.5 rounded transition-colors ${
+                viewMode === 'details'
+                  ? 'bg-primary-600 text-white'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-dark-800'
+              }`}
+            >
+              <List className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Content area */}
+      {/* Content */}
+      {viewMode === 'icons' && (
+        <IconsView entries={entries} onClickEntry={handleClick} iconSize={iconSize} />
+      )}
       {viewMode === 'details' && (
         <DetailsView entries={entries} onClickEntry={handleClick} />
-      )}
-      {viewMode === 'small-icons' && (
-        <SmallIconsView entries={entries} onClickEntry={handleClick} />
-      )}
-      {viewMode === 'grid' && (
-        <GridView entries={entries} onClickEntry={handleClick} />
-      )}
-      {viewMode === 'large-icons' && (
-        <LargeIconsView entries={entries} onClickEntry={handleClick} />
       )}
 
       {entries.length === 0 && (

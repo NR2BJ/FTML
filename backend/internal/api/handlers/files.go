@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/video-stream/backend/internal/ffmpeg"
@@ -100,4 +102,52 @@ func (h *FilesHandler) Search(w http.ResponseWriter, r *http.Request) {
 		"query":   q,
 		"results": results,
 	}, http.StatusOK)
+}
+
+// BatchInfo probes multiple files concurrently and returns their media info.
+// POST /files/batch-info  body: { "paths": ["path1.mkv", "path2.mp4"] }  (max 20)
+func (h *FilesHandler) BatchInfo(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(req.Paths) == 0 {
+		jsonResponse(w, []interface{}{}, http.StatusOK)
+		return
+	}
+	if len(req.Paths) > 20 {
+		req.Paths = req.Paths[:20]
+	}
+
+	type result struct {
+		Path string           `json:"path"`
+		Info *ffmpeg.MediaInfo `json:"info"`
+	}
+
+	results := make([]result, len(req.Paths))
+	sem := make(chan struct{}, 4) // max 4 concurrent ffprobe
+	var wg sync.WaitGroup
+
+	for i, p := range req.Paths {
+		wg.Add(1)
+		go func(idx int, filePath string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			fullPath := filepath.Join(h.mediaPath, filePath)
+			info, err := ffmpeg.Probe(fullPath)
+			if err != nil {
+				results[idx] = result{Path: filePath, Info: nil}
+			} else {
+				results[idx] = result{Path: filePath, Info: info}
+			}
+		}(i, p)
+	}
+
+	wg.Wait()
+	jsonResponse(w, results, http.StatusOK)
 }

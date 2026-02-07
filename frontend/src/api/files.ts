@@ -38,3 +38,11 @@ export const getThumbnailUrl = (path: string) => {
   const token = localStorage.getItem('token') || ''
   return `/api/files/thumbnail/${encodeURI(path)}?token=${encodeURIComponent(token)}`
 }
+
+export interface BatchInfoResult {
+  path: string
+  info: MediaInfo | null
+}
+
+export const batchFileInfo = (paths: string[]) =>
+  client.post<BatchInfoResult[]>('/files/batch-info', { paths })

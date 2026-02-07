@@ -232,6 +232,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Session-ID", sessionID)
 	w.Write([]byte(strings.Join(lines, "\n")))
 }
 
@@ -328,4 +329,33 @@ func generateSessionID(path, quality string, startTime float64, codec string) st
 	key := fmt.Sprintf("%s|%s|%.0f|%s", path, quality, startTime, codec)
 	h := sha256.Sum256([]byte(key))
 	return fmt.Sprintf("%x", h[:8])
+}
+
+// HeartbeatHandler updates the last heartbeat time for a session.
+// POST /stream/heartbeat/{sessionID}
+func (h *StreamHandler) HeartbeatHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	if sessionID == "" {
+		jsonError(w, "missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	if h.hlsManager.Heartbeat(sessionID) {
+		w.WriteHeader(http.StatusNoContent)
+	} else {
+		jsonError(w, "session not found", http.StatusNotFound)
+	}
+}
+
+// StopSessionHandler stops an HLS session immediately.
+// DELETE /stream/session/{sessionID}
+func (h *StreamHandler) StopSessionHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	if sessionID == "" {
+		jsonError(w, "missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	h.hlsManager.StopSession(sessionID)
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -70,3 +70,9 @@ export const getHLSUrl = (path: string, quality: string = '720p', startTime: num
 
 export const getDirectUrl = (path: string) =>
   `/api/stream/direct/${path}?token=${getToken()}`
+
+export const sendHeartbeat = (sessionID: string) =>
+  client.post(`/stream/heartbeat/${sessionID}`)
+
+export const stopSession = (sessionID: string) =>
+  client.delete(`/stream/session/${sessionID}`)

@@ -1,10 +1,11 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import Hls from 'hls.js'
-import { getHLSUrl, getDirectUrl, getPresets, getCapabilities } from '@/api/stream'
+import { getHLSUrl, getDirectUrl, getPresets, getCapabilities, sendHeartbeat, stopSession } from '@/api/stream'
 import { getFileInfo } from '@/api/files'
 import { saveWatchPosition, getWatchPosition } from '@/api/user'
 import { listSubtitles } from '@/api/subtitle'
 import { detectBrowserCodecs } from '@/utils/codec'
+import { computeSessionID } from '@/utils/session'
 import { usePlayerStore } from '@/stores/playerStore'
 import Controls from './Controls'
 import PlaybackStats from './PlaybackStats'
@@ -21,6 +22,8 @@ export default function Player({ path }: PlayerProps) {
   const probeDurationRef = useRef<number>(0)
   const lastSavedTimeRef = useRef<number>(0)
   const hlsStartTimeRef = useRef<number>(0) // HLS transcode start offset
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const sessionIDRef = useRef<string | null>(null)
   const [useHLS, setUseHLS] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -56,6 +59,34 @@ export default function Player({ path }: PlayerProps) {
     setBrowserCodecs,
   } = usePlayerStore()
 
+  // Stop heartbeat timer
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current)
+      heartbeatRef.current = null
+    }
+  }, [])
+
+  // Start heartbeat timer for a session
+  const startHeartbeat = useCallback((sid: string) => {
+    stopHeartbeat()
+    sessionIDRef.current = sid
+    // Send immediately, then every 15 seconds
+    sendHeartbeat(sid).catch(() => {})
+    heartbeatRef.current = setInterval(() => {
+      sendHeartbeat(sid).catch(() => {})
+    }, 15000)
+  }, [stopHeartbeat])
+
+  // Stop the current HLS session on the server
+  const stopCurrentSession = useCallback(() => {
+    stopHeartbeat()
+    if (sessionIDRef.current) {
+      stopSession(sessionIDRef.current).catch(() => {})
+      sessionIDRef.current = null
+    }
+  }, [stopHeartbeat])
+
   // One-time codec negotiation on mount
   useEffect(() => {
     const codecs = detectBrowserCodecs()
@@ -77,6 +108,9 @@ export default function Player({ path }: PlayerProps) {
 
   // Helper to start HLS playback from a given time
   const startHLS = useCallback((videoEl: HTMLVideoElement, filePath: string, q: string, startTime: number = 0, autoPlay: boolean = false) => {
+    // Stop previous session's heartbeat (but don't kill the server session - seek creates a new one)
+    stopHeartbeat()
+
     // Cleanup previous HLS instance
     if (hlsRef.current) {
       hlsRef.current.destroy()
@@ -87,6 +121,13 @@ export default function Player({ path }: PlayerProps) {
 
     // Get the current negotiated codec from the store
     const codec = usePlayerStore.getState().negotiatedCodec || undefined
+
+    // Compute session ID and start heartbeat
+    // The backend uses fullPath (mediaPath + videoPath) for the session ID,
+    // but generateSessionID uses videoPath (relative). We match that here.
+    computeSessionID(filePath, q, startTime, codec || 'h264').then((sid) => {
+      startHeartbeat(sid)
+    })
 
     if (Hls.isSupported()) {
       const token = localStorage.getItem('token') || ''
@@ -124,7 +165,7 @@ export default function Player({ path }: PlayerProps) {
     } else {
       setError('HLS is not supported in this browser')
     }
-  }, [])
+  }, [startHeartbeat, stopHeartbeat])
 
   // Seek to absolute time. If beyond buffered range in HLS, restart transcoding.
   const seek = useCallback((absTime: number) => {
@@ -310,6 +351,8 @@ export default function Player({ path }: PlayerProps) {
 
     // Direct play only when user explicitly selects "original" quality
     if (quality === 'original') {
+      // Stop the HLS session on server when switching to original
+      stopCurrentSession()
       video.src = getDirectUrl(path)
       setUseHLS(false)
       hlsStartTimeRef.current = 0
@@ -336,8 +379,10 @@ export default function Player({ path }: PlayerProps) {
         hlsRef.current.destroy()
         hlsRef.current = null
       }
+      // Stop session on unmount or when dependencies change (quality switch)
+      stopCurrentSession()
     }
-  }, [path, quality, negotiatedCodec, setCurrentFile, startHLS])
+  }, [path, quality, negotiatedCodec, setCurrentFile, startHLS, stopCurrentSession])
 
   // Sync volume/muted/playbackRate
   useEffect(() => {
@@ -367,8 +412,19 @@ export default function Player({ path }: PlayerProps) {
     }
   }, [setDuration, useHLS])
 
-  const handlePlay = useCallback(() => setPlaying(true), [setPlaying])
-  const handlePause = useCallback(() => setPlaying(false), [setPlaying])
+  const handlePlay = useCallback(() => {
+    setPlaying(true)
+    // Resume heartbeat when playing resumes (if we have a session)
+    if (sessionIDRef.current && !heartbeatRef.current) {
+      startHeartbeat(sessionIDRef.current)
+    }
+  }, [setPlaying, startHeartbeat])
+
+  const handlePause = useCallback(() => {
+    setPlaying(false)
+    // Stop heartbeat when paused — backend will timeout after 45s
+    stopHeartbeat()
+  }, [setPlaying, stopHeartbeat])
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current

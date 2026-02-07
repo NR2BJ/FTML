@@ -13,15 +13,17 @@ import (
 )
 
 type HLSSession struct {
-	ID        string
-	InputPath string
-	VideoPath string // original relative path (for matching on seek)
-	Quality   string
-	Codec     string // "h264", "hevc", "av1", "vp9"
-	OutputDir string
-	Cmd       *exec.Cmd
-	Cancel    context.CancelFunc
-	CreatedAt time.Time
+	ID            string
+	InputPath     string
+	VideoPath     string // original relative path (for matching on seek)
+	Quality       string
+	Codec         string // "h264", "hevc", "av1", "vp9"
+	OutputDir     string
+	Cmd           *exec.Cmd
+	Cancel        context.CancelFunc
+	CreatedAt     time.Time
+	LastHeartbeat time.Time // last heartbeat from client
+	Stopped       bool      // set true before intentional cancel to prevent false SW fallback
 }
 
 type HLSManager struct {
@@ -91,15 +93,17 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 		return nil, fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
+	now := time.Now()
 	session := &HLSSession{
-		ID:        sessionID,
-		InputPath: inputPath,
-		Quality:   quality,
-		Codec:     codec,
-		OutputDir: outputDir,
-		Cmd:       cmd,
-		Cancel:    cancel,
-		CreatedAt: time.Now(),
+		ID:            sessionID,
+		InputPath:     inputPath,
+		Quality:       quality,
+		Codec:         codec,
+		OutputDir:     outputDir,
+		Cmd:           cmd,
+		Cancel:        cancel,
+		CreatedAt:     now,
+		LastHeartbeat: now,
 	}
 	m.sessions[sessionID] = session
 
@@ -124,9 +128,17 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 			}
 
 			// Auto-retry with software encoder if VAAPI failed quickly (< 5 seconds)
-			if elapsed < 5*time.Second && params.HWAccel == "vaapi" {
+			// But skip if the session was intentionally stopped (seek, quality switch, cleanup)
+			m.mu.RLock()
+			s, exists := m.sessions[sessionID]
+			wasStopped := !exists || s.Stopped
+			m.mu.RUnlock()
+
+			if !wasStopped && elapsed < 5*time.Second && params.HWAccel == "vaapi" {
 				log.Printf("[HLS] VAAPI failed fast, retrying with software encoder: session=%s", sessionID)
 				m.retryWithSoftware(sessionID, inputPath, outputDir, startTime, quality, codec, params)
+			} else if wasStopped {
+				log.Printf("[HLS] Session was intentionally stopped, skipping SW fallback: session=%s", sessionID)
 			}
 		} else {
 			log.Printf("[HLS] FFmpeg completed: session=%s", sessionID)
@@ -381,9 +393,11 @@ func (m *HLSManager) StopSession(sessionID string) {
 	defer m.mu.Unlock()
 
 	if s, ok := m.sessions[sessionID]; ok {
+		s.Stopped = true
 		s.Cancel()
 		os.RemoveAll(s.OutputDir)
 		delete(m.sessions, sessionID)
+		log.Printf("[HLS] Stopped session: %s", sessionID)
 	}
 }
 
@@ -395,6 +409,7 @@ func (m *HLSManager) StopSessionsForPath(inputPath, quality, codec, excludeID st
 
 	for id, s := range m.sessions {
 		if id != excludeID && s.InputPath == inputPath && s.Quality == quality && s.Codec == codec {
+			s.Stopped = true
 			s.Cancel()
 			os.RemoveAll(s.OutputDir)
 			delete(m.sessions, id)
@@ -403,17 +418,43 @@ func (m *HLSManager) StopSessionsForPath(inputPath, quality, codec, excludeID st
 	}
 }
 
+// Heartbeat updates the last heartbeat time for a session.
+// Returns true if the session exists, false otherwise.
+func (m *HLSManager) Heartbeat(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if s, ok := m.sessions[sessionID]; ok {
+		s.LastHeartbeat = time.Now()
+		return true
+	}
+	return false
+}
+
 func (m *HLSManager) cleanup() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		m.mu.Lock()
+		now := time.Now()
 		for id, s := range m.sessions {
-			if time.Since(s.CreatedAt) > 30*time.Minute {
+			// Hard limit: 30 minutes max
+			if now.Sub(s.CreatedAt) > 30*time.Minute {
+				s.Stopped = true
 				s.Cancel()
 				os.RemoveAll(s.OutputDir)
 				delete(m.sessions, id)
+				log.Printf("[HLS] Stopped session: %s (max age 30m)", id)
+				continue
+			}
+			// Idle timeout: 45 seconds without heartbeat
+			if now.Sub(s.LastHeartbeat) > 45*time.Second {
+				s.Stopped = true
+				s.Cancel()
+				os.RemoveAll(s.OutputDir)
+				delete(m.sessions, id)
+				log.Printf("[HLS] Stopped session: %s (heartbeat timeout 45s)", id)
 			}
 		}
 		m.mu.Unlock()

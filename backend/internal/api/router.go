@@ -47,12 +47,15 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, mediaPath, da
 			r.Get("/files/info/*", filesHandler.GetInfo)
 			r.Get("/files/thumbnail/*", filesHandler.GetThumbnail)
 			r.Get("/files/search", filesHandler.Search)
+			r.Post("/files/batch-info", filesHandler.BatchInfo)
 
 			// Streaming
 			r.Get("/stream/capabilities", streamHandler.CapabilitiesHandler)
 			r.Get("/stream/presets/*", streamHandler.PresetsHandler)
 			r.Get("/stream/hls/*", streamHandler.HLSHandler)
 			r.Get("/stream/direct/*", streamHandler.DirectPlay)
+			r.Post("/stream/heartbeat/{sessionID}", streamHandler.HeartbeatHandler)
+			r.Delete("/stream/session/{sessionID}", streamHandler.StopSessionHandler)
 
 			// Subtitles
 			r.Get("/subtitle/list/*", subtitleHandler.ListSubtitles)
