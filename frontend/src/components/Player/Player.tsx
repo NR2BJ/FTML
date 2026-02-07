@@ -403,7 +403,7 @@ export default function Player({ path }: PlayerProps) {
     if (savedAbsTime > 0) {
       startHLS(video, path, quality, savedAbsTime, wasPlaying)
     } else {
-      startHLS(video, path, quality, 0, false)
+      startHLS(video, path, quality, 0, true)
     }
 
     return () => {

@@ -142,6 +142,23 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	presets := ffmpeg.GeneratePresets(info, codec, encoder, browser)
 	params := ffmpeg.GetTranscodeParams(quality, presets, encoder)
 
+	// Passthrough fallback: HLS URL doesn't include browser codec params,
+	// so GeneratePresets may not include a passthrough option. Build params
+	// directly from the probed video codec (passthrough = video copy + audio AAC).
+	if params == nil && quality == "passthrough" && info != nil {
+		videoCodecNorm := ffmpeg.NormalizeCodecName(info.VideoCodec)
+		// 10bit H.264 can't be decoded via MSE — don't allow passthrough
+		if !(videoCodecNorm == "h264" && ffmpeg.Is10bit(info.PixFmt)) {
+			params = &ffmpeg.TranscodeParams{
+				Label:      "Passthrough",
+				VideoCodec: "copy",
+				AudioCodec: "aac",
+				Encoder:    "copy",
+				SegmentFmt: ffmpeg.GetSegmentFmt(videoCodecNorm),
+			}
+		}
+	}
+
 	// If quality not found in presets, use first available transcode preset
 	if params == nil && quality != "original" && quality != "passthrough" {
 		for _, p := range presets {

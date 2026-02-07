@@ -79,6 +79,15 @@ var codecSegmentFmt = map[Codec]string{
 	CodecVP9:  "fmp4",
 }
 
+// GetSegmentFmt returns the HLS segment format for a given normalized video codec.
+func GetSegmentFmt(videoCodec string) string {
+	segFmt := codecSegmentFmt[Codec(videoCodec)]
+	if segFmt == "" {
+		return "mpegts"
+	}
+	return segFmt
+}
+
 // Bitrate efficiency relative to h264.
 // A codec with ratio 0.65 needs only 65% of h264's bitrate for similar quality.
 var codecBitrateRatio = map[Codec]float64{
@@ -222,6 +231,12 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 	//  1. Browser can decode the video codec but audio is incompatible, OR
 	//  2. Browser can decode both but container is incompatible (e.g. MKV HEVC)
 	canDecodeVideo := canBrowserDecodeCodec(info.VideoCodec, browser)
+
+	// 10bit H.264 is not decodable via MSE in any browser — disable passthrough
+	if canDecodeVideo && NormalizeCodecName(info.VideoCodec) == "h264" && Is10bit(info.PixFmt) {
+		canDecodeVideo = false
+	}
+
 	needsPassthrough := canDecodeVideo && (!canDirectPlayAudio || !canDirectPlayVideo)
 	if needsPassthrough {
 		// Determine the right segment format for the video codec
@@ -465,6 +480,13 @@ func GetTranscodeParams(quality string, presets []QualityOption, encoder *Encode
 		}
 	}
 	return nil
+}
+
+// Is10bit returns true if the pixel format indicates 10-bit or higher depth.
+// Common 10bit formats: yuv420p10le, yuv422p10le, yuv444p10le, p010le, etc.
+func Is10bit(pixFmt string) bool {
+	return strings.Contains(pixFmt, "10le") || strings.Contains(pixFmt, "10be") ||
+		strings.Contains(pixFmt, "10p") || strings.Contains(pixFmt, "p010")
 }
 
 // defaultPresets returns fallback presets when FFprobe data is unavailable.

@@ -52,6 +52,7 @@ type MediaInfo struct {
 	Size         string            `json:"size"`
 	BitRate      string            `json:"bit_rate"`
 	Container    string            `json:"container"` // normalized: "mkv", "mp4", "avi", etc.
+	PixFmt       string            `json:"pix_fmt"`   // e.g. "yuv420p", "yuv420p10le"
 	VideoCodec   string            `json:"video_codec"`
 	AudioCodec   string            `json:"audio_codec"`
 	Width        int               `json:"width"`
@@ -97,6 +98,7 @@ func Probe(filePath string) (*MediaInfo, error) {
 				info.Width = s.Width
 				info.Height = s.Height
 				info.FrameRate = s.RFrameRate
+				info.PixFmt = s.PixFmt
 			}
 		case "audio":
 			if info.AudioCodec == "" {
