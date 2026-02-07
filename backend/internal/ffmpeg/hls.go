@@ -406,15 +406,25 @@ func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, s
 			logFile.Close()
 		}
 		if err != nil {
-			log.Printf("[HLS] Software fallback also failed: session=%s err=%v", sessionID, err)
-			logPath := filepath.Join(outputDir, "ffmpeg.log")
-			if logData, readErr := os.ReadFile(logPath); readErr == nil {
-				lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
-				start := len(lines) - 20
-				if start < 0 {
-					start = 0
+			// Check if this was an intentional stop (cleanup, seek, quality switch)
+			m.mu.RLock()
+			s, exists := m.sessions[sessionID]
+			wasStopped := !exists || s.Stopped
+			m.mu.RUnlock()
+
+			if wasStopped {
+				log.Printf("[HLS] Software fallback stopped (session cleaned up): session=%s", sessionID)
+			} else {
+				log.Printf("[HLS] Software fallback also failed: session=%s err=%v", sessionID, err)
+				logPath := filepath.Join(outputDir, "ffmpeg.log")
+				if logData, readErr := os.ReadFile(logPath); readErr == nil {
+					lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
+					start := len(lines) - 20
+					if start < 0 {
+						start = 0
+					}
+					log.Printf("[HLS] FFmpeg stderr:\n%s", strings.Join(lines[start:], "\n"))
 				}
-				log.Printf("[HLS] FFmpeg stderr:\n%s", strings.Join(lines[start:], "\n"))
 			}
 		} else {
 			log.Printf("[HLS] Software fallback completed: session=%s encoder=%s", sessionID, fallback)

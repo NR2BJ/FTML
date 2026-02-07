@@ -66,7 +66,7 @@ export default function QualitySelector() {
                 onClick={() => !isDisabled && handleSelect(opt)}
                 className={`block w-full text-left px-3 py-1.5 text-sm transition-colors ${
                   isDisabled
-                    ? 'text-gray-600 cursor-not-allowed'
+                    ? 'text-gray-600 cursor-not-allowed opacity-40'
                     : quality === opt.value
                     ? 'text-primary-400 hover:bg-gray-700'
                     : isAudioIncompat
@@ -83,6 +83,9 @@ export default function QualitySelector() {
                 }
               >
                 <span>{opt.label}</span>
+                {isDisabled && (
+                  <span className="text-[10px] text-gray-600 ml-1">(unsupported)</span>
+                )}
                 {isAudioIncompat && (
                   <span className="text-[10px] text-yellow-500/70 ml-1">(audio convert)</span>
                 )}

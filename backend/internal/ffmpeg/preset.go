@@ -155,22 +155,35 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 	// Same-resolution transcode option (useful when source codec isn't browser-compatible)
 	if srcHeight >= 720 {
 		srcTierLabel := findClosestTierLabel(srcHeight)
-		crf := crfMap[findClosestTierHeight(srcHeight)]
-		maxBitrate := computeMaxBitrate(srcBitrate, srcHeight, srcHeight) * bitrateRatio
-		maxBitrateStr := formatBitrateM(maxBitrate)
-		bufSize := formatBitrateM(maxBitrate * 2)
+		srcTierValue := strings.ToLower(srcTierLabel)
 
-		options = append(options, QualityOption{
-			Value:      strings.ToLower(srcTierLabel),
-			Label:      srcTierLabel,
-			Desc:       fmt.Sprintf("~%s", formatBitrateHuman(maxBitrate)),
-			Height:     srcHeight,
-			CRF:        crf,
-			MaxBitrate: maxBitrateStr,
-			BufSize:    bufSize,
-			VideoCodec: string(codec),
-			AudioCodec: audioCodec,
-		})
+		// Only add if not already present from Phase 1
+		// (happens when srcHeight is between two tiers, e.g. 1606 between 1440 and 2160)
+		alreadyExists := false
+		for _, opt := range options {
+			if opt.Value == srcTierValue {
+				alreadyExists = true
+				break
+			}
+		}
+		if !alreadyExists {
+			crf := crfMap[findClosestTierHeight(srcHeight)]
+			maxBitrate := computeMaxBitrate(srcBitrate, srcHeight, srcHeight) * bitrateRatio
+			maxBitrateStr := formatBitrateM(maxBitrate)
+			bufSize := formatBitrateM(maxBitrate * 2)
+
+			options = append(options, QualityOption{
+				Value:      srcTierValue,
+				Label:      srcTierLabel,
+				Desc:       fmt.Sprintf("~%s", formatBitrateHuman(maxBitrate)),
+				Height:     srcHeight,
+				CRF:        crf,
+				MaxBitrate: maxBitrateStr,
+				BufSize:    bufSize,
+				VideoCodec: string(codec),
+				AudioCodec: audioCodec,
+			})
+		}
 	}
 
 	// Original direct play option — check both video AND audio codec compatibility

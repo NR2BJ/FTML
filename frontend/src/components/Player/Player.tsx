@@ -257,11 +257,32 @@ export default function Player({ path }: PlayerProps) {
         if (presets && presets.length > 0) {
           // Keep all presets - QualitySelector handles disabling original when audio incompatible
           setQualityPresets(presets)
-          // If current quality isn't available in presets, select the highest transcode option
+          // If current quality isn't available or not usable, select the best alternative
           const savedQ = localStorage.getItem('ftml-quality') || '720p'
           const available = presets.find((p) => p.value === savedQ)
-          if (!available) {
-            // Prefer passthrough over regular transcode if available
+
+          let shouldFallback = !available
+
+          // Validate "original" quality against actual codec compatibility
+          if (available && savedQ === 'original') {
+            if (available.can_original) {
+              // Both video and audio compatible: keep original
+            } else if (available.can_original_video && !available.can_original_audio) {
+              // Video OK but audio incompatible → redirect to passthrough
+              const pt = presets.find((p) => p.value === 'passthrough')
+              if (pt) {
+                setQuality('passthrough')
+                shouldFallback = false // already handled
+              } else {
+                shouldFallback = true
+              }
+            } else {
+              // Video codec not supported → fall back to transcode
+              shouldFallback = true
+            }
+          }
+
+          if (shouldFallback) {
             const passthrough = presets.find((p) => p.value === 'passthrough')
             if (passthrough) {
               setQuality('passthrough')
