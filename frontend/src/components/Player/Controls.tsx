@@ -2,6 +2,8 @@ import { RefObject } from 'react'
 import { usePlayerStore } from '@/stores/playerStore'
 import { Play, Pause, Volume2, VolumeX, Maximize, SkipBack, SkipForward } from 'lucide-react'
 import { formatDuration } from '@/utils/format'
+import SubtitleSelector from './SubtitleSelector'
+import QualitySelector from './QualitySelector'
 
 interface ControlsProps {
   videoRef: RefObject<HTMLVideoElement | null>
@@ -98,6 +100,12 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
         </span>
 
         <div className="flex-1" />
+
+        {/* Subtitles */}
+        <SubtitleSelector />
+
+        {/* Quality */}
+        <QualitySelector />
 
         {/* Speed */}
         <button

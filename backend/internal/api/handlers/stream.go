@@ -55,9 +55,20 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		return
 	}
 
-	sessionID := generateSessionID(videoPath)
+	quality := r.URL.Query().Get("quality")
+	if quality == "" {
+		quality = "medium"
+	}
 
-	session, err := h.hlsManager.GetOrCreateSession(sessionID, fullPath, 0)
+	// "original" quality means direct play - redirect
+	if quality == "original" {
+		http.Redirect(w, r, "/api/stream/direct/"+videoPath, http.StatusTemporaryRedirect)
+		return
+	}
+
+	sessionID := generateSessionID(videoPath, quality)
+
+	session, err := h.hlsManager.GetOrCreateSession(sessionID, fullPath, 0, quality)
 	if err != nil {
 		jsonError(w, "failed to start transcoding: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -97,7 +108,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		return
 	}
 
-	// Rewrite segment paths: "seg_00001.ts" -> "/api/stream/hls/VIDEO_PATH/seg_00001.ts?token=..."
+	// Rewrite segment paths: "seg_00001.ts" -> "/api/stream/hls/VIDEO_PATH/seg_00001.ts?token=...&quality=..."
 	token := r.URL.Query().Get("token")
 	// URL-encode each path segment for the rewritten URLs
 	pathParts := strings.Split(videoPath, "/")
@@ -112,7 +123,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	for i, line := range lines {
 		if strings.HasSuffix(strings.TrimSpace(line), ".ts") {
 			segName := strings.TrimSpace(line)
-			lines[i] = fmt.Sprintf("/api/stream/hls/%s/%s?token=%s", encodedVideoPath, segName, token)
+			lines[i] = fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s", encodedVideoPath, segName, token, quality)
 		}
 	}
 
@@ -132,7 +143,11 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 
 	segmentName := parts[len(parts)-1]
 	videoPath := strings.Join(parts[:len(parts)-1], "/")
-	sessionID := generateSessionID(videoPath)
+	quality := r.URL.Query().Get("quality")
+	if quality == "" {
+		quality = "medium"
+	}
+	sessionID := generateSessionID(videoPath, quality)
 
 	segmentPath := filepath.Join(h.hlsManager.GetSessionDir(sessionID), segmentName)
 
@@ -166,7 +181,7 @@ func (h *StreamHandler) DirectPlay(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, fullPath)
 }
 
-func generateSessionID(path string) string {
-	h := sha256.Sum256([]byte(path))
+func generateSessionID(path, quality string) string {
+	h := sha256.Sum256([]byte(path + "|" + quality))
 	return fmt.Sprintf("%x", h[:8])
 }

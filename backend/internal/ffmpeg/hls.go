@@ -7,9 +7,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
+
+type QualityPreset struct {
+	Name       string
+	Height     int    // 0 = original
+	MaxBitrate string
+	BufSize    string
+	CRF        int
+}
+
+var Presets = map[string]QualityPreset{
+	"low":    {Name: "720p", Height: 720, MaxBitrate: "8M", BufSize: "16M", CRF: 23},
+	"medium": {Name: "1080p", Height: 1080, MaxBitrate: "15M", BufSize: "30M", CRF: 23},
+	"high":   {Name: "1080p High", Height: 1080, MaxBitrate: "25M", BufSize: "50M", CRF: 18},
+}
 
 type HLSSession struct {
 	ID        string
@@ -37,7 +52,7 @@ func NewHLSManager(baseDir string) *HLSManager {
 	return m
 }
 
-func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime float64) (*HLSSession, error) {
+func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime float64, quality string) (*HLSSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -61,18 +76,36 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 		args = append(args, "-ss", fmt.Sprintf("%.2f", startTime))
 	}
 
+	// Determine quality settings
+	preset, ok := Presets[quality]
+	if !ok {
+		preset = Presets["medium"]
+	}
+
+	videoFilters := []string{}
+	if preset.Height > 0 {
+		videoFilters = append(videoFilters, fmt.Sprintf("scale=-2:%d", preset.Height))
+	}
+
 	args = append(args,
 		"-i", inputPath,
 		"-map", "0:v:0",
 		"-map", "0:a:0?",
 		"-c:v", "libx264",
 		"-preset", "veryfast",
-		"-crf", "23",
-		"-maxrate", "15M",
-		"-bufsize", "30M",
+		"-crf", fmt.Sprintf("%d", preset.CRF),
+		"-maxrate", preset.MaxBitrate,
+		"-bufsize", preset.BufSize,
 		"-pix_fmt", "yuv420p",
 		"-g", "48",
 		"-keyint_min", "48",
+	)
+
+	if len(videoFilters) > 0 {
+		args = append(args, "-vf", strings.Join(videoFilters, ","))
+	}
+
+	args = append(args,
 		"-c:a", "aac",
 		"-b:a", "192k",
 		"-ac", "2",

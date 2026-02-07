@@ -27,6 +27,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, mediaPath, da
 	hlsManager := ffmpeg.NewHLSManager(dataPath)
 	streamHandler := handlers.NewStreamHandler(mediaPath, hlsManager)
 	userHandler := handlers.NewUserHandler(database)
+	subtitleHandler := handlers.NewSubtitleHandler(mediaPath)
 
 	// Public routes
 	r.Route("/api", func(r chi.Router) {
@@ -50,6 +51,10 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, mediaPath, da
 			// Streaming
 			r.Get("/stream/hls/*", streamHandler.HLSHandler)
 			r.Get("/stream/direct/*", streamHandler.DirectPlay)
+
+			// Subtitles
+			r.Get("/subtitle/list/*", subtitleHandler.ListSubtitles)
+			r.Get("/subtitle/content/*", subtitleHandler.ServeSubtitle)
 
 			// User
 			r.Put("/user/history/*", userHandler.SavePosition)
