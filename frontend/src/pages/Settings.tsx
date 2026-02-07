@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Settings as SettingsIcon, Save, Check, Loader2, Eye, EyeOff } from 'lucide-react'
 import { getSettings, updateSettings, type SettingItem } from '@/api/settings'
+import WhisperModelManager from '@/components/WhisperModelManager'
 
 export default function Settings() {
   const [settings, setSettings] = useState<SettingItem[]>([])
@@ -84,7 +85,7 @@ export default function Settings() {
 
   const settingHelp: Record<string, string> = {
     whisper_url: 'Internal Docker address of the Whisper server. Default works with the bundled whisper-sycl container.',
-    whisper_model: 'Model filename in /models directory (e.g. ggml-large-v3.bin). Changing this requires WHISPER_MODEL env var update and whisper container restart.',
+    whisper_model: 'Active model is managed via the model manager below. This field shows the current setting stored in the database.',
     whisper_language: 'Default language for transcription. Use "auto" for automatic detection, or ISO 639-1 codes (ko, en, ja, zh, etc.)',
     gemini_api_key: 'Google Gemini API key for subtitle translation. Get one at aistudio.google.com',
     openai_api_key: 'OpenAI API key for Whisper API and GPT translation. Used for both transcription and translation.',
@@ -153,6 +154,16 @@ export default function Settings() {
               </div>
             ))}
           </div>
+
+          {/* Show Model Manager after whisper settings group */}
+          {group === 'whisper' && (
+            <div className="mt-4">
+              <h3 className="text-sm font-medium text-gray-400 mb-3">
+                Whisper Models
+              </h3>
+              <WhisperModelManager />
+            </div>
+          )}
         </div>
       ))}
 

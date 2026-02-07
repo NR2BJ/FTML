@@ -32,6 +32,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	subtitleHandler := handlers.NewSubtitleHandler(cfg.MediaPath, cfg.SubtitlePath, jobQueue, database)
 	jobHandler := handlers.NewJobHandler(jobQueue)
 	settingsHandler := handlers.NewSettingsHandler(database)
+	whisperModelsHandler := handlers.NewWhisperModelsHandler(cfg.WhisperModelPath, database)
 
 	// Public routes
 	r.Route("/api", func(r chi.Router) {
@@ -77,6 +78,13 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			// Settings (admin only for now, TODO: add role check)
 			r.Get("/settings", settingsHandler.GetSettings)
 			r.Put("/settings", settingsHandler.UpdateSettings)
+
+			// Whisper Model Management
+			r.Get("/whisper/models", whisperModelsHandler.ListModels)
+			r.Post("/whisper/models/download", whisperModelsHandler.DownloadModel)
+			r.Get("/whisper/models/progress", whisperModelsHandler.DownloadProgress)
+			r.Post("/whisper/models/active", whisperModelsHandler.SetActiveModel)
+			r.Delete("/whisper/models", whisperModelsHandler.DeleteModel)
 
 			// User
 			r.Put("/user/history/*", userHandler.SavePosition)

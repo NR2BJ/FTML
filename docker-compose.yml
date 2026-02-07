@@ -20,6 +20,7 @@ services:
     volumes:
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
       - ftml_data:/data
+      - whisper_models:/data/whisper/models
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
@@ -28,6 +29,7 @@ services:
       - DATA_PATH=/data
       - DB_PATH=/data/videostream.db
       - SUBTITLE_PATH=/data/subtitles
+      - WHISPER_MODEL_PATH=/data/whisper/models
       - PORT=8080
       - LIBVA_DRIVER_NAME=iHD
     devices:
@@ -47,7 +49,7 @@ services:
     environment:
       - WHISPER_MODEL=${WHISPER_MODEL:-ggml-large-v3.bin}
     volumes:
-      - ${WHISPER_MODEL_PATH:-./data/whisper/models}:/models:ro
+      - whisper_models:/models:ro
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
     devices:
       - /dev/dri:/dev/dri
@@ -65,7 +67,7 @@ services:
     profiles:
       - whisper-cuda
     volumes:
-      - ./data/whisper/models:/models:ro
+      - whisper_models:/models:ro
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
     deploy:
       resources:
@@ -81,6 +83,7 @@ services:
 volumes:
   ftml_data:
     external: true
+  whisper_models:
 
 networks:
   homeserver-net:
