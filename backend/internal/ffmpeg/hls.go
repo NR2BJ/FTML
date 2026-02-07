@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -24,6 +25,8 @@ type HLSSession struct {
 	CreatedAt     time.Time
 	LastHeartbeat time.Time // last heartbeat from client
 	Stopped       bool      // set true before intentional cancel to prevent false SW fallback
+	Paused        bool      // true when FFmpeg is frozen via SIGSTOP
+	PausedAt      time.Time // when the session was paused
 }
 
 type HLSManager struct {
@@ -388,12 +391,63 @@ func (m *HLSManager) GetSessionDir(sessionID string) string {
 	return filepath.Join(m.baseDir, sessionID)
 }
 
+// PauseSession sends SIGSTOP to the FFmpeg process, freezing it immediately.
+// This releases GPU resources without killing the process.
+func (m *HLSManager) PauseSession(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[sessionID]
+	if !ok || s.Paused || s.Stopped {
+		return false
+	}
+
+	if s.Cmd != nil && s.Cmd.Process != nil {
+		if err := s.Cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+			log.Printf("[HLS] Failed to SIGSTOP session %s: %v", sessionID, err)
+			return false
+		}
+		s.Paused = true
+		s.PausedAt = time.Now()
+		log.Printf("[HLS] Paused (SIGSTOP) session: %s", sessionID)
+		return true
+	}
+	return false
+}
+
+// ResumeSession sends SIGCONT to a frozen FFmpeg process, resuming transcoding.
+func (m *HLSManager) ResumeSession(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[sessionID]
+	if !ok || !s.Paused || s.Stopped {
+		return false
+	}
+
+	if s.Cmd != nil && s.Cmd.Process != nil {
+		if err := s.Cmd.Process.Signal(syscall.SIGCONT); err != nil {
+			log.Printf("[HLS] Failed to SIGCONT session %s: %v", sessionID, err)
+			return false
+		}
+		s.Paused = false
+		s.LastHeartbeat = time.Now() // refresh heartbeat on resume
+		log.Printf("[HLS] Resumed (SIGCONT) session: %s", sessionID)
+		return true
+	}
+	return false
+}
+
 func (m *HLSManager) StopSession(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if s, ok := m.sessions[sessionID]; ok {
 		s.Stopped = true
+		// If paused (SIGSTOP), must SIGCONT first so the process can receive the kill signal
+		if s.Paused && s.Cmd != nil && s.Cmd.Process != nil {
+			s.Cmd.Process.Signal(syscall.SIGCONT)
+		}
 		s.Cancel()
 		os.RemoveAll(s.OutputDir)
 		delete(m.sessions, sessionID)
@@ -410,6 +464,10 @@ func (m *HLSManager) StopSessionsForPath(inputPath, quality, codec, excludeID st
 	for id, s := range m.sessions {
 		if id != excludeID && s.InputPath == inputPath && s.Quality == quality && s.Codec == codec {
 			s.Stopped = true
+			// SIGCONT first if paused so kill signal can be delivered
+			if s.Paused && s.Cmd != nil && s.Cmd.Process != nil {
+				s.Cmd.Process.Signal(syscall.SIGCONT)
+			}
 			s.Cancel()
 			os.RemoveAll(s.OutputDir)
 			delete(m.sessions, id)
@@ -439,16 +497,34 @@ func (m *HLSManager) cleanup() {
 		m.mu.Lock()
 		now := time.Now()
 		for id, s := range m.sessions {
-			// Hard limit: 30 minutes max
+			// Hard limit: 30 minutes max (applies to all sessions)
 			if now.Sub(s.CreatedAt) > 30*time.Minute {
 				s.Stopped = true
+				if s.Paused && s.Cmd != nil && s.Cmd.Process != nil {
+					s.Cmd.Process.Signal(syscall.SIGCONT)
+				}
 				s.Cancel()
 				os.RemoveAll(s.OutputDir)
 				delete(m.sessions, id)
 				log.Printf("[HLS] Stopped session: %s (max age 30m)", id)
 				continue
 			}
-			// Idle timeout: 45 seconds without heartbeat
+			// Paused sessions: give them 5 minutes before cleanup
+			// (user might come back and resume)
+			if s.Paused {
+				if now.Sub(s.PausedAt) > 5*time.Minute {
+					s.Stopped = true
+					if s.Cmd != nil && s.Cmd.Process != nil {
+						s.Cmd.Process.Signal(syscall.SIGCONT)
+					}
+					s.Cancel()
+					os.RemoveAll(s.OutputDir)
+					delete(m.sessions, id)
+					log.Printf("[HLS] Stopped paused session: %s (paused timeout 5m)", id)
+				}
+				continue // skip heartbeat check for paused sessions
+			}
+			// Active sessions: idle timeout 45 seconds without heartbeat
 			if now.Sub(s.LastHeartbeat) > 45*time.Second {
 				s.Stopped = true
 				s.Cancel()

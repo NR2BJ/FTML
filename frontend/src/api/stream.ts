@@ -74,5 +74,11 @@ export const getDirectUrl = (path: string) =>
 export const sendHeartbeat = (sessionID: string) =>
   client.post(`/stream/heartbeat/${sessionID}`)
 
+export const pauseSession = (sessionID: string) =>
+  client.post(`/stream/pause/${sessionID}`)
+
+export const resumeSession = (sessionID: string) =>
+  client.post(`/stream/resume/${sessionID}`)
+
 export const stopSession = (sessionID: string) =>
   client.delete(`/stream/session/${sessionID}`)

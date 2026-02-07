@@ -246,11 +246,13 @@ export default function DetailsView({ entries, onClickEntry }: DetailsViewProps)
     setDragOverCol(null)
   }
 
-  // Build grid template
-  const gridTemplate = visibleColumns.map((c) => `${c.width}px`).join(' ')
+  // Build grid template - Name column is flexible, others are fixed width
+  const gridTemplate = visibleColumns
+    .map((c) => c.id === 'name' ? `minmax(150px, 1fr)` : `${c.width}px`)
+    .join(' ')
 
   return (
-    <div className="bg-dark-900 border border-dark-700 rounded-lg overflow-hidden">
+    <div className="bg-dark-900 border border-dark-700 rounded-lg overflow-x-auto">
       {/* Header */}
       <div
         className="grid px-2 py-2 border-b border-dark-700 text-xs text-gray-500 uppercase tracking-wider select-none"

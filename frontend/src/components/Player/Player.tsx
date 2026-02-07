@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import Hls from 'hls.js'
-import { getHLSUrl, getDirectUrl, getPresets, getCapabilities, sendHeartbeat, stopSession } from '@/api/stream'
+import { getHLSUrl, getDirectUrl, getPresets, getCapabilities, sendHeartbeat, stopSession, pauseSession, resumeSession } from '@/api/stream'
 import { getFileInfo } from '@/api/files'
 import { saveWatchPosition, getWatchPosition } from '@/api/user'
 import { listSubtitles } from '@/api/subtitle'
@@ -414,15 +414,22 @@ export default function Player({ path }: PlayerProps) {
 
   const handlePlay = useCallback(() => {
     setPlaying(true)
-    // Resume heartbeat when playing resumes (if we have a session)
-    if (sessionIDRef.current && !heartbeatRef.current) {
-      startHeartbeat(sessionIDRef.current)
+    // Resume the frozen FFmpeg process and restart heartbeat
+    if (sessionIDRef.current) {
+      resumeSession(sessionIDRef.current).catch(() => {})
+      if (!heartbeatRef.current) {
+        startHeartbeat(sessionIDRef.current)
+      }
     }
   }, [setPlaying, startHeartbeat])
 
   const handlePause = useCallback(() => {
     setPlaying(false)
-    // Stop heartbeat when paused — backend will timeout after 45s
+    // Freeze the FFmpeg process immediately (SIGSTOP) to release GPU
+    if (sessionIDRef.current) {
+      pauseSession(sessionIDRef.current).catch(() => {})
+    }
+    // Stop heartbeat — paused sessions have a separate 5-minute timeout
     stopHeartbeat()
   }, [setPlaying, stopHeartbeat])
 

@@ -55,6 +55,8 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, mediaPath, da
 			r.Get("/stream/hls/*", streamHandler.HLSHandler)
 			r.Get("/stream/direct/*", streamHandler.DirectPlay)
 			r.Post("/stream/heartbeat/{sessionID}", streamHandler.HeartbeatHandler)
+			r.Post("/stream/pause/{sessionID}", streamHandler.PauseHandler)
+			r.Post("/stream/resume/{sessionID}", streamHandler.ResumeHandler)
 			r.Delete("/stream/session/{sessionID}", streamHandler.StopSessionHandler)
 
 			// Subtitles

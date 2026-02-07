@@ -29,8 +29,6 @@ export default function SubtitleSelector() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [open, showSettings])
 
-  if (subtitles.length === 0) return null
-
   return (
     <div className="relative" ref={menuRef}>
       <button
@@ -50,39 +48,47 @@ export default function SubtitleSelector() {
 
       {open && !showSettings && (
         <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg py-1 min-w-[160px] z-50">
-          {/* Off option */}
-          <button
-            onClick={() => {
-              setActiveSubtitle(null)
-              setOpen(false)
-            }}
-            className={`block w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 transition-colors ${
-              activeSubtitle === null ? 'text-primary-400' : 'text-gray-300'
-            }`}
-          >
-            Off
-          </button>
+          {subtitles.length === 0 ? (
+            <div className="px-3 py-1.5 text-sm text-gray-500">
+              No subtitles available
+            </div>
+          ) : (
+            <>
+              {/* Off option */}
+              <button
+                onClick={() => {
+                  setActiveSubtitle(null)
+                  setOpen(false)
+                }}
+                className={`block w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 transition-colors ${
+                  activeSubtitle === null ? 'text-primary-400' : 'text-gray-300'
+                }`}
+              >
+                Off
+              </button>
 
-          <div className="border-t border-gray-700 my-1" />
+              <div className="border-t border-gray-700 my-1" />
 
-          {subtitles.map((sub) => (
-            <button
-              key={sub.id}
-              onClick={() => {
-                setActiveSubtitle(sub.id)
-                setSubtitleVisible(true)
-                setOpen(false)
-              }}
-              className={`block w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 transition-colors ${
-                activeSubtitle === sub.id ? 'text-primary-400' : 'text-gray-300'
-              }`}
-            >
-              <span>{sub.label}</span>
-              <span className="text-xs text-gray-500 ml-2">
-                {sub.type === 'embedded' ? 'Embedded' : sub.format.toUpperCase()}
-              </span>
-            </button>
-          ))}
+              {subtitles.map((sub) => (
+                <button
+                  key={sub.id}
+                  onClick={() => {
+                    setActiveSubtitle(sub.id)
+                    setSubtitleVisible(true)
+                    setOpen(false)
+                  }}
+                  className={`block w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 transition-colors ${
+                    activeSubtitle === sub.id ? 'text-primary-400' : 'text-gray-300'
+                  }`}
+                >
+                  <span>{sub.label}</span>
+                  <span className="text-xs text-gray-500 ml-2">
+                    {sub.type === 'embedded' ? 'Embedded' : sub.format.toUpperCase()}
+                  </span>
+                </button>
+              ))}
+            </>
+          )}
 
           <div className="border-t border-gray-700 my-1" />
 

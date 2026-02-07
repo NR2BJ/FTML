@@ -1,6 +1,6 @@
 import { RefObject } from 'react'
 import { usePlayerStore } from '@/stores/playerStore'
-import { Play, Pause, Volume2, VolumeX, Maximize, SkipBack, SkipForward } from 'lucide-react'
+import { Play, Pause, Volume2, VolumeX, Maximize, SkipBack, SkipForward, BarChart2 } from 'lucide-react'
 import { formatDuration } from '@/utils/format'
 import SubtitleSelector from './SubtitleSelector'
 import QualitySelector from './QualitySelector'
@@ -20,9 +20,11 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
     volume,
     muted,
     playbackRate,
+    showStats,
     setVolume,
     setMuted,
     setPlaybackRate,
+    setShowStats,
   } = usePlayerStore()
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0
@@ -113,6 +115,17 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
           className="text-sm text-gray-300 hover:text-white transition-colors px-1"
         >
           {playbackRate}x
+        </button>
+
+        {/* Stats toggle */}
+        <button
+          onClick={() => setShowStats(!showStats)}
+          className={`transition-colors px-1 ${
+            showStats ? 'text-blue-400 hover:text-blue-300' : 'text-gray-300 hover:text-white'
+          }`}
+          title="Toggle stats (I)"
+        >
+          <BarChart2 className="w-5 h-5" />
         </button>
 
         {/* Volume */}

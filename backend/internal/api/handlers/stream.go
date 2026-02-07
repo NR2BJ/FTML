@@ -347,6 +347,38 @@ func (h *StreamHandler) HeartbeatHandler(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// PauseHandler sends SIGSTOP to an FFmpeg process, freezing it to release GPU.
+// POST /stream/pause/{sessionID}
+func (h *StreamHandler) PauseHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	if sessionID == "" {
+		jsonError(w, "missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	if h.hlsManager.PauseSession(sessionID) {
+		w.WriteHeader(http.StatusNoContent)
+	} else {
+		jsonError(w, "session not found or already paused", http.StatusNotFound)
+	}
+}
+
+// ResumeHandler sends SIGCONT to a frozen FFmpeg process, resuming transcoding.
+// POST /stream/resume/{sessionID}
+func (h *StreamHandler) ResumeHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	if sessionID == "" {
+		jsonError(w, "missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	if h.hlsManager.ResumeSession(sessionID) {
+		w.WriteHeader(http.StatusNoContent)
+	} else {
+		jsonError(w, "session not found or not paused", http.StatusNotFound)
+	}
+}
+
 // StopSessionHandler stops an HLS session immediately.
 // DELETE /stream/session/{sessionID}
 func (h *StreamHandler) StopSessionHandler(w http.ResponseWriter, r *http.Request) {
