@@ -10,7 +10,7 @@ interface PlaybackStatsProps {
 
 interface RuntimeStats {
   playResolution: string
-  playBitrate: number  // estimated from segment sizes
+  playBitrate: number
   playFramerate: number
   bufferLength: number
   droppedFrames: number
@@ -29,7 +29,6 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
     totalFrames: 0,
     bandwidth: 0,
   })
-  // Track recent segment loads to estimate bitrate
   const segmentHistoryRef = useRef<Array<{ bytes: number; duration: number; time: number }>>([])
   const attachedHlsRef = useRef<Hls | null>(null)
 
@@ -43,7 +42,6 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
         const fragDuration = data?.frag?.duration || 0
         if (bytes > 0 && fragDuration > 0) {
           segmentHistoryRef.current.push({ bytes, duration: fragDuration, time: Date.now() })
-          // Keep only last 30 seconds of history
           const cutoff = Date.now() - 30000
           segmentHistoryRef.current = segmentHistoryRef.current.filter(s => s.time > cutoff)
         }
@@ -62,7 +60,11 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
         }
         hls.on(Hls.Events.FRAG_LOADED, onFragLoaded)
         attachedHlsRef.current = hls
-        segmentHistoryRef.current = [] // reset on new instance
+        segmentHistoryRef.current = []
+      } else if (!hls && attachedHlsRef.current) {
+        attachedHlsRef.current.off(Hls.Events.FRAG_LOADED, onFragLoaded)
+        attachedHlsRef.current = null
+        segmentHistoryRef.current = []
       }
 
       // Buffer length
@@ -79,29 +81,44 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
       const droppedFrames = playQuality?.droppedVideoFrames || 0
       const totalFrames = playQuality?.totalVideoFrames || 0
 
-      // Live resolution from video element (actual decoded resolution)
+      // Live resolution from video element
       const playResolution = video.videoWidth && video.videoHeight
         ? `${video.videoWidth}x${video.videoHeight}`
         : ''
 
-      // Framerate: estimate from totalFrames / playback time
+      // Framerate from decoded frames / time
       const playFramerate = totalFrames > 0 && video.currentTime > 1
         ? Math.round(totalFrames / video.currentTime)
         : 0
 
-      // Estimate real bitrate from recent segments (bytes / content duration)
       let playBitrate = 0
-      const history = segmentHistoryRef.current
-      if (history.length > 0) {
-        const totalBytes = history.reduce((sum, s) => sum + s.bytes, 0)
-        const totalDuration = history.reduce((sum, s) => sum + s.duration, 0)
-        if (totalDuration > 0) {
-          playBitrate = (totalBytes * 8) / totalDuration // bits per second of content
+      let bandwidth = 0
+
+      if (hls) {
+        // HLS mode: bitrate from segment sizes, bandwidth from hls.js
+        const history = segmentHistoryRef.current
+        if (history.length > 0) {
+          const totalBytes = history.reduce((sum, s) => sum + s.bytes, 0)
+          const totalDuration = history.reduce((sum, s) => sum + s.duration, 0)
+          if (totalDuration > 0) {
+            playBitrate = (totalBytes * 8) / totalDuration
+          }
+        }
+        bandwidth = hls.bandwidthEstimate || 0
+      } else {
+        // Direct play mode: estimate bitrate from buffered growth
+        // Use mozDecodedBytes (Firefox) or estimate from buffered time * source bitrate
+        const mozBytes = (video as any).mozDecodedBytes
+        if (mozBytes && mozBytes > 0 && video.currentTime > 1) {
+          playBitrate = (mozBytes * 8) / video.currentTime
+        } else {
+          // Fallback: use FFprobe format bitrate as the file's average bitrate
+          const formatBr = parseFloat(mediaInfo?.bit_rate || '0')
+          if (formatBr > 0) {
+            playBitrate = formatBr
+          }
         }
       }
-
-      // Bandwidth estimate from hls.js
-      const bandwidth = hls?.bandwidthEstimate || 0
 
       setStats({
         playResolution,
@@ -121,7 +138,7 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
         attachedHlsRef.current = null
       }
     }
-  }, [showStats, videoRef, hlsRef])
+  }, [showStats, videoRef, hlsRef, mediaInfo])
 
   if (!showStats) return null
 
@@ -132,13 +149,13 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
     return `${bps} bps`
   }
 
-  // Source file info from FFprobe
   const srcCodec = mediaInfo?.video_codec || 'N/A'
   const srcResolution = mediaInfo?.width && mediaInfo?.height
     ? `${mediaInfo.width}x${mediaInfo.height}`
     : 'N/A'
   const audioStream = mediaInfo?.streams?.find((s: any) => s.codec_type === 'audio')
   const isOriginal = quality === 'original'
+  const isHLS = !!hlsRef.current
 
   return (
     <div className="absolute top-4 left-4 z-50 bg-black/80 text-white text-xs font-mono p-3 rounded-lg select-none pointer-events-none max-w-xs">
@@ -160,7 +177,7 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
       <div className="ml-2 space-y-0.5">
         <div>Buffer: {stats.bufferLength.toFixed(1)}s</div>
         <div>Dropped: {stats.droppedFrames}{stats.totalFrames ? ` / ${stats.totalFrames}` : ''}</div>
-        <div>Bandwidth: {fmtBitrate(stats.bandwidth)}</div>
+        {isHLS && <div>Delivery: {fmtBitrate(stats.bandwidth)}</div>}
       </div>
 
       <div className="font-bold text-purple-400 mt-2 mb-1">Position</div>
