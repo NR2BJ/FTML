@@ -29,7 +29,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	hlsManager := ffmpeg.NewHLSManager(cfg.DataPath)
 	streamHandler := handlers.NewStreamHandler(cfg.MediaPath, hlsManager)
 	userHandler := handlers.NewUserHandler(database)
-	subtitleHandler := handlers.NewSubtitleHandler(cfg.MediaPath, cfg.SubtitlePath, jobQueue)
+	subtitleHandler := handlers.NewSubtitleHandler(cfg.MediaPath, cfg.SubtitlePath, jobQueue, database)
 	jobHandler := handlers.NewJobHandler(jobQueue)
 	settingsHandler := handlers.NewSettingsHandler(database)
 

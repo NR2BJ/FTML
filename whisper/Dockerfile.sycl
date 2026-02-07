@@ -25,7 +25,9 @@ COPY --from=builder /whisper/build/bin/whisper-server /usr/local/bin/
 # Create model directory
 RUN mkdir -p /models
 
+ENV WHISPER_MODEL=ggml-large-v3.bin
+
 EXPOSE 8178
 
-ENTRYPOINT ["whisper-server", "--host", "0.0.0.0", "--port", "8178"]
-CMD ["-m", "/models/ggml-large-v3.bin"]
+# Model can be overridden via WHISPER_MODEL env var or docker-compose
+ENTRYPOINT ["sh", "-c", "exec whisper-server --host 0.0.0.0 --port 8178 -m /models/${WHISPER_MODEL}"]

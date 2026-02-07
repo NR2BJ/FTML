@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/ffmpeg"
 	"github.com/video-stream/backend/internal/job"
 	"github.com/video-stream/backend/internal/storage"
@@ -22,15 +23,17 @@ type SubtitleHandler struct {
 	mediaPath    string
 	subtitlePath string
 	jobQueue     *job.JobQueue
+	database     *db.Database
 }
 
-func NewSubtitleHandler(mediaPath, subtitlePath string, jobQueue *job.JobQueue) *SubtitleHandler {
+func NewSubtitleHandler(mediaPath, subtitlePath string, jobQueue *job.JobQueue, database *db.Database) *SubtitleHandler {
 	// Ensure subtitle output directory exists
 	os.MkdirAll(subtitlePath, 0755)
 	return &SubtitleHandler{
 		mediaPath:    mediaPath,
 		subtitlePath: subtitlePath,
 		jobQueue:     jobQueue,
+		database:     database,
 	}
 }
 
@@ -378,15 +381,18 @@ func (h *SubtitleHandler) GenerateSubtitle(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Defaults
+	// Defaults — read from admin settings if not specified by the request
 	if params.Engine == "" {
 		params.Engine = "whisper.cpp"
 	}
 	if params.Model == "" {
-		params.Model = "large-v3"
+		params.Model = h.database.GetSetting("whisper_model", "large-v3")
+		// Strip ggml- prefix and .bin suffix if user entered full filename
+		params.Model = strings.TrimPrefix(params.Model, "ggml-")
+		params.Model = strings.TrimSuffix(params.Model, ".bin")
 	}
 	if params.Language == "" {
-		params.Language = "auto"
+		params.Language = h.database.GetSetting("whisper_language", "auto")
 	}
 
 	j, err := h.jobQueue.Enqueue(job.JobTranscribe, path, params)

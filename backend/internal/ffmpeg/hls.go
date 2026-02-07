@@ -238,6 +238,11 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 	if isPassthrough {
 		// Video passthrough: copy video stream as-is, only transcode audio
 		args = append(args, "-c:v", "copy")
+		// Fix negative packet duration / DTS warnings in MKV→fMP4 remux.
+		// Without this, MSE may refuse to play the first segments on initial load.
+		args = append(args, "-avoid_negative_ts", "make_zero")
+		args = append(args, "-fflags", "+genpts+igndts")
+		args = append(args, "-max_interleave_delta", "0")
 		// HEVC in fMP4 HLS requires hvc1 tag for browser compatibility
 		if params.SourceVideoCodec == "hevc" {
 			args = append(args, "-tag:v", "hvc1")

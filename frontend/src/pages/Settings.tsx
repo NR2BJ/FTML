@@ -77,7 +77,18 @@ export default function Settings() {
   }, {})
 
   const groupLabels: Record<string, string> = {
+    whisper: 'Whisper STT (Speech-to-Text)',
+    translation: 'Translation API Keys',
     subtitle: 'Subtitle & Translation',
+  }
+
+  const settingHelp: Record<string, string> = {
+    whisper_url: 'Internal Docker address of the Whisper server. Default works with the bundled whisper-sycl container.',
+    whisper_model: 'Model filename in /models directory (e.g. ggml-large-v3.bin). Changing this requires WHISPER_MODEL env var update and whisper container restart.',
+    whisper_language: 'Default language for transcription. Use "auto" for automatic detection, or ISO 639-1 codes (ko, en, ja, zh, etc.)',
+    gemini_api_key: 'Google Gemini API key for subtitle translation. Get one at aistudio.google.com',
+    openai_api_key: 'OpenAI API key for Whisper API and GPT translation. Used for both transcription and translation.',
+    deepl_api_key: 'DeepL API key for translation. Supports the free tier API.',
   }
 
   if (loading) {
@@ -134,9 +145,9 @@ export default function Settings() {
                     </button>
                   )}
                 </div>
-                {setting.key === 'whisper_url' && (
+                {settingHelp[setting.key] && (
                   <p className="text-xs text-gray-500 mt-1">
-                    URL of the Whisper STT server. Default: http://whisper-sycl:8178
+                    {settingHelp[setting.key]}
                   </p>
                 )}
               </div>
@@ -165,7 +176,8 @@ export default function Settings() {
       </button>
 
       <p className="text-xs text-gray-600 mt-4">
-        API keys are stored encrypted in the database. Changes to Whisper URL or API keys require a server restart to take effect for ongoing sessions.
+        Settings are stored in the database. Whisper model and language changes take effect on the next transcription job.
+        API key changes require a server restart.
       </p>
     </div>
   )

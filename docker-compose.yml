@@ -39,14 +39,15 @@ services:
     restart: unless-stopped
 
   # Whisper STT - Intel Arc (SYCL)
+  # Runs by default with backend. Remove this service if you don't need STT.
   whisper-sycl:
     build:
       context: ./whisper
       dockerfile: Dockerfile.sycl
-    profiles:
-      - whisper-sycl
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-ggml-large-v3.bin}
     volumes:
-      - ./data/whisper/models:/models:ro
+      - ${WHISPER_MODEL_PATH:-./data/whisper/models}:/models:ro
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
     devices:
       - /dev/dri:/dev/dri
