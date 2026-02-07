@@ -8,13 +8,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git cmake build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone and build whisper.cpp with SYCL support
-RUN git clone https://github.com/ggerganov/whisper.cpp.git /whisper
+# Clone and build whisper.cpp with SYCL support (pinned to stable release)
+RUN git clone --depth 1 --branch v1.8.3 https://github.com/ggerganov/whisper.cpp.git /whisper
 WORKDIR /whisper
 RUN cmake -B build \
     -DGGML_SYCL=ON \
     -DGGML_SYCL_TARGET=INTEL \
-    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=icx \
+    -DCMAKE_CXX_COMPILER=icpx
 RUN cmake --build build --config Release -j$(nproc) --target whisper-server
 
 # Runtime stage — needs oneAPI runtime for SYCL

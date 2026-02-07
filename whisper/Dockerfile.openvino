@@ -14,8 +14,8 @@ RUN wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCT
     && apt-get update && apt-get install -y --no-install-recommends openvino \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone and build whisper.cpp with OpenVINO support
-RUN git clone https://github.com/ggerganov/whisper.cpp.git /whisper
+# Clone and build whisper.cpp with OpenVINO support (pinned to stable release)
+RUN git clone --depth 1 --branch v1.8.3 https://github.com/ggerganov/whisper.cpp.git /whisper
 WORKDIR /whisper
 RUN cmake -B build \
     -DGGML_OPENVINO=ON \
