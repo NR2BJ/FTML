@@ -285,10 +285,14 @@ export default function Player({ path }: PlayerProps) {
     }
   }, [path])
 
-  // Initialize player (reacts to path and quality changes)
+  // Initialize player (reacts to path, quality, and codec negotiation changes)
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
+
+    // Wait for codec negotiation to complete before starting HLS
+    // (original quality doesn't need codec negotiation)
+    if (quality !== 'original' && !negotiatedCodec) return
 
     setCurrentFile(path)
     setError(null)
@@ -333,7 +337,7 @@ export default function Player({ path }: PlayerProps) {
         hlsRef.current = null
       }
     }
-  }, [path, quality, setCurrentFile, startHLS])
+  }, [path, quality, negotiatedCodec, setCurrentFile, startHLS])
 
   // Sync volume/muted/playbackRate
   useEffect(() => {

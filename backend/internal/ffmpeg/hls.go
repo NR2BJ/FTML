@@ -103,13 +103,31 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 	}
 	m.sessions[sessionID] = session
 
+	startedAt := time.Now()
 	go func() {
 		err := cmd.Wait()
 		if logFile != nil {
 			logFile.Close()
 		}
+		elapsed := time.Since(startedAt)
 		if err != nil {
-			log.Printf("[HLS] FFmpeg exited with error: session=%s err=%v", sessionID, err)
+			log.Printf("[HLS] FFmpeg exited with error: session=%s err=%v elapsed=%v", sessionID, err, elapsed)
+			// Print last lines of ffmpeg.log for debugging
+			logPath := filepath.Join(outputDir, "ffmpeg.log")
+			if logData, readErr := os.ReadFile(logPath); readErr == nil {
+				lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
+				start := len(lines) - 20
+				if start < 0 {
+					start = 0
+				}
+				log.Printf("[HLS] FFmpeg stderr:\n%s", strings.Join(lines[start:], "\n"))
+			}
+
+			// Auto-retry with software encoder if VAAPI failed quickly (< 5 seconds)
+			if elapsed < 5*time.Second && params.HWAccel == "vaapi" {
+				log.Printf("[HLS] VAAPI failed fast, retrying with software encoder: session=%s", sessionID)
+				m.retryWithSoftware(sessionID, inputPath, outputDir, startTime, quality, codec, params)
+			}
 		} else {
 			log.Printf("[HLS] FFmpeg completed: session=%s", sessionID)
 		}
@@ -200,12 +218,11 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 // appendVAAPIArgs adds VAAPI-specific video encoding arguments.
 func appendVAAPIArgs(args []string, params *TranscodeParams) []string {
 	// Video filter: use scale_vaapi (keeps processing on GPU)
-	filters := []string{}
+	// format=nv12 ensures 10-bit sources are converted to 8-bit on GPU
 	if params.Height > 0 {
-		filters = append(filters, fmt.Sprintf("scale_vaapi=w=-2:h=%d", params.Height))
-	}
-	if len(filters) > 0 {
-		args = append(args, "-vf", strings.Join(filters, ","))
+		args = append(args, "-vf", fmt.Sprintf("scale_vaapi=w=-2:h=%d:format=nv12", params.Height))
+	} else {
+		args = append(args, "-vf", "scale_vaapi=format=nv12")
 	}
 
 	// Quality control for VAAPI encoders
@@ -281,6 +298,83 @@ func appendSoftwareArgs(args []string, params *TranscodeParams) []string {
 	}
 
 	return args
+}
+
+// retryWithSoftware restarts a failed VAAPI session using software encoding.
+func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, startTime float64, quality, codec string, origParams *TranscodeParams) {
+	// Map VAAPI encoders to software fallbacks
+	swEncoder := map[string]string{
+		"h264_vaapi": "libx264",
+		"hevc_vaapi": "libx265",
+		"av1_vaapi":  "libsvtav1",
+	}
+
+	fallback, ok := swEncoder[origParams.Encoder]
+	if !ok {
+		log.Printf("[HLS] No software fallback for encoder %s", origParams.Encoder)
+		return
+	}
+
+	// Clean up failed output
+	os.RemoveAll(outputDir)
+	os.MkdirAll(outputDir, 0755)
+
+	// Build new params with software encoder
+	swParams := *origParams
+	swParams.Encoder = fallback
+	swParams.HWAccel = ""
+	swParams.Device = ""
+
+	ctx, cancel := context.WithCancel(context.Background())
+	args := buildFFmpegArgs(inputPath, outputDir, startTime, &swParams)
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+
+	logFile, err := os.Create(filepath.Join(outputDir, "ffmpeg.log"))
+	if err != nil {
+		cmd.Stderr = os.Stderr
+	} else {
+		cmd.Stderr = logFile
+	}
+
+	log.Printf("[HLS] Retrying with software: session=%s encoder=%s", sessionID, fallback)
+
+	if err := cmd.Start(); err != nil {
+		cancel()
+		if logFile != nil {
+			logFile.Close()
+		}
+		log.Printf("[HLS] Software fallback failed to start: session=%s err=%v", sessionID, err)
+		return
+	}
+
+	// Update the session in-place
+	m.mu.Lock()
+	if s, ok := m.sessions[sessionID]; ok {
+		s.Cmd = cmd
+		s.Cancel = cancel
+	}
+	m.mu.Unlock()
+
+	go func() {
+		err := cmd.Wait()
+		if logFile != nil {
+			logFile.Close()
+		}
+		if err != nil {
+			log.Printf("[HLS] Software fallback also failed: session=%s err=%v", sessionID, err)
+			logPath := filepath.Join(outputDir, "ffmpeg.log")
+			if logData, readErr := os.ReadFile(logPath); readErr == nil {
+				lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
+				start := len(lines) - 20
+				if start < 0 {
+					start = 0
+				}
+				log.Printf("[HLS] FFmpeg stderr:\n%s", strings.Join(lines[start:], "\n"))
+			}
+		} else {
+			log.Printf("[HLS] Software fallback completed: session=%s encoder=%s", sessionID, fallback)
+		}
+	}()
 }
 
 func (m *HLSManager) GetSessionDir(sessionID string) string {
