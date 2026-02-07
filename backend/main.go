@@ -14,6 +14,9 @@ import (
 	"github.com/video-stream/backend/internal/config"
 	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/ffmpeg"
+	"github.com/video-stream/backend/internal/job"
+	"github.com/video-stream/backend/internal/subtitle/translate"
+	"github.com/video-stream/backend/internal/subtitle/whisper"
 )
 
 func main() {
@@ -46,8 +49,27 @@ func main() {
 	// Initialize JWT service
 	jwtService := auth.NewJWTService(cfg.JWTSecret)
 
+	// Initialize job queue
+	jobQueue := job.NewJobQueue(database.DB())
+	defer jobQueue.Stop()
+	log.Printf("Job queue started")
+
+	// Load subtitle settings from DB (configured via admin settings UI)
+	whisperURL := database.GetSetting("whisper_url", "http://whisper-sycl:8178")
+	openAIKey := database.GetSetting("openai_api_key", "")
+	geminiKey := database.GetSetting("gemini_api_key", "")
+	deeplKey := database.GetSetting("deepl_api_key", "")
+
+	// Initialize whisper service and register with job queue
+	whisperSvc := whisper.NewService(cfg.MediaPath, cfg.SubtitlePath, whisperURL, openAIKey)
+	jobQueue.RegisterHandler(job.JobTranscribe, whisperSvc.HandleJob)
+
+	// Initialize translation service and register with job queue
+	translateSvc := translate.NewService(cfg.MediaPath, cfg.SubtitlePath, geminiKey, openAIKey, deeplKey)
+	jobQueue.RegisterHandler(job.JobTranslate, translateSvc.HandleJob)
+
 	// Create router
-	router := api.NewRouter(database, jwtService, cfg.MediaPath, cfg.DataPath)
+	router := api.NewRouter(database, jwtService, cfg, jobQueue)
 
 	// Start server
 	addr := fmt.Sprintf(":%d", cfg.Port)

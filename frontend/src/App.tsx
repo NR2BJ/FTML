@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/authStore'
 import Login from '@/pages/Login'
 import Browse from '@/pages/Browse'
 import Watch from '@/pages/Watch'
+import Settings from '@/pages/Settings'
 import Layout from '@/components/layout/Layout'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -46,6 +47,7 @@ export default function App() {
           <Route index element={<Browse />} />
           <Route path="browse/*" element={<Browse />} />
           <Route path="watch/*" element={<Watch />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
     </BrowserRouter>

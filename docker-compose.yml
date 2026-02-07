@@ -27,12 +27,52 @@ services:
       - MEDIA_PATH=/media
       - DATA_PATH=/data
       - DB_PATH=/data/videostream.db
+      - SUBTITLE_PATH=/data/subtitles
       - PORT=8080
       - LIBVA_DRIVER_NAME=iHD
     devices:
       - /dev/dri:/dev/dri
     group_add:
       - "${RENDER_GID:-109}"
+    networks:
+      - homeserver-net
+    restart: unless-stopped
+
+  # Whisper STT - Intel Arc (SYCL)
+  whisper-sycl:
+    build:
+      context: ./whisper
+      dockerfile: Dockerfile.sycl
+    profiles:
+      - whisper-sycl
+    volumes:
+      - ./data/whisper/models:/models:ro
+      - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:-109}"
+    networks:
+      - homeserver-net
+    restart: unless-stopped
+
+  # Whisper STT - NVIDIA (CUDA / faster-whisper)
+  whisper-cuda:
+    build:
+      context: ./whisper
+      dockerfile: Dockerfile.cuda
+    profiles:
+      - whisper-cuda
+    volumes:
+      - ./data/whisper/models:/models:ro
+      - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     networks:
       - homeserver-net
     restart: unless-stopped

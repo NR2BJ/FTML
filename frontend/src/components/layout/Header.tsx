@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
-import { Film, Search, LogOut, User } from 'lucide-react'
+import { Film, Search, LogOut, User, Settings } from 'lucide-react'
 import { searchFiles, type FileEntry } from '@/api/files'
 
 export default function Header() {
@@ -80,6 +80,13 @@ export default function Header() {
           <User className="w-4 h-4" />
           <span className="hidden sm:block">{user?.username}</span>
         </div>
+        <button
+          onClick={() => navigate('/settings')}
+          className="text-gray-400 hover:text-white transition-colors"
+          title="Settings"
+        >
+          <Settings className="w-5 h-5" />
+        </button>
         <button
           onClick={logout}
           className="text-gray-400 hover:text-white transition-colors"

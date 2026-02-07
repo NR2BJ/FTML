@@ -3,6 +3,7 @@ package handlers
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,15 +14,30 @@ import (
 	"strings"
 
 	"github.com/video-stream/backend/internal/ffmpeg"
+	"github.com/video-stream/backend/internal/job"
 	"github.com/video-stream/backend/internal/storage"
 )
 
 type SubtitleHandler struct {
-	mediaPath string
+	mediaPath    string
+	subtitlePath string
+	jobQueue     *job.JobQueue
 }
 
-func NewSubtitleHandler(mediaPath string) *SubtitleHandler {
-	return &SubtitleHandler{mediaPath: mediaPath}
+func NewSubtitleHandler(mediaPath, subtitlePath string, jobQueue *job.JobQueue) *SubtitleHandler {
+	// Ensure subtitle output directory exists
+	os.MkdirAll(subtitlePath, 0755)
+	return &SubtitleHandler{
+		mediaPath:    mediaPath,
+		subtitlePath: subtitlePath,
+		jobQueue:     jobQueue,
+	}
+}
+
+// videoHash returns a short hash of the video path for subtitle storage
+func videoHash(videoPath string) string {
+	h := sha256.Sum256([]byte(videoPath))
+	return fmt.Sprintf("%x", h[:8])
 }
 
 type SubtitleEntry struct {
@@ -129,6 +145,46 @@ func (h *SubtitleHandler) ListSubtitles(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// 3. Find generated subtitles in subtitle output directory
+	hash := videoHash(path)
+	genDir := filepath.Join(h.subtitlePath, hash)
+	genEntries, err := os.ReadDir(genDir)
+	if err == nil {
+		for _, entry := range genEntries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			ext := strings.ToLower(filepath.Ext(name))
+			if ext != ".vtt" && ext != ".srt" {
+				continue
+			}
+
+			label := name
+			lang := ""
+			// Parse generated subtitle filenames: whisper_ja.vtt, translate_ko_gemini.vtt
+			baseName := strings.TrimSuffix(name, ext)
+			if strings.HasPrefix(baseName, "whisper_") {
+				lang = strings.TrimPrefix(baseName, "whisper_")
+				label = fmt.Sprintf("Generated (%s)", lang)
+			} else if strings.HasPrefix(baseName, "translate_") {
+				parts := strings.SplitN(strings.TrimPrefix(baseName, "translate_"), "_", 2)
+				if len(parts) == 2 {
+					lang = parts[0]
+					label = fmt.Sprintf("Translated %s (%s)", lang, parts[1])
+				}
+			}
+
+			entries = append(entries, SubtitleEntry{
+				ID:       "generated:" + name,
+				Label:    label,
+				Language: lang,
+				Type:     "generated",
+				Format:   strings.TrimPrefix(ext, "."),
+			})
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(entries)
 }
@@ -149,6 +205,8 @@ func (h *SubtitleHandler) ServeSubtitle(w http.ResponseWriter, r *http.Request) 
 		h.serveEmbeddedSubtitle(w, fullPath, subtitleID)
 	} else if strings.HasPrefix(subtitleID, "external:") {
 		h.serveExternalSubtitle(w, fullPath, subtitleID)
+	} else if strings.HasPrefix(subtitleID, "generated:") {
+		h.serveGeneratedSubtitle(w, path, subtitleID)
 	} else {
 		jsonError(w, "invalid subtitle id", http.StatusBadRequest)
 	}
@@ -266,4 +324,124 @@ func langFromTags(tags map[string]string) string {
 		return l
 	}
 	return ""
+}
+
+func (h *SubtitleHandler) serveGeneratedSubtitle(w http.ResponseWriter, videoPath, subtitleID string) {
+	filename := strings.TrimPrefix(subtitleID, "generated:")
+	hash := videoHash(videoPath)
+	subPath := filepath.Join(h.subtitlePath, hash, filename)
+
+	// Security: ensure file is within subtitle directory
+	absBase, _ := filepath.Abs(h.subtitlePath)
+	absSub, _ := filepath.Abs(subPath)
+	if !strings.HasPrefix(absSub, absBase) {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
+
+	data, err := os.ReadFile(subPath)
+	if err != nil {
+		jsonError(w, "subtitle file not found", http.StatusNotFound)
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(filename))
+
+	w.Header().Set("Cache-Control", "max-age=3600")
+
+	switch ext {
+	case ".vtt":
+		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+		w.Write(data)
+	case ".srt":
+		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+		w.Write(srtToVTT(data))
+	default:
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write(data)
+	}
+}
+
+// GenerateSubtitle creates a transcription job
+func (h *SubtitleHandler) GenerateSubtitle(w http.ResponseWriter, r *http.Request) {
+	path := extractPath(r)
+	fullPath := filepath.Join(h.mediaPath, path)
+
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		jsonError(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	var params job.TranscribeParams
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Defaults
+	if params.Engine == "" {
+		params.Engine = "whisper.cpp"
+	}
+	if params.Model == "" {
+		params.Model = "large-v3"
+	}
+	if params.Language == "" {
+		params.Language = "auto"
+	}
+
+	j, err := h.jobQueue.Enqueue(job.JobTranscribe, path, params)
+	if err != nil {
+		jsonError(w, "failed to create job: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{
+		"job_id": j.ID,
+	})
+}
+
+// TranslateSubtitle creates a translation job
+func (h *SubtitleHandler) TranslateSubtitle(w http.ResponseWriter, r *http.Request) {
+	path := extractPath(r)
+	fullPath := filepath.Join(h.mediaPath, path)
+
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		jsonError(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	var params job.TranslateParams
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if params.SubtitleID == "" {
+		jsonError(w, "subtitle_id required", http.StatusBadRequest)
+		return
+	}
+	if params.TargetLang == "" {
+		jsonError(w, "target_lang required", http.StatusBadRequest)
+		return
+	}
+	if params.Engine == "" {
+		params.Engine = "gemini"
+	}
+	if params.Preset == "" {
+		params.Preset = "movie"
+	}
+
+	j, err := h.jobQueue.Enqueue(job.JobTranslate, path, params)
+	if err != nil {
+		jsonError(w, "failed to create job: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{
+		"job_id": j.ID,
+	})
 }

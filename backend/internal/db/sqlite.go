@@ -46,6 +46,26 @@ func (d *Database) migrate() error {
 		FOREIGN KEY (user_id) REFERENCES users(id),
 		UNIQUE(user_id, file_path)
 	);
+
+	CREATE TABLE IF NOT EXISTS settings (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS jobs (
+		id TEXT PRIMARY KEY,
+		type TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		file_path TEXT NOT NULL,
+		params TEXT NOT NULL,
+		progress REAL DEFAULT 0,
+		result TEXT,
+		error TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		started_at DATETIME,
+		completed_at DATETIME
+	);
 	`
 	_, err := d.db.Exec(schema)
 	return err
@@ -118,6 +138,50 @@ func (d *Database) GetWatchPosition(userID int64, filePath string) (float64, err
 	return pos, err
 }
 
+// GetSetting returns a setting value by key, or defaultVal if not found
+func (d *Database) GetSetting(key, defaultVal string) string {
+	var val string
+	err := d.db.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&val)
+	if err != nil {
+		return defaultVal
+	}
+	return val
+}
+
+// SetSetting upserts a setting
+func (d *Database) SetSetting(key, value string) error {
+	_, err := d.db.Exec(`
+		INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP`,
+		key, value, value,
+	)
+	return err
+}
+
+// GetAllSettings returns all settings as a map
+func (d *Database) GetAllSettings() (map[string]string, error) {
+	rows, err := d.db.Query("SELECT key, value FROM settings")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		result[k] = v
+	}
+	return result, nil
+}
+
 func (d *Database) Close() error {
 	return d.db.Close()
+}
+
+// DB returns the underlying sql.DB for use by other packages (e.g., job queue)
+func (d *Database) DB() *sql.DB {
+	return d.db
 }

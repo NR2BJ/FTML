@@ -8,11 +8,13 @@ import (
 	"github.com/video-stream/backend/internal/api/handlers"
 	"github.com/video-stream/backend/internal/api/middleware"
 	"github.com/video-stream/backend/internal/auth"
+	"github.com/video-stream/backend/internal/config"
 	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/ffmpeg"
+	"github.com/video-stream/backend/internal/job"
 )
 
-func NewRouter(database *db.Database, jwtService *auth.JWTService, mediaPath, dataPath string) *chi.Mux {
+func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.Config, jobQueue *job.JobQueue) *chi.Mux {
 	r := chi.NewRouter()
 
 	// Global middleware
@@ -23,11 +25,13 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, mediaPath, da
 
 	// Handlers
 	authHandler := handlers.NewAuthHandler(database, jwtService)
-	filesHandler := handlers.NewFilesHandler(mediaPath, dataPath)
-	hlsManager := ffmpeg.NewHLSManager(dataPath)
-	streamHandler := handlers.NewStreamHandler(mediaPath, hlsManager)
+	filesHandler := handlers.NewFilesHandler(cfg.MediaPath, cfg.DataPath)
+	hlsManager := ffmpeg.NewHLSManager(cfg.DataPath)
+	streamHandler := handlers.NewStreamHandler(cfg.MediaPath, hlsManager)
 	userHandler := handlers.NewUserHandler(database)
-	subtitleHandler := handlers.NewSubtitleHandler(mediaPath)
+	subtitleHandler := handlers.NewSubtitleHandler(cfg.MediaPath, cfg.SubtitlePath, jobQueue)
+	jobHandler := handlers.NewJobHandler(jobQueue)
+	settingsHandler := handlers.NewSettingsHandler(database)
 
 	// Public routes
 	r.Route("/api", func(r chi.Router) {
@@ -62,6 +66,17 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, mediaPath, da
 			// Subtitles
 			r.Get("/subtitle/list/*", subtitleHandler.ListSubtitles)
 			r.Get("/subtitle/content/*", subtitleHandler.ServeSubtitle)
+			r.Post("/subtitle/generate/*", subtitleHandler.GenerateSubtitle)
+			r.Post("/subtitle/translate/*", subtitleHandler.TranslateSubtitle)
+
+			// Jobs
+			r.Get("/jobs", jobHandler.ListJobs)
+			r.Get("/jobs/{id}", jobHandler.GetJob)
+			r.Delete("/jobs/{id}", jobHandler.CancelJob)
+
+			// Settings (admin only for now, TODO: add role check)
+			r.Get("/settings", settingsHandler.GetSettings)
+			r.Put("/settings", settingsHandler.UpdateSettings)
 
 			// User
 			r.Put("/user/history/*", userHandler.SavePosition)
