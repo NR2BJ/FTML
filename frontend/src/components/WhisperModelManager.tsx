@@ -10,6 +10,7 @@ import {
   Radio,
   Cpu,
   Zap,
+  Info,
 } from 'lucide-react'
 import {
   listWhisperModels,
@@ -295,6 +296,16 @@ export default function WhisperModelManager() {
           </span>
         </div>
       )}
+
+      {/* OpenVINO GenAI info banner */}
+      <div className="flex items-start gap-2 text-xs text-cyan-300/80 mb-3 bg-cyan-500/5 border border-cyan-500/20 rounded-lg px-3 py-2">
+        <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+        <span>
+          OpenVINO GenAI backend downloads models from HuggingFace automatically on first start.
+          Change the model via <code className="text-cyan-400 bg-cyan-500/10 px-1 rounded">WHISPER_MODEL_ID</code> in docker-compose.yml.
+          The models below are for legacy whisper.cpp backends only.
+        </span>
+      </div>
 
       {error && (
         <div className="flex items-center gap-2 text-sm text-red-400 mb-3 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">

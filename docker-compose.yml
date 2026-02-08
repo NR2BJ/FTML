@@ -40,65 +40,21 @@ services:
       - homeserver-net
     restart: unless-stopped
 
-  # Whisper STT - Intel Arc (SYCL)
-  whisper-sycl:
+  # Whisper STT - OpenVINO GenAI (Intel Arc GPU accelerated)
+  whisper:
     build:
       context: ./whisper
-      dockerfile: Dockerfile.sycl
+      dockerfile: Dockerfile.openvino-genai
     environment:
-      - WHISPER_MODEL=${WHISPER_MODEL_SYCL:-${WHISPER_MODEL:-ggml-large-v3.bin}}
-      - BACKEND_URL=http://backend:8080
-    depends_on:
-      - backend
+      - MODEL_ID=${WHISPER_MODEL_ID:-OpenVINO/whisper-large-v3-turbo-int8-ov}
+      - DEVICE=${WHISPER_DEVICE:-GPU}
     volumes:
-      - whisper_models:/models
+      - whisper_models:/root/.cache/huggingface
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
     devices:
       - /dev/dri:/dev/dri
     group_add:
       - "${RENDER_GID:-109}"
-    networks:
-      - homeserver-net
-    restart: unless-stopped
-
-  # Whisper STT - Intel Arc (OpenVINO)
-  whisper-openvino:
-    build:
-      context: ./whisper
-      dockerfile: Dockerfile.openvino
-    environment:
-      - WHISPER_MODEL=${WHISPER_MODEL_OPENVINO:-${WHISPER_MODEL:-ggml-large-v3.bin}}
-      - BACKEND_URL=http://backend:8080
-    depends_on:
-      - backend
-    volumes:
-      - whisper_models:/models
-      - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
-    devices:
-      - /dev/dri:/dev/dri
-    group_add:
-      - "${RENDER_GID:-109}"
-    networks:
-      - homeserver-net
-    restart: unless-stopped
-
-  # Whisper STT - NVIDIA (CUDA / faster-whisper)
-  whisper-cuda:
-    build:
-      context: ./whisper
-      dockerfile: Dockerfile.cuda
-    profiles:
-      - whisper-cuda
-    volumes:
-      - whisper_models:/models
-      - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     networks:
       - homeserver-net
     restart: unless-stopped

@@ -24,6 +24,7 @@ import {
 } from '@/api/whisperBackends'
 
 const TYPE_CONFIG: Record<string, { label: string; color: string; icon: typeof Cpu }> = {
+  'openvino-genai': { label: 'OpenVINO GenAI', color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20', icon: Zap },
   sycl: { label: 'SYCL', color: 'text-blue-400 bg-blue-500/10 border-blue-500/20', icon: Zap },
   openvino: { label: 'OpenVINO', color: 'text-violet-400 bg-violet-500/10 border-violet-500/20', icon: Eye },
   cuda: { label: 'CUDA', color: 'text-green-400 bg-green-500/10 border-green-500/20', icon: Zap },
@@ -32,6 +33,7 @@ const TYPE_CONFIG: Record<string, { label: string; color: string; icon: typeof C
 }
 
 const BACKEND_TYPES = [
+  { value: 'openvino-genai', label: 'OpenVINO GenAI (Intel Arc)' },
   { value: 'sycl', label: 'SYCL (Intel Arc)' },
   { value: 'openvino', label: 'OpenVINO (Intel)' },
   { value: 'cuda', label: 'CUDA (NVIDIA)' },
@@ -40,6 +42,7 @@ const BACKEND_TYPES = [
 ]
 
 const DEFAULT_URLS: Record<string, string> = {
+  'openvino-genai': 'http://whisper:8178',
   sycl:     'http://whisper-sycl:8178',
   openvino: 'http://whisper-openvino:8178',
   cuda:     'http://whisper-cuda:8178',
@@ -55,8 +58,8 @@ export default function WhisperBackendManager() {
 
   // Add form state
   const [newName, setNewName] = useState('')
-  const [newType, setNewType] = useState('sycl')
-  const [newURL, setNewURL] = useState(DEFAULT_URLS['sycl'])
+  const [newType, setNewType] = useState('openvino-genai')
+  const [newURL, setNewURL] = useState(DEFAULT_URLS['openvino-genai'])
   const [addError, setAddError] = useState<string | null>(null)
 
   // Edit state
@@ -97,8 +100,8 @@ export default function WhisperBackendManager() {
         url: newType === 'openai' ? '' : newURL.trim(),
       })
       setNewName('')
-      setNewType('sycl')
-      setNewURL(DEFAULT_URLS['sycl'])
+      setNewType('openvino-genai')
+      setNewURL(DEFAULT_URLS['openvino-genai'])
       setShowAdd(false)
       loadBackends()
     } catch {

@@ -1,0 +1,7 @@
+openvino-genai
+fastapi
+uvicorn[standard]
+python-multipart
+librosa
+numpy
+huggingface_hub

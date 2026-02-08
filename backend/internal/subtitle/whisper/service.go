@@ -54,6 +54,9 @@ func (s *Service) resolveEngine(engineKey string) (Transcriber, error) {
 			}
 			return NewOpenAIWhisperClient(key), nil
 		}
+		if backend.BackendType == "openvino-genai" {
+			return NewOpenVINOGenAIClient(backend.URL), nil
+		}
 		return NewWhisperCppClient(backend.URL), nil
 	}
 

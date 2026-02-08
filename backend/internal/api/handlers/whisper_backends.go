@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -85,9 +86,9 @@ func (h *WhisperBackendsHandler) CreateBackend(w http.ResponseWriter, r *http.Re
 	}
 
 	// Validate backend_type
-	validTypes := map[string]bool{"sycl": true, "openvino": true, "cuda": true, "cpu": true, "openai": true}
+	validTypes := map[string]bool{"sycl": true, "openvino": true, "openvino-genai": true, "cuda": true, "cpu": true, "openai": true}
 	if !validTypes[req.BackendType] {
-		jsonError(w, "backend_type must be one of: sycl, openvino, cuda, cpu, openai", http.StatusBadRequest)
+		jsonError(w, "backend_type must be one of: sycl, openvino, openvino-genai, cuda, cpu, openai", http.StatusBadRequest)
 		return
 	}
 
@@ -222,8 +223,12 @@ func (h *WhisperBackendsHandler) HealthCheck(w http.ResponseWriter, r *http.Requ
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
+	healthURL := backend.URL
+	if backend.BackendType == "openvino-genai" {
+		healthURL = strings.TrimRight(backend.URL, "/") + "/health"
+	}
 	start := time.Now()
-	resp, err := client.Get(backend.URL)
+	resp, err := client.Get(healthURL)
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {
