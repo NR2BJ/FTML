@@ -17,21 +17,27 @@ RUN wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCT
 # Clone and build whisper.cpp with OpenVINO support (pinned to stable release)
 RUN git clone --depth 1 --branch v1.8.3 https://github.com/ggerganov/whisper.cpp.git /whisper
 WORKDIR /whisper
-RUN cmake -B build \
+# Source OpenVINO env before cmake so it finds the libraries
+RUN bash -c "source /opt/intel/openvino/setupvars.sh 2>/dev/null || true && \
+    cmake -B build \
     -DGGML_OPENVINO=ON \
     -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_SHARED_LIBS=OFF
-RUN cmake --build build --config Release -j$(nproc) --target whisper-server
+    -DBUILD_SHARED_LIBS=OFF"
+RUN bash -c "source /opt/intel/openvino/setupvars.sh 2>/dev/null || true && \
+    cmake --build build --config Release -j$(nproc) --target whisper-server"
 
 # Runtime stage
 FROM intel/oneapi-runtime:2025.0.1-0-devel-ubuntu24.04
 
-# Install OpenVINO runtime
+# Install OpenVINO runtime + Intel GPU compute drivers (Level Zero + OpenCL)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget gnupg2 ca-certificates \
     && wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB -O- | gpg --dearmor > /usr/share/keyrings/intel-openvino-archive-keyring.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/intel-openvino-archive-keyring.gpg] https://apt.repos.intel.com/openvino/2024 ubuntu24 main" > /etc/apt/sources.list.d/openvino.list \
-    && apt-get update && apt-get install -y --no-install-recommends openvino \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        openvino \
+        intel-opencl-icd \
+        level-zero \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /whisper/build/bin/whisper-server /usr/local/bin/

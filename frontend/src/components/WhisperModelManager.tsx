@@ -324,9 +324,8 @@ export default function WhisperModelManager() {
 
       <p className="text-xs text-gray-600 mt-2 flex items-center gap-1.5">
         <HardDrive className="w-3 h-3" />
-        Models are downloaded from HuggingFace and stored in the shared Docker volume.
-        After changing the active model, restart the whisper container:
-        <code className="text-gray-500 bg-dark-800 px-1 rounded">docker compose restart whisper-sycl</code>
+        Models are stored in a shared Docker volume.
+        After changing the active model, restart the whisper containers to apply.
       </p>
     </div>
   )

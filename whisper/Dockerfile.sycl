@@ -20,8 +20,14 @@ RUN cmake -B build \
     -DBUILD_SHARED_LIBS=OFF
 RUN cmake --build build --config Release -j$(nproc) --target whisper-server
 
-# Runtime stage — needs oneAPI runtime for SYCL
+# Runtime stage — needs oneAPI runtime for SYCL + Intel GPU drivers
 FROM intel/oneapi-runtime:2025.0.1-0-devel-ubuntu24.04
+
+# Install Intel GPU compute runtime (Level Zero + OpenCL) for Arc/iGPU
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    intel-opencl-icd \
+    level-zero \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /whisper/build/bin/whisper-server /usr/local/bin/
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
