@@ -59,15 +59,11 @@ services:
       - homeserver-net
     restart: unless-stopped
 
-  # Whisper STT - Intel Arc (OpenVINO) — alternative to SYCL
-  # Enable with: docker compose --profile whisper-openvino up
-  # Then set whisper_url to http://whisper-openvino:8178 in Settings
+  # Whisper STT - Intel Arc (OpenVINO)
   whisper-openvino:
     build:
       context: ./whisper
       dockerfile: Dockerfile.openvino
-    profiles:
-      - whisper-openvino
     environment:
       - WHISPER_MODEL=${WHISPER_MODEL:-ggml-large-v3-turbo.bin}
     volumes:
