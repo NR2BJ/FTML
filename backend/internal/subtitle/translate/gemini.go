@@ -185,19 +185,26 @@ func (g *GeminiTranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 		}
 	}
 
-	// Map translations back to cues
+	// Map translations back to cues, defending against empty translations
 	result := make([]SubtitleCue, len(cues))
+	emptyCount := 0
 	for i, cue := range cues {
 		result[i] = SubtitleCue{
 			Index: cue.Index,
 			Start: cue.Start,
 			End:   cue.End,
 		}
-		if i < len(translations) {
+		if i < len(translations) && strings.TrimSpace(translations[i]) != "" {
 			result[i].Text = translations[i]
 		} else {
-			result[i].Text = cue.Text // fallback to original
+			// Fallback to original text if translation is empty
+			result[i].Text = cue.Text
+			emptyCount++
 		}
+	}
+
+	if emptyCount > 0 {
+		log.Printf("[gemini] WARNING: %d/%d translations were empty, kept original text", emptyCount, len(cues))
 	}
 
 	return result, nil

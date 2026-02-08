@@ -68,8 +68,14 @@ func CuesToVTT(cues []SubtitleCue) string {
 	var sb strings.Builder
 	sb.WriteString("WEBVTT\n\n")
 
-	for i, cue := range cues {
-		sb.WriteString(fmt.Sprintf("%d\n", i+1))
+	idx := 0
+	for _, cue := range cues {
+		// Skip cues with empty text
+		if strings.TrimSpace(cue.Text) == "" {
+			continue
+		}
+		idx++
+		sb.WriteString(fmt.Sprintf("%d\n", idx))
 		sb.WriteString(fmt.Sprintf("%s --> %s\n", formatTimestamp(cue.Start), formatTimestamp(cue.End)))
 		sb.WriteString(cue.Text)
 		sb.WriteString("\n\n")

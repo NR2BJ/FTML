@@ -6,3 +6,4 @@ librosa
 numpy
 huggingface_hub
 silero-vad-lite
+demucs

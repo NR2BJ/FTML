@@ -710,10 +710,14 @@ func (m *HLSManager) cleanup() {
 				log.Printf("[HLS] Stopped session: %s (max age 30m)", id)
 				continue
 			}
-			// Paused sessions: give them 5 minutes before cleanup
-			// (user might come back and resume)
+			// Paused sessions: keep alive as long as client sends heartbeats (60s interval).
+			// Default 5-minute timeout if no heartbeats received.
 			if s.Paused {
-				if now.Sub(s.PausedAt) > 5*time.Minute {
+				pausedDur := now.Sub(s.PausedAt)
+				heartbeatAge := now.Sub(s.LastHeartbeat)
+				// Kill if no heartbeat for 2 minutes (client sends every 60s)
+				// OR if paused for 5+ minutes without any heartbeat refresh
+				if heartbeatAge > 2*time.Minute || (pausedDur > 5*time.Minute && heartbeatAge > 90*time.Second) {
 					s.Stopped = true
 					if s.Cmd != nil && s.Cmd.Process != nil {
 						s.Cmd.Process.Signal(syscall.SIGCONT)
@@ -721,9 +725,9 @@ func (m *HLSManager) cleanup() {
 					s.Cancel()
 					os.RemoveAll(s.OutputDir)
 					delete(m.sessions, id)
-					log.Printf("[HLS] Stopped paused session: %s (paused timeout 5m)", id)
+					log.Printf("[HLS] Stopped paused session: %s (paused %.0fs, last heartbeat %.0fs ago)", id, pausedDur.Seconds(), heartbeatAge.Seconds())
 				}
-				continue // skip heartbeat check for paused sessions
+				continue // skip active heartbeat check for paused sessions
 			}
 			// Active sessions: idle timeout 45 seconds without heartbeat
 			if now.Sub(s.LastHeartbeat) > 45*time.Second {

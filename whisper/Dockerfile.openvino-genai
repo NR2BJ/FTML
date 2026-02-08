@@ -9,6 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+# Install CPU-only PyTorch first (required by demucs for vocal separation)
+RUN pip3 install --break-system-packages --no-cache-dir \
+    torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Install demucs separately (depends on torch)
+RUN pip3 install --break-system-packages --no-cache-dir demucs
+
 COPY requirements.txt /app/
 RUN pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt
 
@@ -18,6 +25,9 @@ WORKDIR /app
 ENV MODEL_ID=OpenVINO/distil-whisper-large-v3-int8-ov
 ENV DEVICE=GPU
 ENV PORT=8178
+ENV ENABLE_DEMUCS=1
+# Prevent PyTorch from caching CUDA memory (we use CPU-only)
+ENV PYTORCH_NO_CUDA_MEMORY_CACHING=1
 
 EXPOSE 8178
 

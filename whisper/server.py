@@ -3,6 +3,10 @@ FTML Whisper Server — OpenVINO GenAI WhisperPipeline
 Lightweight FastAPI server wrapping OpenVINO's WhisperPipeline for
 Intel Arc GPU-accelerated speech-to-text with timestamp support.
 
+Pipeline (when ENABLE_DEMUCS=1):
+  Audio → Demucs vocal separation (CPU) → VAD segment extraction
+    → per-segment whisper inference (GPU) → timestamp remapping → VTT
+
 Endpoints:
   POST /v1/audio/transcriptions  (OpenAI-compatible)
   POST /inference                (legacy compat)
@@ -52,6 +56,11 @@ _idle_timer_lock = threading.Lock()
 # Silero VAD for filtering non-speech audio (BGM, effects, silence)
 # before sending to Whisper — prevents hallucination on non-speech segments.
 vad_model = SileroVAD(16000)
+
+# Demucs vocal separation (lazy loaded)
+ENABLE_DEMUCS = os.environ.get("ENABLE_DEMUCS", "1") == "1"
+_demucs_separator = None
+_demucs_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Model loading / unloading
@@ -156,6 +165,7 @@ async def startup():
         log.info(f"VRAM auto-release enabled: model unloads after {IDLE_TIMEOUT}s idle")
     else:
         log.info("VRAM auto-release disabled (IDLE_TIMEOUT=0)")
+    log.info(f"Demucs vocal separation: {'enabled' if ENABLE_DEMUCS else 'disabled'}")
 
 
 # ---------------------------------------------------------------------------
@@ -179,11 +189,13 @@ def chunks_to_vtt(chunks) -> str:
     repeat_count = 0
 
     for chunk in chunks:
-        text = chunk.text.strip()
+        text = chunk.text.strip() if hasattr(chunk, 'text') else chunk.get('text', '').strip()
         if not text:
             continue
 
-        duration = chunk.end_ts - chunk.start_ts
+        start_ts = chunk.start_ts if hasattr(chunk, 'start_ts') else chunk['start_ts']
+        end_ts = chunk.end_ts if hasattr(chunk, 'end_ts') else chunk['end_ts']
+        duration = end_ts - start_ts
 
         # Skip chunks spanning an entire 30s window (likely hallucination)
         if duration >= 29.0:
@@ -198,8 +210,8 @@ def chunks_to_vtt(chunks) -> str:
             repeat_count = 0
         prev_text = text
 
-        start = format_ts(chunk.start_ts)
-        end = format_ts(chunk.end_ts)
+        start = format_ts(start_ts)
+        end = format_ts(end_ts)
         lines.append(str(idx))
         lines.append(f"{start} --> {end}")
         lines.append(text)
@@ -215,6 +227,64 @@ def decode_audio(audio_bytes: bytes) -> np.ndarray:
     audio, _ = librosa.load(audio_io, sr=16000, mono=True)
     return audio.astype(np.float32)
 
+
+# ---------------------------------------------------------------------------
+# Demucs vocal separation
+# ---------------------------------------------------------------------------
+
+def _get_demucs_separator():
+    """Lazy-load the Demucs separator (downloads htdemucs model on first use)."""
+    global _demucs_separator
+    with _demucs_lock:
+        if _demucs_separator is not None:
+            return _demucs_separator
+        log.info("Loading Demucs htdemucs model (first use, may download)...")
+        import torch
+        from demucs.api import Separator
+        _demucs_separator = Separator(model="htdemucs", device="cpu", shifts=1, overlap=0.25)
+        log.info("Demucs model loaded")
+        return _demucs_separator
+
+
+def demucs_separate(audio_16k: np.ndarray) -> np.ndarray:
+    """Extract vocals from audio using Demucs htdemucs model.
+
+    Args:
+        audio_16k: 16kHz mono float32 numpy array
+
+    Returns:
+        vocals_16k: 16kHz mono float32 numpy array (vocals only)
+    """
+    import torch
+
+    separator = _get_demucs_separator()
+
+    # Demucs expects 44.1kHz stereo — upsample and duplicate channels
+    audio_44k = librosa.resample(audio_16k, orig_sr=16000, target_sr=44100)
+    # Create stereo by duplicating mono
+    stereo = np.stack([audio_44k, audio_44k], axis=0)  # (2, samples)
+    wav_tensor = torch.from_numpy(stereo).float()
+
+    t0 = time.time()
+    # Run separation
+    _, separated = separator.separate_tensor(wav_tensor, sr=44100)
+    elapsed = time.time() - t0
+
+    # Extract vocals stem — separated is a dict with stem names
+    vocals_44k = separated["vocals"].numpy()  # (2, samples)
+    # Convert back to mono 16kHz
+    vocals_mono = vocals_44k.mean(axis=0)  # average stereo to mono
+    vocals_16k = librosa.resample(vocals_mono, orig_sr=44100, target_sr=16000)
+
+    log.info(f"Demucs: vocal separation done in {elapsed:.1f}s "
+             f"({len(audio_16k)/16000:.1f}s audio)")
+
+    return vocals_16k.astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# VAD segment extraction
+# ---------------------------------------------------------------------------
 
 def vad_speech_timestamps(audio: np.ndarray, sr: int = 16000,
                            threshold: float = 0.5,
@@ -261,33 +331,231 @@ def vad_speech_timestamps(audio: np.ndarray, sr: int = 16000,
     return segments
 
 
-def apply_vad(audio: np.ndarray) -> tuple[np.ndarray, list[dict]]:
-    """Replace non-speech segments with silence using Silero VAD."""
-    segments = vad_speech_timestamps(audio)
+def merge_segments(segments: list[dict], sr: int = 16000,
+                   gap_threshold_s: float = 1.5,
+                   max_duration_s: float = 28.0,
+                   min_duration_s: float = 0.5) -> list[dict]:
+    """Merge close VAD segments and enforce duration limits.
+
+    Args:
+        segments: list of {'start': sample_idx, 'end': sample_idx}
+        gap_threshold_s: merge segments closer than this (seconds)
+        max_duration_s: split segments longer than this (whisper 30s window)
+        min_duration_s: drop segments shorter than this
+
+    Returns:
+        merged list of {'start': sample_idx, 'end': sample_idx}
+    """
     if not segments:
-        return audio, []
+        return []
 
-    result = np.zeros_like(audio)
-    for seg in segments:
-        result[seg['start']:seg['end']] = audio[seg['start']:seg['end']]
+    gap_samples = int(sr * gap_threshold_s)
+    max_samples = int(sr * max_duration_s)
+    min_samples = int(sr * min_duration_s)
 
-    return result, segments
+    merged = [dict(segments[0])]
+
+    for seg in segments[1:]:
+        prev = merged[-1]
+        gap = seg['start'] - prev['end']
+
+        # Merge if gap is small AND combined duration stays under max
+        combined_dur = seg['end'] - prev['start']
+        if gap <= gap_samples and combined_dur <= max_samples:
+            prev['end'] = seg['end']
+        else:
+            merged.append(dict(seg))
+
+    # Split segments that are too long
+    result = []
+    for seg in merged:
+        dur = seg['end'] - seg['start']
+        if dur <= max_samples:
+            if dur >= min_samples:
+                result.append(seg)
+        else:
+            # Split into max_duration_s chunks
+            pos = seg['start']
+            while pos < seg['end']:
+                chunk_end = min(pos + max_samples, seg['end'])
+                if (chunk_end - pos) >= min_samples:
+                    result.append({'start': pos, 'end': chunk_end})
+                pos = chunk_end
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Inference
+# ---------------------------------------------------------------------------
+
+def run_segment_inference(audio: np.ndarray, segments: list[dict],
+                          language: str = "", sr: int = 16000):
+    """Run whisper inference on individual VAD segments, then remap timestamps.
+
+    This is the core anti-hallucination strategy: instead of feeding the entire
+    audio (with silence/BGM gaps) to whisper, we cut out speech segments and
+    run inference on each one individually. This prevents whisper from
+    hallucinating on non-speech windows.
+
+    Args:
+        audio: full audio array (16kHz mono float32)
+        segments: list of {'start': sample_idx, 'end': sample_idx}
+        language: language code or "" for auto
+        sr: sample rate
+
+    Returns:
+        (all_chunks, full_text, total_elapsed)
+    """
+    ensure_model_loaded()
+
+    config = pipeline.get_generation_config()
+    config.return_timestamps = True
+    config.task = "transcribe"
+    if language and language != "auto":
+        config.language = f"<|{language}|>"
+
+    log.info(f"Segmented inference: {len(segments)} segments, "
+             f"model={model_id_str}, language={language or 'auto'}")
+
+    all_chunks = []
+    total_elapsed = 0.0
+    pad_samples = int(sr * 0.2)  # 200ms padding on each side
+
+    for i, seg in enumerate(segments):
+        seg_start_s = seg['start'] / sr
+        seg_end_s = seg['end'] / sr
+
+        # Extract segment with padding (clamped to audio bounds)
+        extract_start = max(0, seg['start'] - pad_samples)
+        extract_end = min(len(audio), seg['end'] + pad_samples)
+        segment_audio = audio[extract_start:extract_end]
+
+        # Offset for timestamp remapping: segment start in absolute time
+        # Subtract the leading padding so whisper's local timestamps align
+        pad_offset_s = (seg['start'] - extract_start) / sr
+        absolute_offset_s = seg_start_s - pad_offset_s
+
+        t0 = time.time()
+        result = pipeline.generate(segment_audio, config)
+        elapsed = time.time() - t0
+        total_elapsed += elapsed
+
+        chunks = getattr(result, "chunks", [])
+
+        # Remap timestamps from local (segment-relative) to absolute
+        seg_duration_s = len(segment_audio) / sr
+        for c in chunks:
+            text = c.text.strip()
+            if not text:
+                continue
+
+            # Remap: local timestamp + absolute offset
+            abs_start = c.start_ts + absolute_offset_s
+            abs_end = c.end_ts + absolute_offset_s
+
+            # Clamp to segment boundaries
+            abs_start = max(seg_start_s, abs_start)
+            abs_end = min(seg_end_s, abs_end)
+
+            if abs_end <= abs_start:
+                continue
+
+            all_chunks.append({
+                'text': text,
+                'start_ts': abs_start,
+                'end_ts': abs_end,
+            })
+
+        seg_text = " ".join(c.text.strip() for c in chunks if c.text.strip())
+        log.info(f"  Segment {i+1}/{len(segments)} "
+                 f"[{seg_start_s:.1f}s-{seg_end_s:.1f}s] "
+                 f"({elapsed:.1f}s): {seg_text[:80]}")
+
+    full_text = " ".join(c['text'] for c in all_chunks)
+
+    # Schedule idle unload after all inference completes
+    _schedule_idle_unload()
+
+    return all_chunks, full_text, total_elapsed
 
 
 def run_inference(audio: np.ndarray, language: str = ""):
-    """Run whisper inference and return (chunks, full_text, elapsed)."""
-    # Ensure model is loaded (may have been unloaded for VRAM release)
-    ensure_model_loaded()
+    """Run the full transcription pipeline.
 
-    # VAD preprocessing: replace non-speech with silence to prevent hallucination
-    vad_audio, speech_segments = apply_vad(audio)
+    When ENABLE_DEMUCS=1 (default):
+      1. Demucs vocal separation (remove BGM/SFX)
+      2. VAD segment extraction (find speech regions)
+      3. Merge close segments (gap < 1.5s, max 28s)
+      4. Per-segment whisper inference with timestamp remapping
+
+    When ENABLE_DEMUCS=0 (fallback):
+      Original method — replace non-speech with silence, single inference.
+    """
+    if ENABLE_DEMUCS:
+        return _run_inference_demucs(audio, language)
+    else:
+        return _run_inference_legacy(audio, language)
+
+
+def _run_inference_demucs(audio: np.ndarray, language: str = ""):
+    """Demucs + VAD segment-based inference pipeline."""
+    # Step 1: Demucs vocal separation
+    t0 = time.time()
+    try:
+        vocals = demucs_separate(audio)
+    except Exception as e:
+        log.error(f"Demucs separation failed: {e}, falling back to raw audio")
+        vocals = audio
+    demucs_time = time.time() - t0
+
+    # Step 2: VAD on vocals to find speech segments
+    speech_segments = vad_speech_timestamps(vocals)
     total_speech = sum(s['end'] - s['start'] for s in speech_segments) / 16000
-    log.info(f"VAD: {len(speech_segments)} segments, {total_speech:.1f}s speech / {len(audio)/16000:.1f}s total")
+    log.info(f"VAD: {len(speech_segments)} raw segments, "
+             f"{total_speech:.1f}s speech / {len(vocals)/16000:.1f}s total")
 
     if not speech_segments:
+        log.info("No speech detected after vocal separation, skipping inference")
+        _schedule_idle_unload()
+        return [], "", 0.0
+
+    # Step 3: Merge close segments
+    merged = merge_segments(speech_segments)
+    merged_speech = sum((s['end'] - s['start']) / 16000 for s in merged)
+    log.info(f"Merged: {len(merged)} segments, {merged_speech:.1f}s total")
+
+    # Step 4: Per-segment whisper inference
+    all_chunks, full_text, inference_time = run_segment_inference(
+        vocals, merged, language
+    )
+
+    total_time = demucs_time + inference_time
+    log.info(f"Pipeline complete: demucs={demucs_time:.1f}s, "
+             f"inference={inference_time:.1f}s, total={total_time:.1f}s, "
+             f"{len(all_chunks)} chunks")
+
+    return all_chunks, full_text, total_time
+
+
+def _run_inference_legacy(audio: np.ndarray, language: str = ""):
+    """Legacy inference: VAD silence replacement + single whisper call."""
+    ensure_model_loaded()
+
+    # VAD preprocessing: replace non-speech with silence
+    segments = vad_speech_timestamps(audio)
+    total_speech = sum(s['end'] - s['start'] for s in segments) / 16000
+    log.info(f"VAD: {len(segments)} segments, {total_speech:.1f}s speech / {len(audio)/16000:.1f}s total")
+
+    if not segments:
         log.info("No speech detected, skipping inference")
         _schedule_idle_unload()
         return [], "", 0.0
+
+    # Replace non-speech with silence
+    vad_audio = np.zeros_like(audio)
+    for seg in segments:
+        vad_audio[seg['start']:seg['end']] = audio[seg['start']:seg['end']]
 
     log.info(f"Inference using model: {model_id_str}, language: {language or 'auto'}")
 
@@ -353,7 +621,15 @@ async def transcribe_openai(
         vtt = chunks_to_vtt(chunks) if chunks else f"WEBVTT\n\n1\n00:00:00.000 --> 99:59:59.999\n{full_text}\n"
         return PlainTextResponse(vtt, media_type="text/vtt")
     elif response_format == "verbose_json":
-        segments = [{"start": c.start_ts, "end": c.end_ts, "text": c.text.strip()} for c in chunks]
+        if chunks:
+            segments = []
+            for c in chunks:
+                if hasattr(c, 'start_ts'):
+                    segments.append({"start": c.start_ts, "end": c.end_ts, "text": c.text.strip()})
+                else:
+                    segments.append({"start": c['start_ts'], "end": c['end_ts'], "text": c['text'].strip()})
+        else:
+            segments = []
         return JSONResponse({"text": full_text, "language": language or "auto", "duration": len(audio) / 16000, "segments": segments})
     else:
         return JSONResponse({"text": full_text})
@@ -435,6 +711,7 @@ async def model_info():
         "status": "loading" if loading_model else ("loaded" if pipeline else "unloaded"),
         "idle_timeout": IDLE_TIMEOUT,
         "vram_held": pipeline is not None,
+        "demucs_enabled": ENABLE_DEMUCS,
     }
 
 

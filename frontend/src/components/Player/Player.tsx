@@ -464,8 +464,16 @@ export default function Player({ path }: PlayerProps) {
     if (sessionIDRef.current) {
       pauseSession(sessionIDRef.current).catch(() => {})
     }
-    // Stop heartbeat — paused sessions have a separate 5-minute timeout
+    // Switch to low-frequency heartbeat (60s) to keep session alive during pause.
+    // The backend gives paused sessions 5 minutes, but users may pause longer.
+    // Heartbeat keeps the session from being cleaned up entirely.
     stopHeartbeat()
+    if (sessionIDRef.current) {
+      const sid = sessionIDRef.current
+      heartbeatRef.current = setInterval(() => {
+        sendHeartbeat(sid).catch(() => {})
+      }, 60000)
+    }
   }, [setPlaying, stopHeartbeat])
 
   const togglePlay = useCallback(() => {
