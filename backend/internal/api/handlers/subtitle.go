@@ -602,3 +602,51 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 		"skipped": skipped,
 	})
 }
+
+// DeleteSubtitle removes a generated subtitle file
+func (h *SubtitleHandler) DeleteSubtitle(w http.ResponseWriter, r *http.Request) {
+	path := extractPath(r)
+	subtitleID := r.URL.Query().Get("id")
+
+	if subtitleID == "" {
+		jsonError(w, "subtitle id required", http.StatusBadRequest)
+		return
+	}
+
+	// Only generated subtitles can be deleted
+	if !strings.HasPrefix(subtitleID, "generated:") {
+		jsonError(w, "only generated subtitles can be deleted", http.StatusForbidden)
+		return
+	}
+
+	filename := strings.TrimPrefix(subtitleID, "generated:")
+
+	// Validate filename: must not contain path separators or ".."
+	if strings.ContainsAny(filename, "/\\") || strings.Contains(filename, "..") {
+		jsonError(w, "invalid subtitle id", http.StatusBadRequest)
+		return
+	}
+
+	hash := videoHash(path)
+	subPath := filepath.Join(h.subtitlePath, hash, filename)
+
+	// Security: ensure the resolved path is within the subtitle directory
+	absBase, _ := filepath.Abs(h.subtitlePath)
+	absSub, _ := filepath.Abs(subPath)
+	if !strings.HasPrefix(absSub, absBase) {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
+
+	if _, err := os.Stat(subPath); os.IsNotExist(err) {
+		jsonError(w, "subtitle file not found", http.StatusNotFound)
+		return
+	}
+
+	if err := os.Remove(subPath); err != nil {
+		jsonError(w, "failed to delete subtitle: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}

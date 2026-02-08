@@ -50,6 +50,9 @@ export const generateSubtitle = (path: string, params: GenerateParams) =>
 export const translateSubtitle = (path: string, params: TranslateParams) =>
   client.post<{ job_id: string }>(`/subtitle/translate/${path}`, params)
 
+export const deleteSubtitle = (path: string, subtitleId: string) =>
+  client.delete(`/subtitle/delete/${path}?id=${encodeURIComponent(subtitleId)}`)
+
 export const getJob = (jobId: string) =>
   client.get<Job>(`/jobs/${jobId}`)
 

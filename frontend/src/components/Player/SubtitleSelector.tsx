@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { Subtitles, Settings, Wand2, Languages } from 'lucide-react'
+import { Subtitles, Settings, Wand2, Languages, Trash2 } from 'lucide-react'
 import { usePlayerStore } from '@/stores/playerStore'
+import { deleteSubtitle, listSubtitles } from '@/api/subtitle'
 import SubtitleSettings from './SubtitleSettings'
 import SubtitleGenerate from './SubtitleGenerate'
 import SubtitleTranslate from './SubtitleTranslate'
@@ -11,14 +12,17 @@ type Panel = 'menu' | 'settings' | 'generate' | 'translate'
 export default function SubtitleSelector() {
   const [panel, setPanel] = useState<Panel | null>(null)
   const [translateSource, setTranslateSource] = useState<SubtitleEntry | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const {
     subtitles,
     activeSubtitle,
     subtitleVisible,
+    currentFile,
     setActiveSubtitle,
     setSubtitleVisible,
+    setSubtitles,
   } = usePlayerStore()
 
   // Close menu on outside click
@@ -39,6 +43,25 @@ export default function SubtitleSelector() {
     setPanel('translate')
   }
 
+  const handleDelete = async (sub: SubtitleEntry) => {
+    if (!currentFile) return
+    setDeleting(sub.id)
+    try {
+      await deleteSubtitle(currentFile, sub.id)
+      // If the deleted subtitle was active, clear it
+      if (activeSubtitle === sub.id) {
+        setActiveSubtitle(null)
+      }
+      // Refresh the subtitle list
+      const { data } = await listSubtitles(currentFile)
+      setSubtitles(data || [])
+    } catch {
+      // Silent fail
+    } finally {
+      setDeleting(null)
+    }
+  }
+
   return (
     <div className="relative" ref={menuRef}>
       <button
@@ -57,7 +80,7 @@ export default function SubtitleSelector() {
       </button>
 
       {panel === 'menu' && (
-        <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg py-1 min-w-[200px] z-50">
+        <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg py-1 min-w-[220px] z-50">
           {subtitles.length === 0 ? (
             <div className="px-3 py-1.5 text-sm text-gray-500">
               No subtitles available
@@ -99,14 +122,30 @@ export default function SubtitleSelector() {
                       {sub.type === 'embedded' ? 'Embedded' : sub.type === 'generated' ? 'AI' : sub.format.toUpperCase()}
                     </span>
                   </button>
-                  {/* Translate button for each subtitle */}
-                  <button
-                    onClick={() => openTranslate(sub)}
-                    className="p-1 mr-1 text-gray-500 hover:text-primary-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="Translate this subtitle"
-                  >
-                    <Languages className="w-3.5 h-3.5" />
-                  </button>
+                  {/* Action buttons */}
+                  <div className={`flex items-center transition-opacity ${
+                    sub.type === 'generated'
+                      ? 'opacity-60 group-hover:opacity-100'
+                      : 'opacity-0 group-hover:opacity-100'
+                  }`}>
+                    <button
+                      onClick={() => openTranslate(sub)}
+                      className="p-1 text-gray-500 hover:text-primary-400"
+                      title="Translate this subtitle"
+                    >
+                      <Languages className="w-3.5 h-3.5" />
+                    </button>
+                    {sub.type === 'generated' && (
+                      <button
+                        onClick={() => handleDelete(sub)}
+                        disabled={deleting === sub.id}
+                        className="p-1 mr-1 text-gray-500 hover:text-red-400 disabled:opacity-50"
+                        title="Delete this subtitle"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </>

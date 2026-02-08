@@ -77,6 +77,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			r.Get("/subtitle/content/*", subtitleHandler.ServeSubtitle)
 			r.Post("/subtitle/generate/*", subtitleHandler.GenerateSubtitle)
 			r.Post("/subtitle/translate/*", subtitleHandler.TranslateSubtitle)
+			r.Delete("/subtitle/delete/*", subtitleHandler.DeleteSubtitle)
 			r.Post("/subtitle/batch-generate", subtitleHandler.BatchGenerate)
 			r.Post("/subtitle/batch-translate", subtitleHandler.BatchTranslate)
 
