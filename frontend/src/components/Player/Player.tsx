@@ -39,6 +39,7 @@ export default function Player({ path }: PlayerProps) {
     activeSubtitle,
     subtitleVisible,
     quality,
+    qualityPresets,
     audioTrack,
     duration,
     negotiatedCodec,
@@ -368,8 +369,7 @@ export default function Player({ path }: PlayerProps) {
     // Wait for quality presets to load before starting any playback.
     // This prevents direct play with "original" from localStorage before
     // preset validation has a chance to redirect to a compatible quality.
-    const { qualityPresets: presets } = usePlayerStore.getState()
-    if (presets.length === 0) return
+    if (qualityPresets.length === 0) return
 
     // Wait for codec negotiation to complete before starting HLS
     // (original quality uses direct play, doesn't need codec negotiation)
@@ -422,7 +422,7 @@ export default function Player({ path }: PlayerProps) {
       // Stop session on unmount or when dependencies change (quality switch)
       stopCurrentSession()
     }
-  }, [path, quality, audioTrack, negotiatedCodec, setCurrentFile, startHLS, stopCurrentSession])
+  }, [path, quality, qualityPresets, audioTrack, negotiatedCodec, setCurrentFile, startHLS, stopCurrentSession])
 
   // Sync volume/muted/playbackRate
   useEffect(() => {
