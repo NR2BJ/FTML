@@ -52,14 +52,28 @@ _idle_timer_lock = threading.Lock()
 # Model loading / unloading
 # ---------------------------------------------------------------------------
 
-def load_model_by_id(mid: str):
-    """Load a WhisperPipeline for the given HuggingFace model ID."""
+def load_model_by_id(mid: str, is_swap: bool = False):
+    """Load a WhisperPipeline for the given HuggingFace model ID.
+
+    Args:
+        mid: HuggingFace model ID (e.g. "OpenVINO/whisper-large-v3-int8-ov")
+        is_swap: If True, this is a runtime model swap (unload previous first)
+    """
     global pipeline, model_id_str, loading_model
     import openvino_genai
     from huggingface_hub import snapshot_download
 
     device = os.environ.get("DEVICE", "GPU")
     loading_model = True
+
+    # For model swaps, unload the previous model first to free VRAM.
+    # Without this, two models may coexist briefly and OOM on small GPUs.
+    if is_swap and pipeline is not None:
+        log.info(f"Unloading previous model ({model_id_str}) to free VRAM for new model")
+        with model_lock:
+            pipeline = None
+        gc.collect()
+
     try:
         log.info(f"Loading model: {mid} on device: {device}")
         model_path = snapshot_download(mid)
@@ -69,6 +83,15 @@ def load_model_by_id(mid: str):
             pipeline = new_pipeline
             model_id_str = mid
         log.info(f"WhisperPipeline loaded successfully on {device}")
+    except Exception as e:
+        # On failure, ensure pipeline is None so we don't silently use an old model
+        with model_lock:
+            pipeline = None
+            if is_swap:
+                # Keep model_id_str as the requested model so reload attempts use it
+                model_id_str = mid
+        log.error(f"Failed to load model {mid}: {e}")
+        raise
     finally:
         loading_model = False
 
@@ -172,11 +195,14 @@ def run_inference(audio: np.ndarray, language: str = ""):
     # Ensure model is loaded (may have been unloaded for VRAM release)
     ensure_model_loaded()
 
+    log.info(f"Inference using model: {model_id_str}, language: {language or 'auto'}")
+
     config = pipeline.get_generation_config()
     config.return_timestamps = True
 
     if language and language != "auto":
         config.language = f"<|{language}|>"
+        log.info(f"Language token set: <|{language}|>")
 
     t0 = time.time()
     result = pipeline.generate(audio, config)
@@ -284,10 +310,10 @@ async def load_new_model(req: ModelLoadRequest):
     """Load a new model at runtime (downloads from HuggingFace if needed)."""
     if loading_model:
         raise HTTPException(409, "Another model is currently loading")
-    if req.model_id == model_id_str:
+    if req.model_id == model_id_str and pipeline is not None:
         return {"status": "ok", "model": model_id_str, "message": "already loaded"}
     try:
-        load_model_by_id(req.model_id)
+        load_model_by_id(req.model_id, is_swap=True)
     except Exception as e:
         log.error(f"Failed to load model {req.model_id}: {e}")
         raise HTTPException(500, f"Failed to load model: {e}")

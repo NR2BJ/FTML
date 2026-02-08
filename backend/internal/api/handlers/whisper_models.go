@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -189,21 +190,25 @@ func (h *WhisperModelsHandler) SetActiveModel(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Save to DB
-	if err := h.database.SetSetting("whisper_model_id", req.ModelID); err != nil {
-		jsonError(w, "failed to save setting", http.StatusInternalServerError)
-		return
-	}
-
-	// Find openvino-genai backend and tell it to load the new model
+	// Find openvino-genai backend and load the model synchronously
+	// We do this BEFORE saving to DB so we don't store an unusable model ID
 	backends, err := h.database.ListWhisperBackends()
 	if err == nil {
 		for _, b := range backends {
 			if b.BackendType == "openvino-genai" && b.Enabled && b.URL != "" {
-				go h.notifyModelChange(b.URL, req.ModelID)
+				if loadErr := h.notifyModelChange(b.URL, req.ModelID); loadErr != nil {
+					jsonError(w, "failed to load model on whisper server: "+loadErr.Error(), http.StatusBadGateway)
+					return
+				}
 				break
 			}
 		}
+	}
+
+	// Save to DB only after successful load
+	if err := h.database.SetSetting("whisper_model_id", req.ModelID); err != nil {
+		jsonError(w, "failed to save setting", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -213,7 +218,7 @@ func (h *WhisperModelsHandler) SetActiveModel(w http.ResponseWriter, r *http.Req
 	})
 }
 
-func (h *WhisperModelsHandler) notifyModelChange(backendURL, modelID string) {
+func (h *WhisperModelsHandler) notifyModelChange(backendURL, modelID string) error {
 	url := strings.TrimRight(backendURL, "/") + "/v1/model/load"
 	body := fmt.Sprintf(`{"model_id":"%s"}`, modelID)
 
@@ -221,14 +226,18 @@ func (h *WhisperModelsHandler) notifyModelChange(backendURL, modelID string) {
 	resp, err := client.Post(url, "application/json", strings.NewReader(body))
 	if err != nil {
 		log.Printf("[whisper-models] failed to notify model change: %v", err)
-		return
+		return fmt.Errorf("whisper server unreachable: %w", err)
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+
 	if resp.StatusCode == http.StatusOK {
 		log.Printf("[whisper-models] model changed to %s on whisper server", modelID)
-	} else {
-		log.Printf("[whisper-models] whisper server returned %d for model change", resp.StatusCode)
+		return nil
 	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	log.Printf("[whisper-models] whisper server returned %d for model change: %s", resp.StatusCode, string(respBody))
+	return fmt.Errorf("whisper server returned %d: %s", resp.StatusCode, string(respBody))
 }
 
 // GetActiveModel returns the currently active model ID (internal, no auth)
