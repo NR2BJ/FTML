@@ -243,9 +243,11 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 		args = append(args, "-avoid_negative_ts", "make_zero")
 		args = append(args, "-fflags", "+genpts+igndts")
 		args = append(args, "-max_interleave_delta", "0")
-		// HEVC in fMP4 HLS requires hvc1 tag for browser compatibility
+		// fMP4 HLS requires codec tags for browser MSE compatibility
 		if params.SourceVideoCodec == "hevc" {
 			args = append(args, "-tag:v", "hvc1")
+		} else if params.SourceVideoCodec == "h264" {
+			args = append(args, "-tag:v", "avc1")
 		}
 	} else {
 		// Video encoder

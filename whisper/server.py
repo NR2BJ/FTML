@@ -199,6 +199,7 @@ def run_inference(audio: np.ndarray, language: str = ""):
 
     config = pipeline.get_generation_config()
     config.return_timestamps = True
+    config.task = "transcribe"
 
     if language and language != "auto":
         config.language = f"<|{language}|>"
