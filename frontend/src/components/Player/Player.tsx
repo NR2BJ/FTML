@@ -250,9 +250,16 @@ export default function Player({ path }: PlayerProps) {
       })
       .catch(() => {})
 
-    // Fetch quality presets for this video (with codec info)
-    const { negotiatedCodec: codec, browserCodecs: bc } = usePlayerStore.getState()
-    getPresets(path, codec || undefined, bc || undefined)
+  }, [path, setCurrentTime, setDuration, setPlaying, setResumePosition, setHasResumed, setMediaInfo, setSubtitles, setActiveSubtitle])
+
+  // Fetch quality presets — waits for codec negotiation to complete so that
+  // passthrough/original options are correctly generated based on browser capabilities.
+  // Without codec info, the backend can't determine if passthrough is safe.
+  useEffect(() => {
+    if (!path || !negotiatedCodec) return
+
+    const { browserCodecs: bc } = usePlayerStore.getState()
+    getPresets(path, negotiatedCodec, bc || undefined)
       .then((res) => {
         const presets = res.data
         if (presets && presets.length > 0) {
@@ -299,7 +306,7 @@ export default function Player({ path }: PlayerProps) {
         }
       })
       .catch(() => {})
-  }, [path, setCurrentTime, setDuration, setPlaying, setResumePosition, setHasResumed, setMediaInfo, setSubtitles, setActiveSubtitle, setQualityPresets, setQuality])
+  }, [path, negotiatedCodec, setQualityPresets, setQuality])
 
   // Resume playback from saved position after media is ready
   useEffect(() => {

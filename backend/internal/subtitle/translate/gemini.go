@@ -128,12 +128,13 @@ func (g *GeminiTranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 		return nil, err
 	}
 
-	url := fmt.Sprintf("%s/%s:generateContent?key=%s", geminiAPIBase, model, g.apiKey)
+	url := fmt.Sprintf("%s/%s:generateContent", geminiAPIBase, model)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", g.apiKey)
 
 	resp, err := g.httpClient.Do(httpReq)
 	if err != nil {
