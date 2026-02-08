@@ -5,6 +5,10 @@ import Login from '@/pages/Login'
 import Browse from '@/pages/Browse'
 import Watch from '@/pages/Watch'
 import Settings from '@/pages/Settings'
+import WatchHistory from '@/pages/WatchHistory'
+import Account from '@/pages/Account'
+import UserManagement from '@/pages/admin/UserManagement'
+import Registrations from '@/pages/admin/Registrations'
 import Layout from '@/components/layout/Layout'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -22,6 +26,14 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />
   }
 
+  return <>{children}</>
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuthStore()
+  if (user?.role !== 'admin') {
+    return <Navigate to="/" replace />
+  }
   return <>{children}</>
 }
 
@@ -47,7 +59,11 @@ export default function App() {
           <Route index element={<Browse />} />
           <Route path="browse/*" element={<Browse />} />
           <Route path="watch/*" element={<Watch />} />
-          <Route path="settings" element={<Settings />} />
+          <Route path="history" element={<WatchHistory />} />
+          <Route path="account" element={<Account />} />
+          <Route path="settings" element={<AdminRoute><Settings /></AdminRoute>} />
+          <Route path="admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
+          <Route path="admin/registrations" element={<AdminRoute><Registrations /></AdminRoute>} />
         </Route>
       </Routes>
     </BrowserRouter>

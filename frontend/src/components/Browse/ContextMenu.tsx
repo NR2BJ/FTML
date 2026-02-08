@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Subtitles, Languages, Sparkles, ListVideo } from 'lucide-react'
 import { type FileEntry } from '@/api/files'
 import { isVideoFile } from '@/utils/format'
+import { useAuthStore } from '@/stores/authStore'
 
 interface ContextMenuProps {
   x: number
@@ -24,6 +25,8 @@ export default function ContextMenu({
   onGenerateAndTranslate,
   onManageSubtitles,
 }: ContextMenuProps) {
+  const { user } = useAuthStore()
+  const canEdit = user?.role === 'admin' || user?.role === 'editor'
   const videoFiles = selectedEntries.filter(e => !e.is_dir && isVideoFile(e.name))
   const count = videoFiles.length
 
@@ -59,31 +62,35 @@ export default function ContextMenu({
         {count} video file{count > 1 ? 's' : ''} selected
       </div>
 
-      <button
-        onClick={() => { onGenerateSubtitles(); onClose() }}
-        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 hover:text-white transition-colors"
-      >
-        <Subtitles className="w-4 h-4 text-primary-400" />
-        Generate Subtitles
-      </button>
+      {canEdit && (
+        <>
+          <button
+            onClick={() => { onGenerateSubtitles(); onClose() }}
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 hover:text-white transition-colors"
+          >
+            <Subtitles className="w-4 h-4 text-primary-400" />
+            Generate Subtitles
+          </button>
 
-      <button
-        onClick={() => { onTranslateSubtitles(); onClose() }}
-        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 hover:text-white transition-colors"
-      >
-        <Languages className="w-4 h-4 text-emerald-400" />
-        Translate Subtitles
-      </button>
+          <button
+            onClick={() => { onTranslateSubtitles(); onClose() }}
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 hover:text-white transition-colors"
+          >
+            <Languages className="w-4 h-4 text-emerald-400" />
+            Translate Subtitles
+          </button>
 
-      <div className="border-t border-dark-700 my-0.5" />
+          <div className="border-t border-dark-700 my-0.5" />
 
-      <button
-        onClick={() => { onGenerateAndTranslate(); onClose() }}
-        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 hover:text-white transition-colors"
-      >
-        <Sparkles className="w-4 h-4 text-amber-400" />
-        Generate & Translate
-      </button>
+          <button
+            onClick={() => { onGenerateAndTranslate(); onClose() }}
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 hover:text-white transition-colors"
+          >
+            <Sparkles className="w-4 h-4 text-amber-400" />
+            Generate & Translate
+          </button>
+        </>
+      )}
 
       {/* Single file: manage subtitles (view, delete, translate individual) */}
       {count === 1 && onManageSubtitles && (

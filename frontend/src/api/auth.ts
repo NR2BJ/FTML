@@ -21,3 +21,11 @@ export const login = (data: LoginRequest) =>
 
 export const getMe = () =>
   client.get<User>('/auth/me')
+
+export interface RegisterRequest {
+  username: string
+  password: string
+}
+
+export const register = (data: RegisterRequest) =>
+  client.post<{ status: string; message: string }>('/auth/register', data)

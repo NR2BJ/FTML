@@ -84,6 +84,53 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
+// Register handles new user registration requests (public, no auth required)
+func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Username == "" || req.Password == "" {
+		jsonError(w, "username and password are required", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Password) < 4 {
+		jsonError(w, "password must be at least 4 characters", http.StatusBadRequest)
+		return
+	}
+
+	// Check if username already exists in users table
+	if _, err := h.db.GetUserByUsername(req.Username); err == nil {
+		jsonError(w, "username already exists", http.StatusConflict)
+		return
+	}
+
+	// Hash password
+	hashed, err := auth.HashPassword(req.Password)
+	if err != nil {
+		jsonError(w, "failed to process registration", http.StatusInternalServerError)
+		return
+	}
+
+	// Create registration request
+	_, err = h.db.CreateRegistration(req.Username, hashed)
+	if err != nil {
+		jsonError(w, "username already has a pending registration", http.StatusConflict)
+		return
+	}
+
+	jsonResponse(w, map[string]string{
+		"status":  "pending",
+		"message": "Registration submitted. Awaiting admin approval.",
+	}, http.StatusCreated)
+}
+
 func jsonResponse(w http.ResponseWriter, data interface{}, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

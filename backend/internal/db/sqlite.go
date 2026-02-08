@@ -83,6 +83,17 @@ func (d *Database) migrate() error {
 		priority INTEGER NOT NULL DEFAULT 0,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS registrations (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		username TEXT UNIQUE NOT NULL,
+		password TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		reviewed_at DATETIME,
+		reviewed_by INTEGER,
+		FOREIGN KEY (reviewed_by) REFERENCES users(id)
+	);
 	`
 	if _, err := d.db.Exec(schema); err != nil {
 		return err
@@ -331,6 +342,222 @@ func (d *Database) UpdateWhisperBackend(id int64, name, backendType, url string,
 // DeleteWhisperBackend removes a backend by ID
 func (d *Database) DeleteWhisperBackend(id int64) error {
 	_, err := d.db.Exec("DELETE FROM whisper_backends WHERE id = ?", id)
+	return err
+}
+
+// --- User CRUD ---
+
+// ListUsers returns all users ordered by creation time
+func (d *Database) ListUsers() ([]models.User, error) {
+	rows, err := d.db.Query("SELECT id, username, password, role, created_at, updated_at FROM users ORDER BY created_at ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []models.User
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	if users == nil {
+		users = []models.User{}
+	}
+	return users, nil
+}
+
+// CreateUser inserts a new user with hashed password
+func (d *Database) CreateUser(username, hashedPassword, role string) (int64, error) {
+	result, err := d.db.Exec(
+		"INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+		username, hashedPassword, role,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// UpdateUser updates username and role for a user
+func (d *Database) UpdateUser(id int64, username, role string) error {
+	_, err := d.db.Exec(
+		"UPDATE users SET username = ?, role = ?, updated_at = ? WHERE id = ?",
+		username, role, time.Now(), id,
+	)
+	return err
+}
+
+// UpdateUserPassword updates a user's password
+func (d *Database) UpdateUserPassword(id int64, hashedPassword string) error {
+	_, err := d.db.Exec(
+		"UPDATE users SET password = ?, updated_at = ? WHERE id = ?",
+		hashedPassword, time.Now(), id,
+	)
+	return err
+}
+
+// DeleteUser removes a user and their watch history
+func (d *Database) DeleteUser(id int64) error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM watch_history WHERE user_id = ?", id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM users WHERE id = ?", id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// CountAdmins returns the number of admin users
+func (d *Database) CountAdmins() (int, error) {
+	var count int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM users WHERE role = 'admin'").Scan(&count)
+	return count, err
+}
+
+// --- Watch History ---
+
+// ListWatchHistory returns all watch history entries for a user, sorted by most recent
+func (d *Database) ListWatchHistory(userID int64) ([]models.WatchHistoryEntry, error) {
+	rows, err := d.db.Query(
+		"SELECT file_path, position, duration, updated_at FROM watch_history WHERE user_id = ? ORDER BY updated_at DESC",
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []models.WatchHistoryEntry
+	for rows.Next() {
+		var e models.WatchHistoryEntry
+		if err := rows.Scan(&e.FilePath, &e.Position, &e.Duration, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	if entries == nil {
+		entries = []models.WatchHistoryEntry{}
+	}
+	return entries, nil
+}
+
+// DeleteWatchHistory removes a specific watch history entry
+func (d *Database) DeleteWatchHistory(userID int64, filePath string) error {
+	_, err := d.db.Exec("DELETE FROM watch_history WHERE user_id = ? AND file_path = ?", userID, filePath)
+	return err
+}
+
+// --- Registration ---
+
+// CreateRegistration inserts a pending registration request
+func (d *Database) CreateRegistration(username, hashedPassword string) (int64, error) {
+	result, err := d.db.Exec(
+		"INSERT INTO registrations (username, password) VALUES (?, ?)",
+		username, hashedPassword,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// ListRegistrations returns registrations filtered by status (empty = all)
+func (d *Database) ListRegistrations(status string) ([]models.Registration, error) {
+	var query string
+	var args []interface{}
+	if status != "" {
+		query = "SELECT id, username, status, created_at, reviewed_at, reviewed_by FROM registrations WHERE status = ? ORDER BY created_at DESC"
+		args = append(args, status)
+	} else {
+		query = "SELECT id, username, status, created_at, reviewed_at, reviewed_by FROM registrations ORDER BY created_at DESC"
+	}
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var regs []models.Registration
+	for rows.Next() {
+		var r models.Registration
+		if err := rows.Scan(&r.ID, &r.Username, &r.Status, &r.CreatedAt, &r.ReviewedAt, &r.ReviewedBy); err != nil {
+			return nil, err
+		}
+		regs = append(regs, r)
+	}
+	if regs == nil {
+		regs = []models.Registration{}
+	}
+	return regs, nil
+}
+
+// GetRegistration returns a single registration by ID
+func (d *Database) GetRegistration(id int64) (*models.Registration, error) {
+	var r models.Registration
+	err := d.db.QueryRow(
+		"SELECT id, username, status, created_at, reviewed_at, reviewed_by FROM registrations WHERE id = ?", id,
+	).Scan(&r.ID, &r.Username, &r.Status, &r.CreatedAt, &r.ReviewedAt, &r.ReviewedBy)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// GetRegistrationPassword returns the hashed password for a registration (needed for approval)
+func (d *Database) GetRegistrationPassword(id int64) (string, error) {
+	var password string
+	err := d.db.QueryRow("SELECT password FROM registrations WHERE id = ?", id).Scan(&password)
+	return password, err
+}
+
+// ApproveRegistration marks a registration as approved and creates the user
+func (d *Database) ApproveRegistration(id int64, reviewerID int64) error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Get registration details
+	var username, password string
+	err = tx.QueryRow("SELECT username, password FROM registrations WHERE id = ? AND status = 'pending'", id).Scan(&username, &password)
+	if err != nil {
+		return err
+	}
+
+	// Create user with viewer role
+	_, err = tx.Exec("INSERT INTO users (username, password, role) VALUES (?, ?, 'viewer')", username, password)
+	if err != nil {
+		return err
+	}
+
+	// Update registration status
+	now := time.Now()
+	_, err = tx.Exec("UPDATE registrations SET status = 'approved', reviewed_at = ?, reviewed_by = ? WHERE id = ?", now, reviewerID, id)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// RejectRegistration marks a registration as rejected
+func (d *Database) RejectRegistration(id int64, reviewerID int64) error {
+	now := time.Now()
+	_, err := d.db.Exec(
+		"UPDATE registrations SET status = 'rejected', reviewed_at = ?, reviewed_by = ? WHERE id = ? AND status = 'pending'",
+		now, reviewerID, id,
+	)
 	return err
 }
 

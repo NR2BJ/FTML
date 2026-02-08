@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Subtitles, Settings, Wand2, Languages, Trash2 } from 'lucide-react'
 import { usePlayerStore } from '@/stores/playerStore'
+import { useAuthStore } from '@/stores/authStore'
 import { deleteSubtitle, listSubtitles } from '@/api/subtitle'
 import SubtitleSettings from './SubtitleSettings'
 import SubtitleGenerate from './SubtitleGenerate'
@@ -10,6 +11,8 @@ import type { SubtitleEntry } from '@/api/subtitle'
 type Panel = 'menu' | 'settings' | 'generate' | 'translate'
 
 export default function SubtitleSelector() {
+  const { user } = useAuthStore()
+  const canEdit = user?.role === 'admin' || user?.role === 'editor'
   const [panel, setPanel] = useState<Panel | null>(null)
   const [translateSource, setTranslateSource] = useState<SubtitleEntry | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -128,14 +131,16 @@ export default function SubtitleSelector() {
                       ? 'opacity-60 group-hover:opacity-100'
                       : 'opacity-0 group-hover:opacity-100'
                   }`}>
-                    <button
-                      onClick={() => openTranslate(sub)}
-                      className="p-1 text-gray-500 hover:text-primary-400"
-                      title="Translate this subtitle"
-                    >
-                      <Languages className="w-3.5 h-3.5" />
-                    </button>
-                    {sub.type === 'generated' && (
+                    {canEdit && (
+                      <button
+                        onClick={() => openTranslate(sub)}
+                        className="p-1 text-gray-500 hover:text-primary-400"
+                        title="Translate this subtitle"
+                      >
+                        <Languages className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    {canEdit && sub.type === 'generated' && (
                       <button
                         onClick={() => handleDelete(sub)}
                         disabled={deleting === sub.id}
@@ -153,14 +158,16 @@ export default function SubtitleSelector() {
 
           <div className="border-t border-gray-700 my-1" />
 
-          {/* Generate button */}
-          <button
-            onClick={() => setPanel('generate')}
-            className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 transition-colors"
-          >
-            <Wand2 className="w-3.5 h-3.5" />
-            Generate (AI)
-          </button>
+          {/* Generate button — editor/admin only */}
+          {canEdit && (
+            <button
+              onClick={() => setPanel('generate')}
+              className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 transition-colors"
+            >
+              <Wand2 className="w-3.5 h-3.5" />
+              Generate (AI)
+            </button>
+          )}
 
           {/* Settings button */}
           <button
