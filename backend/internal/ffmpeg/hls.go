@@ -243,6 +243,10 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 		args = append(args, "-avoid_negative_ts", "make_zero")
 		args = append(args, "-fflags", "+genpts+igndts")
 		args = append(args, "-max_interleave_delta", "0")
+		// Reset output timestamps to start from 0. Without this, fMP4 passthrough
+		// preserves original MKV PTS which causes video.currentTime offset,
+		// breaking subtitle sync (subtitles use absolute 0-based timestamps).
+		args = append(args, "-output_ts_offset", "0")
 		// fMP4 HLS requires codec tags for browser MSE compatibility
 		if params.SourceVideoCodec == "hevc" {
 			args = append(args, "-tag:v", "hvc1")

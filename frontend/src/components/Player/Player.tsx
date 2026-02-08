@@ -372,8 +372,8 @@ export default function Player({ path }: PlayerProps) {
     if (presets.length === 0) return
 
     // Wait for codec negotiation to complete before starting HLS
-    // (original/passthrough quality doesn't need codec negotiation)
-    if (quality !== 'original' && quality !== 'passthrough' && !negotiatedCodec) return
+    // (original quality uses direct play, doesn't need codec negotiation)
+    if (quality !== 'original' && !negotiatedCodec) return
 
     setCurrentFile(path)
     setError(null)
