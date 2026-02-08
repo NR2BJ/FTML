@@ -154,7 +154,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 				VideoCodec:       "copy",
 				AudioCodec:       "aac",
 				Encoder:          "copy",
-				SegmentFmt:       ffmpeg.GetSegmentFmt(videoCodecNorm),
+				SegmentFmt:       "fmp4", // Always fmp4 for passthrough — MKV→mpegts causes DTS issues
 				SourceVideoCodec: videoCodecNorm,
 			}
 		}

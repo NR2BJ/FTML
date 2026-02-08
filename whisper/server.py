@@ -234,16 +234,21 @@ def decode_audio(audio_bytes: bytes) -> np.ndarray:
 
 def _get_demucs_separator():
     """Lazy-load the Demucs separator (downloads htdemucs model on first use)."""
-    global _demucs_separator
+    global _demucs_separator, ENABLE_DEMUCS
     with _demucs_lock:
         if _demucs_separator is not None:
             return _demucs_separator
-        log.info("Loading Demucs htdemucs model (first use, may download)...")
-        import torch
-        from demucs.api import Separator
-        _demucs_separator = Separator(model="htdemucs", device="cpu", shifts=1, overlap=0.25)
-        log.info("Demucs model loaded")
-        return _demucs_separator
+        try:
+            log.info("Loading Demucs htdemucs model (first use, may download)...")
+            import torch
+            from demucs.api import Separator
+            _demucs_separator = Separator(model="htdemucs", device="cpu", shifts=1, overlap=0.25)
+            log.info("Demucs model loaded")
+            return _demucs_separator
+        except ImportError as e:
+            log.error(f"Demucs import failed: {e}. Disabling demucs permanently for this session.")
+            ENABLE_DEMUCS = False
+            raise
 
 
 def demucs_separate(audio_16k: np.ndarray) -> np.ndarray:
