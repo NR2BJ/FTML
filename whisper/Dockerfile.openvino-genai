@@ -3,10 +3,21 @@
 
 FROM ubuntu:24.04
 
+# Install base packages + add Intel GPU compute runtime repo
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
-    intel-opencl-icd level-zero \
     libsndfile1 ffmpeg \
+    wget gnupg2 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add Intel GPU compute runtime repository and install drivers
+RUN wget -qO- https://repositories.intel.com/gpu/intel-graphics.key | \
+    gpg --dearmor -o /usr/share/keyrings/intel-graphics.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu-noble/lts/2350 noble unified" \
+    > /etc/apt/sources.list.d/intel-gpu.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    intel-opencl-icd \
+    level-zero \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/
