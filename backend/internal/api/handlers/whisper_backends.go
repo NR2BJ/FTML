@@ -86,9 +86,9 @@ func (h *WhisperBackendsHandler) CreateBackend(w http.ResponseWriter, r *http.Re
 	}
 
 	// Validate backend_type
-	validTypes := map[string]bool{"sycl": true, "openvino": true, "openvino-genai": true, "cuda": true, "cpu": true, "openai": true}
+	validTypes := map[string]bool{"openvino-genai": true, "openai": true}
 	if !validTypes[req.BackendType] {
-		jsonError(w, "backend_type must be one of: sycl, openvino, openvino-genai, cuda, cpu, openai", http.StatusBadRequest)
+		jsonError(w, "backend_type must be one of: openvino-genai, openai", http.StatusBadRequest)
 		return
 	}
 

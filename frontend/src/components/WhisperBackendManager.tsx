@@ -5,11 +5,9 @@ import {
   Activity,
   Loader2,
   Check,
-  X,
   AlertCircle,
   Cpu,
   Zap,
-  Eye,
   Cloud,
   Server,
 } from 'lucide-react'
@@ -25,28 +23,16 @@ import {
 
 const TYPE_CONFIG: Record<string, { label: string; color: string; icon: typeof Cpu }> = {
   'openvino-genai': { label: 'OpenVINO GenAI', color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20', icon: Zap },
-  sycl: { label: 'SYCL', color: 'text-blue-400 bg-blue-500/10 border-blue-500/20', icon: Zap },
-  openvino: { label: 'OpenVINO', color: 'text-violet-400 bg-violet-500/10 border-violet-500/20', icon: Eye },
-  cuda: { label: 'CUDA', color: 'text-green-400 bg-green-500/10 border-green-500/20', icon: Zap },
-  cpu: { label: 'CPU', color: 'text-gray-400 bg-gray-500/10 border-gray-500/20', icon: Cpu },
   openai: { label: 'OpenAI', color: 'text-orange-400 bg-orange-500/10 border-orange-500/20', icon: Cloud },
 }
 
 const BACKEND_TYPES = [
   { value: 'openvino-genai', label: 'OpenVINO GenAI (Intel Arc)' },
-  { value: 'sycl', label: 'SYCL (Intel Arc)' },
-  { value: 'openvino', label: 'OpenVINO (Intel)' },
-  { value: 'cuda', label: 'CUDA (NVIDIA)' },
-  { value: 'cpu', label: 'CPU' },
   { value: 'openai', label: 'OpenAI (Cloud)' },
 ]
 
 const DEFAULT_URLS: Record<string, string> = {
   'openvino-genai': 'http://whisper:8178',
-  sycl:     'http://whisper-sycl:8178',
-  openvino: 'http://whisper-openvino:8178',
-  cuda:     'http://whisper-cuda:8178',
-  cpu:      'http://whisper-cpu:8178',
   openai:   '',
 }
 
@@ -172,7 +158,7 @@ export default function WhisperBackendManager() {
     <div className="space-y-2">
       {/* Backend list */}
       {backends.map((backend) => {
-        const typeConfig = TYPE_CONFIG[backend.backend_type] || TYPE_CONFIG.cpu
+        const typeConfig = TYPE_CONFIG[backend.backend_type] || TYPE_CONFIG['openvino-genai']
         const TypeIcon = typeConfig.icon
         const health = healthResults[backend.id]
         const isEditing = editingId === backend.id
@@ -200,7 +186,7 @@ export default function WhisperBackendManager() {
                     value={editURL}
                     onChange={(e) => setEditURL(e.target.value)}
                     className="w-full bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600 focus:outline-none focus:border-primary-500"
-                    placeholder="http://whisper-sycl:8178"
+                    placeholder="http://whisper:8178"
                   />
                 )}
                 <div className="flex gap-2 justify-end">
@@ -317,7 +303,7 @@ export default function WhisperBackendManager() {
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               className="flex-1 bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600 focus:outline-none focus:border-primary-500"
-              placeholder="Name (e.g. Arc A380 SYCL)"
+              placeholder="Name (e.g. OpenVINO GenAI)"
               autoFocus
             />
             <select
@@ -340,7 +326,7 @@ export default function WhisperBackendManager() {
               value={newURL}
               onChange={(e) => setNewURL(e.target.value)}
               className="w-full bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600 focus:outline-none focus:border-primary-500"
-              placeholder={DEFAULT_URLS[newType] || 'http://whisper-sycl:8178'}
+              placeholder={DEFAULT_URLS[newType] || 'http://whisper:8178'}
             />
           )}
           {addError && (

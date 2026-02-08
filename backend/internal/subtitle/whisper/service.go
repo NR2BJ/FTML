@@ -57,7 +57,7 @@ func (s *Service) resolveEngine(engineKey string) (Transcriber, error) {
 		if backend.BackendType == "openvino-genai" {
 			return NewOpenVINOGenAIClient(backend.URL), nil
 		}
-		return NewWhisperCppClient(backend.URL), nil
+		return nil, fmt.Errorf("unsupported backend type: %s", backend.BackendType)
 	}
 
 	// Legacy: "openai" → use OpenAI API key from settings
@@ -67,20 +67,6 @@ func (s *Service) resolveEngine(engineKey string) (Transcriber, error) {
 			return nil, fmt.Errorf("OpenAI API key not configured")
 		}
 		return NewOpenAIWhisperClient(key), nil
-	}
-
-	// Legacy: "whisper.cpp" → first enabled local backend
-	if engineKey == "whisper.cpp" {
-		backends, err := s.database.ListWhisperBackends()
-		if err != nil {
-			return nil, fmt.Errorf("list backends: %w", err)
-		}
-		for _, b := range backends {
-			if b.Enabled && b.BackendType != "openai" {
-				return NewWhisperCppClient(b.URL), nil
-			}
-		}
-		return nil, fmt.Errorf("no local whisper backend configured")
 	}
 
 	return nil, fmt.Errorf("unknown engine: %s", engineKey)

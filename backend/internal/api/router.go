@@ -32,7 +32,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	subtitleHandler := handlers.NewSubtitleHandler(cfg.MediaPath, cfg.SubtitlePath, jobQueue, database)
 	jobHandler := handlers.NewJobHandler(jobQueue)
 	settingsHandler := handlers.NewSettingsHandler(database)
-	whisperModelsHandler := handlers.NewWhisperModelsHandler(cfg.WhisperModelPath, database)
+	whisperModelsHandler := handlers.NewWhisperModelsHandler(database)
 	presetsHandler := handlers.NewPresetsHandler(database)
 	whisperBackendsHandler := handlers.NewWhisperBackendsHandler(database)
 
@@ -90,10 +90,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 
 			// Whisper Model Management
 			r.Get("/whisper/models", whisperModelsHandler.ListModels)
-			r.Post("/whisper/models/download", whisperModelsHandler.DownloadModel)
-			r.Get("/whisper/models/progress", whisperModelsHandler.DownloadProgress)
 			r.Post("/whisper/models/active", whisperModelsHandler.SetActiveModel)
-			r.Delete("/whisper/models", whisperModelsHandler.DeleteModel)
 
 			// GPU Info
 			r.Get("/gpu/info", whisperModelsHandler.GPUInfo)

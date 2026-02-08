@@ -13,8 +13,7 @@ type Config struct {
 	JWTSecret     string
 	AdminUsername  string
 	AdminPassword string
-	SubtitlePath  string
-	WhisperModelPath string
+	SubtitlePath string
 }
 
 func Load() *Config {
@@ -28,8 +27,7 @@ func Load() *Config {
 		JWTSecret:     getEnv("JWT_SECRET", "dev-secret-change-me"),
 		AdminUsername:  getEnv("ADMIN_USERNAME", "admin"),
 		AdminPassword: getEnv("ADMIN_PASSWORD", "admin"),
-		SubtitlePath:     getEnv("SUBTITLE_PATH", dataPath+"/subtitles"),
-		WhisperModelPath: getEnv("WHISPER_MODEL_PATH", dataPath+"/whisper/models"),
+		SubtitlePath: getEnv("SUBTITLE_PATH", dataPath+"/subtitles"),
 	}
 }
 

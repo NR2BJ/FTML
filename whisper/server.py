@@ -5,7 +5,9 @@ Intel Arc GPU-accelerated speech-to-text with timestamp support.
 
 Endpoints:
   POST /v1/audio/transcriptions  (OpenAI-compatible)
-  POST /inference                (whisper.cpp-compatible, legacy)
+  POST /inference                (legacy compat)
+  POST /v1/model/load            (runtime model swap)
+  GET  /v1/model/info            (current model info)
   GET  /health
 """
 
@@ -14,11 +16,13 @@ import os
 import logging
 import time
 
+import threading
 import numpy as np
 import librosa
 import uvicorn
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
+from pydantic import BaseModel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,32 +37,38 @@ log = logging.getLogger("whisper")
 app = FastAPI(title="FTML Whisper Server")
 pipeline = None
 model_id_str = None
+model_lock = threading.Lock()
+loading_model = False
 
 # ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------
 
-def load_model():
-    """Load the OpenVINO GenAI WhisperPipeline at startup."""
-    global pipeline, model_id_str
+def load_model_by_id(mid: str):
+    """Load a WhisperPipeline for the given HuggingFace model ID."""
+    global pipeline, model_id_str, loading_model
     import openvino_genai
     from huggingface_hub import snapshot_download
 
-    model_id_str = os.environ.get("MODEL_ID", "OpenVINO/whisper-large-v3-turbo-int8-ov")
     device = os.environ.get("DEVICE", "GPU")
-
-    log.info(f"Loading model: {model_id_str} on device: {device}")
-
-    model_path = snapshot_download(model_id_str)
-    log.info(f"Model path: {model_path}")
-
-    pipeline = openvino_genai.WhisperPipeline(str(model_path), device)
-    log.info(f"WhisperPipeline loaded successfully on {device}")
+    loading_model = True
+    try:
+        log.info(f"Loading model: {mid} on device: {device}")
+        model_path = snapshot_download(mid)
+        log.info(f"Model path: {model_path}")
+        new_pipeline = openvino_genai.WhisperPipeline(str(model_path), device)
+        with model_lock:
+            pipeline = new_pipeline
+            model_id_str = mid
+        log.info(f"WhisperPipeline loaded successfully on {device}")
+    finally:
+        loading_model = False
 
 
 @app.on_event("startup")
 async def startup():
-    load_model()
+    mid = os.environ.get("MODEL_ID", "OpenVINO/whisper-large-v3-turbo-int8-ov")
+    load_model_by_id(mid)
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +205,36 @@ async def transcribe_legacy(
         return PlainTextResponse(vtt, media_type="text/vtt")
     else:
         return JSONResponse({"text": full_text})
+
+
+# ---------------------------------------------------------------------------
+# Model management
+# ---------------------------------------------------------------------------
+
+class ModelLoadRequest(BaseModel):
+    model_id: str
+
+@app.post("/v1/model/load")
+async def load_new_model(req: ModelLoadRequest):
+    """Load a new model at runtime (downloads from HuggingFace if needed)."""
+    if loading_model:
+        raise HTTPException(409, "Another model is currently loading")
+    if req.model_id == model_id_str:
+        return {"status": "ok", "model": model_id_str, "message": "already loaded"}
+    try:
+        load_model_by_id(req.model_id)
+    except Exception as e:
+        log.error(f"Failed to load model {req.model_id}: {e}")
+        raise HTTPException(500, f"Failed to load model: {e}")
+    return {"status": "ok", "model": model_id_str}
+
+@app.get("/v1/model/info")
+async def model_info():
+    """Return current model info."""
+    return {
+        "model": model_id_str,
+        "status": "loading" if loading_model else ("loaded" if pipeline else "not_loaded"),
+    }
 
 
 # ---------------------------------------------------------------------------

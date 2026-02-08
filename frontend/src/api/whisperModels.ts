@@ -1,17 +1,11 @@
 import client from './client'
 
-export interface WhisperModel {
-  name: string
+export interface OVWhisperModel {
+  model_id: string
   label: string
-  size: string
-  size_bytes: number
-  description: string
-  vram_required: number
-  quantized: boolean
-  downloaded: boolean
+  downloads: number
+  quant: string  // "int8", "int4", "fp16"
   active: boolean
-  progress?: number
-  fits_vram?: boolean | null
 }
 
 export interface GPUInfo {
@@ -21,26 +15,11 @@ export interface GPUInfo {
   driver: string
 }
 
-export interface DownloadProgress {
-  progress: number
-  done: boolean
-  error?: string
-}
-
 export const listWhisperModels = () =>
-  client.get<WhisperModel[]>('/whisper/models')
+  client.get<OVWhisperModel[]>('/whisper/models')
 
-export const downloadWhisperModel = (model: string) =>
-  client.post<{ status: string }>('/whisper/models/download', { model })
-
-export const getDownloadProgress = (model: string) =>
-  client.get<DownloadProgress>(`/whisper/models/progress?model=${encodeURIComponent(model)}`)
-
-export const setActiveModel = (model: string) =>
-  client.post<{ status: string; model: string; note: string }>('/whisper/models/active', { model })
-
-export const deleteWhisperModel = (model: string) =>
-  client.delete('/whisper/models', { data: { model } })
+export const setActiveModel = (modelId: string) =>
+  client.post<{ status: string; model_id: string }>('/whisper/models/active', { model_id: modelId })
 
 export const getGPUInfo = () =>
   client.get<GPUInfo>('/gpu/info')

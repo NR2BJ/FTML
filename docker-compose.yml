@@ -20,7 +20,6 @@ services:
     volumes:
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
       - ftml_data:/data
-      - whisper_models:/data/whisper/models
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
@@ -29,7 +28,7 @@ services:
       - DATA_PATH=/data
       - DB_PATH=/data/videostream.db
       - SUBTITLE_PATH=/data/subtitles
-      - WHISPER_MODEL_PATH=/data/whisper/models
+      # WHISPER_MODEL_PATH no longer needed — models cached on whisper container
       - PORT=8080
       - LIBVA_DRIVER_NAME=iHD
     devices:
@@ -41,12 +40,12 @@ services:
     restart: unless-stopped
 
   # Whisper STT - OpenVINO GenAI (Intel Arc GPU accelerated)
+  # Model is managed via web UI Settings — no MODEL_ID env var needed
   whisper:
     build:
       context: ./whisper
       dockerfile: Dockerfile.openvino-genai
     environment:
-      - MODEL_ID=${WHISPER_MODEL_ID:-OpenVINO/whisper-large-v3-turbo-int8-ov}
       - DEVICE=${WHISPER_DEVICE:-GPU}
     volumes:
       - whisper_models:/root/.cache/huggingface
