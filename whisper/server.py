@@ -27,6 +27,7 @@ import io
 import os
 import logging
 import time
+from contextlib import asynccontextmanager
 
 import threading
 import numpy as np
@@ -47,10 +48,27 @@ logging.basicConfig(
 )
 log = logging.getLogger("whisper")
 
+DEFAULT_MODEL_ID = "OpenVINO/whisper-large-v3-int8-ov"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown lifecycle for FastAPI."""
+    mid = os.environ.get("MODEL_ID", DEFAULT_MODEL_ID)
+    load_model_by_id(mid)
+    if IDLE_TIMEOUT > 0:
+        log.info(f"VRAM auto-release enabled: model unloads after {IDLE_TIMEOUT}s idle")
+    else:
+        log.info("VRAM auto-release disabled (IDLE_TIMEOUT=0)")
+    log.info(f"Preprocess mode: {PREPROCESS_MODE}"
+             f"{f' (model={VOCAL_SEP_MODEL})' if PREPROCESS_MODE == 'vocal_sep' else ''}")
+    yield
+
+
 # ---------------------------------------------------------------------------
 # Globals
 # ---------------------------------------------------------------------------
-app = FastAPI(title="FTML Whisper Server")
+app = FastAPI(title="FTML Whisper Server", lifespan=lifespan)
 pipeline = None
 model_id_str = None
 model_lock = threading.Lock()
@@ -146,7 +164,7 @@ def ensure_model_loaded():
     global pipeline
     if pipeline is not None:
         return
-    mid = model_id_str or os.environ.get("MODEL_ID", "OpenVINO/distil-whisper-large-v3-int8-ov")
+    mid = model_id_str or os.environ.get("MODEL_ID", DEFAULT_MODEL_ID)
     log.info(f"Reloading model for inference: {mid}")
     load_model_by_id(mid)
 
@@ -176,17 +194,6 @@ def _check_and_unload():
     with _idle_timer_lock:
         _idle_timer = None
 
-
-@app.on_event("startup")
-async def startup():
-    mid = os.environ.get("MODEL_ID", "OpenVINO/distil-whisper-large-v3-int8-ov")
-    load_model_by_id(mid)
-    if IDLE_TIMEOUT > 0:
-        log.info(f"VRAM auto-release enabled: model unloads after {IDLE_TIMEOUT}s idle")
-    else:
-        log.info("VRAM auto-release disabled (IDLE_TIMEOUT=0)")
-    log.info(f"Preprocess mode: {PREPROCESS_MODE}"
-             f"{f' (model={VOCAL_SEP_MODEL})' if PREPROCESS_MODE == 'vocal_sep' else ''}")
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ RUN pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt
 COPY server.py vocal_separator.py /app/
 WORKDIR /app
 
-ENV MODEL_ID=OpenVINO/distil-whisper-large-v3-int8-ov
+ENV MODEL_ID=OpenVINO/whisper-large-v3-int8-ov
 ENV DEVICE=GPU
 ENV PORT=8178
 ENV PREPROCESS_MODE=adaptive
