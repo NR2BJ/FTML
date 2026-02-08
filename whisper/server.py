@@ -11,6 +11,8 @@ Pipeline (PREPROCESS_MODE):
   'vocal_sep':
     Audio → MDX-Net ONNX vocal separation (CPU, slow)
       → VAD → per-segment whisper on vocals (GPU)
+  'raw' (baseline):
+    Audio → Whisper 통째로 (VAD/전처리 없음, 성능 baseline 측정용)
   'none':
     Audio → VAD → silence replacement → single whisper call (GPU)
 
@@ -700,12 +702,15 @@ def run_inference(audio: np.ndarray, language: str = ""):
     PREPROCESS_MODE controls preprocessing strategy:
       'adaptive' (default): BGM detection + lightweight filtering for VAD accuracy
       'vocal_sep': MDX-Net ONNX vocal separation (slow but best for heavy BGM)
+      'raw': No VAD/preprocessing — full audio to Whisper (baseline measurement)
       'none': Raw VAD + silence replacement (legacy)
     """
     if PREPROCESS_MODE == "vocal_sep":
         return _run_inference_vocal_sep(audio, language)
     elif PREPROCESS_MODE == "adaptive":
         return _run_inference_adaptive(audio, language)
+    elif PREPROCESS_MODE == "raw":
+        return _run_inference_raw(audio, language)
     else:
         return _run_inference_legacy(audio, language)
 
@@ -864,6 +869,38 @@ def _run_inference_legacy(audio: np.ndarray, language: str = ""):
     # Schedule idle unload after inference completes
     _schedule_idle_unload()
 
+    return chunks, full_text, elapsed
+
+
+def _run_inference_raw(audio: np.ndarray, language: str = ""):
+    """Raw baseline: no VAD, no preprocessing, just Whisper on full audio.
+
+    Used for measuring baseline subtitle output without any filtering.
+    Set PREPROCESS_MODE=raw to use this mode.
+    """
+    ensure_model_loaded()
+
+    config = pipeline.get_generation_config()
+    config.return_timestamps = True
+    config.task = "transcribe"
+    if language and language != "auto":
+        config.language = f"<|{language}|>"
+
+    log.info(f"[raw] Full audio inference: {len(audio)/16000:.1f}s, "
+             f"model={model_id_str}, language={language or 'auto'}")
+
+    t0 = time.time()
+    result = pipeline.generate(audio, config)
+    elapsed = time.time() - t0
+
+    chunks = getattr(result, "chunks", [])
+    full_text = "".join(c.text for c in chunks).strip() if chunks else str(result)
+
+    log.info(f"[raw] Done: {len(chunks)} chunks, {len(full_text)} chars in {elapsed:.1f}s")
+    for i, c in enumerate(chunks[:5]):
+        log.info(f"  chunk[{i}]: [{c.start_ts:.1f}-{c.end_ts:.1f}] {c.text.strip()}")
+
+    _schedule_idle_unload()
     return chunks, full_text, elapsed
 
 
