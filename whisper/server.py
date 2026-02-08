@@ -24,6 +24,7 @@ import uvicorn
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel
+from silero_vad_lite import SileroVAD
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,6 +48,10 @@ IDLE_TIMEOUT = int(os.environ.get("IDLE_TIMEOUT", "120"))  # seconds (0 = disabl
 _last_inference_time = 0.0
 _idle_timer = None
 _idle_timer_lock = threading.Lock()
+
+# Silero VAD for filtering non-speech audio (BGM, effects, silence)
+# before sending to Whisper — prevents hallucination on non-speech segments.
+vad_model = SileroVAD(16000)
 
 # ---------------------------------------------------------------------------
 # Model loading / unloading
@@ -167,19 +172,40 @@ def format_ts(seconds: float) -> str:
 
 
 def chunks_to_vtt(chunks) -> str:
-    """Convert WhisperPipeline chunks to WebVTT format."""
+    """Convert WhisperPipeline chunks to WebVTT format with hallucination filtering."""
     lines = ["WEBVTT", ""]
     idx = 1
+    prev_text = ""
+    repeat_count = 0
+
     for chunk in chunks:
         text = chunk.text.strip()
-        if text:
-            start = format_ts(chunk.start_ts)
-            end = format_ts(chunk.end_ts)
-            lines.append(str(idx))
-            lines.append(f"{start} --> {end}")
-            lines.append(text)
-            lines.append("")
-            idx += 1
+        if not text:
+            continue
+
+        duration = chunk.end_ts - chunk.start_ts
+
+        # Skip chunks spanning an entire 30s window (likely hallucination)
+        if duration >= 29.0:
+            continue
+
+        # Skip 3+ consecutive identical texts (repetition hallucination)
+        if text == prev_text:
+            repeat_count += 1
+            if repeat_count >= 2:
+                continue
+        else:
+            repeat_count = 0
+        prev_text = text
+
+        start = format_ts(chunk.start_ts)
+        end = format_ts(chunk.end_ts)
+        lines.append(str(idx))
+        lines.append(f"{start} --> {end}")
+        lines.append(text)
+        lines.append("")
+        idx += 1
+
     return "\n".join(lines)
 
 
@@ -190,10 +216,78 @@ def decode_audio(audio_bytes: bytes) -> np.ndarray:
     return audio.astype(np.float32)
 
 
+def vad_speech_timestamps(audio: np.ndarray, sr: int = 16000,
+                           threshold: float = 0.5,
+                           min_speech_ms: int = 250,
+                           min_silence_ms: int = 500) -> list[dict]:
+    """Extract speech segments using Silero VAD (sample index based).
+
+    Returns list of {'start': int, 'end': int} with sample indices.
+    """
+    chunk_size = int(sr * 0.032)  # 32ms = 512 samples at 16kHz
+    min_speech_samples = int(sr * min_speech_ms / 1000)
+    min_silence_samples = int(sr * min_silence_ms / 1000)
+
+    segments = []
+    is_speech = False
+    speech_start = 0
+    silence_counter = 0  # consecutive silence chunks
+
+    for i in range(0, len(audio) - chunk_size + 1, chunk_size):
+        chunk_bytes = audio[i:i + chunk_size].astype(np.float32).tobytes()
+        prob = vad_model.process(chunk_bytes)
+
+        if prob >= threshold:
+            if not is_speech:
+                speech_start = i
+                is_speech = True
+            silence_counter = 0
+        else:
+            if is_speech:
+                silence_counter += 1
+                if silence_counter * chunk_size >= min_silence_samples:
+                    speech_end = i - (silence_counter - 1) * chunk_size
+                    if (speech_end - speech_start) >= min_speech_samples:
+                        segments.append({'start': speech_start, 'end': speech_end})
+                    is_speech = False
+                    silence_counter = 0
+
+    # Close last segment
+    if is_speech:
+        speech_end = len(audio) - silence_counter * chunk_size
+        if (speech_end - speech_start) >= min_speech_samples:
+            segments.append({'start': speech_start, 'end': speech_end})
+
+    return segments
+
+
+def apply_vad(audio: np.ndarray) -> tuple[np.ndarray, list[dict]]:
+    """Replace non-speech segments with silence using Silero VAD."""
+    segments = vad_speech_timestamps(audio)
+    if not segments:
+        return audio, []
+
+    result = np.zeros_like(audio)
+    for seg in segments:
+        result[seg['start']:seg['end']] = audio[seg['start']:seg['end']]
+
+    return result, segments
+
+
 def run_inference(audio: np.ndarray, language: str = ""):
     """Run whisper inference and return (chunks, full_text, elapsed)."""
     # Ensure model is loaded (may have been unloaded for VRAM release)
     ensure_model_loaded()
+
+    # VAD preprocessing: replace non-speech with silence to prevent hallucination
+    vad_audio, speech_segments = apply_vad(audio)
+    total_speech = sum(s['end'] - s['start'] for s in speech_segments) / 16000
+    log.info(f"VAD: {len(speech_segments)} segments, {total_speech:.1f}s speech / {len(audio)/16000:.1f}s total")
+
+    if not speech_segments:
+        log.info("No speech detected, skipping inference")
+        _schedule_idle_unload()
+        return [], "", 0.0
 
     log.info(f"Inference using model: {model_id_str}, language: {language or 'auto'}")
 
@@ -204,10 +298,10 @@ def run_inference(audio: np.ndarray, language: str = ""):
     if language and language != "auto":
         config.language = f"<|{language}|>"
 
-    log.info(f"Config: task={config.task}, language={config.language}, return_timestamps={config.return_timestamps}")
+    log.info(f"Config: task={config.task}, language={config.language}")
 
     t0 = time.time()
-    result = pipeline.generate(audio, config)
+    result = pipeline.generate(vad_audio, config)
     elapsed = time.time() - t0
 
     chunks = getattr(result, "chunks", [])
