@@ -64,7 +64,11 @@ func main() {
 	jobQueue.RegisterHandler(job.JobTranscribe, whisperSvc.HandleJob)
 
 	// Initialize translation service and register with job queue
-	translateSvc := translate.NewService(cfg.MediaPath, cfg.SubtitlePath, geminiKey, openAIKey, deeplKey)
+	// Gemini model is resolved dynamically from DB so changes take effect immediately
+	geminiModelResolver := func() string {
+		return database.GetSetting("gemini_model", "gemini-2.0-flash")
+	}
+	translateSvc := translate.NewService(cfg.MediaPath, cfg.SubtitlePath, geminiKey, geminiModelResolver, openAIKey, deeplKey)
 	jobQueue.RegisterHandler(job.JobTranslate, translateSvc.HandleJob)
 
 	// Create router

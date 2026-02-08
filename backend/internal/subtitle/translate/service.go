@@ -21,7 +21,7 @@ type Service struct {
 }
 
 // NewService creates a translation service with available engines
-func NewService(mediaPath, subtitlePath, geminiKey, openAIKey, deeplKey string) *Service {
+func NewService(mediaPath, subtitlePath, geminiKey string, geminiModelResolver ModelResolver, openAIKey, deeplKey string) *Service {
 	s := &Service{
 		engines:      make(map[string]Translator),
 		mediaPath:    mediaPath,
@@ -29,8 +29,8 @@ func NewService(mediaPath, subtitlePath, geminiKey, openAIKey, deeplKey string) 
 	}
 
 	if geminiKey != "" {
-		s.engines["gemini"] = NewGeminiTranslator(geminiKey)
-		log.Printf("[translate] registered Gemini translation engine")
+		s.engines["gemini"] = NewGeminiTranslator(geminiKey, geminiModelResolver)
+		log.Printf("[translate] registered Gemini engine (model resolved dynamically from DB)")
 	}
 
 	if openAIKey != "" {

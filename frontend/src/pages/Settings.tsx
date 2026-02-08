@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Settings as SettingsIcon, Save, Check, Loader2, Eye, EyeOff } from 'lucide-react'
+import { Settings as SettingsIcon, Save, Check, Loader2, Eye, EyeOff, ChevronDown } from 'lucide-react'
 import { getSettings, updateSettings, type SettingItem } from '@/api/settings'
+import { listGeminiModels, type GeminiModel } from '@/api/geminiModels'
 import WhisperModelManager from '@/components/WhisperModelManager'
 import WhisperBackendManager from '@/components/WhisperBackendManager'
 
@@ -12,6 +13,8 @@ export default function Settings() {
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set())
+  const [geminiModels, setGeminiModels] = useState<GeminiModel[]>([])
+  const [geminiModelsLoading, setGeminiModelsLoading] = useState(false)
 
   useEffect(() => {
     loadSettings()
@@ -27,10 +30,28 @@ export default function Settings() {
         vals[s.key] = s.value
       }
       setValues(vals)
+
+      // If Gemini API key is configured, load available models
+      const geminiSetting = data.find(s => s.key === 'gemini_api_key')
+      if (geminiSetting?.has_value) {
+        loadGeminiModels()
+      }
     } catch {
       setError('Failed to load settings')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadGeminiModels = async () => {
+    setGeminiModelsLoading(true)
+    try {
+      const { data } = await listGeminiModels()
+      setGeminiModels(data || [])
+    } catch {
+      // Silently fail — user can still type model manually
+    } finally {
+      setGeminiModelsLoading(false)
     }
   }
 
@@ -88,8 +109,81 @@ export default function Settings() {
     whisper_model: 'Active model is managed via the model manager below. This field shows the current setting stored in the database.',
     whisper_language: 'Default language for transcription. Use "auto" for automatic detection, or ISO 639-1 codes (ko, en, ja, zh, etc.)',
     gemini_api_key: 'Google Gemini API key for subtitle translation. Get one at aistudio.google.com',
+    gemini_model: 'Select a Gemini model for translation. Models are fetched from Google API automatically.',
     openai_api_key: 'OpenAI API key for Whisper API and GPT translation. Used for both transcription and translation.',
     deepl_api_key: 'DeepL API key for translation. Supports the free tier API.',
+  }
+
+  const renderSettingInput = (setting: SettingItem) => {
+    // Special: Gemini model dropdown
+    if (setting.key === 'gemini_model') {
+      return (
+        <div className="relative">
+          {geminiModels.length > 0 ? (
+            <>
+              <select
+                value={values[setting.key] || ''}
+                onChange={(e) =>
+                  setValues((prev) => ({ ...prev, [setting.key]: e.target.value }))
+                }
+                className="appearance-none w-full bg-dark-800 border border-dark-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary-500 pr-8 cursor-pointer"
+              >
+                {!values[setting.key] && <option value="">Select a model...</option>}
+                {geminiModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.display_name} ({m.id})
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+            </>
+          ) : (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={values[setting.key] || ''}
+                onChange={(e) =>
+                  setValues((prev) => ({ ...prev, [setting.key]: e.target.value }))
+                }
+                placeholder={setting.placeholder}
+                className="flex-1 bg-dark-800 border border-dark-600 rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-primary-500"
+              />
+              {geminiModelsLoading && (
+                <Loader2 className="w-4 h-4 text-gray-400 animate-spin shrink-0" />
+              )}
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    // Default: text/password input
+    return (
+      <div className="relative">
+        <input
+          type={setting.secret && !visibleKeys.has(setting.key) ? 'password' : 'text'}
+          value={values[setting.key] || ''}
+          onChange={(e) =>
+            setValues((prev) => ({ ...prev, [setting.key]: e.target.value }))
+          }
+          placeholder={setting.placeholder}
+          className="w-full bg-dark-800 border border-dark-600 rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-primary-500 pr-10"
+        />
+        {setting.secret && (
+          <button
+            type="button"
+            onClick={() => toggleVisibility(setting.key)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+          >
+            {visibleKeys.has(setting.key) ? (
+              <EyeOff className="w-4 h-4" />
+            ) : (
+              <Eye className="w-4 h-4" />
+            )}
+          </button>
+        )}
+      </div>
+    )
   }
 
   if (loading) {
@@ -122,30 +216,7 @@ export default function Settings() {
                     <span className="ml-2 text-xs text-green-500">configured</span>
                   )}
                 </label>
-                <div className="relative">
-                  <input
-                    type={setting.secret && !visibleKeys.has(setting.key) ? 'password' : 'text'}
-                    value={values[setting.key] || ''}
-                    onChange={(e) =>
-                      setValues((prev) => ({ ...prev, [setting.key]: e.target.value }))
-                    }
-                    placeholder={setting.placeholder}
-                    className="w-full bg-dark-800 border border-dark-600 rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-primary-500 pr-10"
-                  />
-                  {setting.secret && (
-                    <button
-                      type="button"
-                      onClick={() => toggleVisibility(setting.key)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
-                    >
-                      {visibleKeys.has(setting.key) ? (
-                        <EyeOff className="w-4 h-4" />
-                      ) : (
-                        <Eye className="w-4 h-4" />
-                      )}
-                    </button>
-                  )}
-                </div>
+                {renderSettingInput(setting)}
                 {settingHelp[setting.key] && (
                   <p className="text-xs text-gray-500 mt-1">
                     {settingHelp[setting.key]}

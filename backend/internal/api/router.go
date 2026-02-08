@@ -35,6 +35,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	whisperModelsHandler := handlers.NewWhisperModelsHandler(database)
 	presetsHandler := handlers.NewPresetsHandler(database)
 	whisperBackendsHandler := handlers.NewWhisperBackendsHandler(database)
+	geminiModelsHandler := handlers.NewGeminiModelsHandler(database)
 
 	// Internal routes (no auth — for container-to-container communication)
 	r.Route("/internal", func(r chi.Router) {
@@ -99,6 +100,9 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			r.Get("/presets", presetsHandler.ListPresets)
 			r.Post("/presets", presetsHandler.CreatePreset)
 			r.Delete("/presets/{id}", presetsHandler.DeletePreset)
+
+			// Gemini Models
+			r.Get("/gemini/models", geminiModelsHandler.ListModels)
 
 			// Whisper Backends
 			r.Get("/whisper/backends", whisperBackendsHandler.ListBackends)

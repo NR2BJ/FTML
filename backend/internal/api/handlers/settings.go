@@ -12,6 +12,7 @@ var settingsKeys = []SettingDef{
 	{Key: "whisper_model", Label: "Whisper Model", Group: "whisper", Placeholder: "ggml-large-v3.bin", Secret: false},
 	{Key: "whisper_language", Label: "Default Language", Group: "whisper", Placeholder: "auto", Secret: false},
 	{Key: "gemini_api_key", Label: "Gemini API Key", Group: "translation", Placeholder: "AIza...", Secret: true},
+	{Key: "gemini_model", Label: "Gemini Model", Group: "translation", Placeholder: "gemini-2.0-flash", Secret: false},
 	{Key: "openai_api_key", Label: "OpenAI API Key", Group: "translation", Placeholder: "sk-...", Secret: true},
 	{Key: "deepl_api_key", Label: "DeepL API Key", Group: "translation", Placeholder: "xxxxxxxx-xxxx-...", Secret: true},
 }

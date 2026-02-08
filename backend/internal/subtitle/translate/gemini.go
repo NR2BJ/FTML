@@ -13,23 +13,37 @@ import (
 )
 
 const (
-	geminiAPIURL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-	batchSize    = 50 // number of cues per API call
+	geminiAPIBase = "https://generativelanguage.googleapis.com/v1beta/models"
+	batchSize     = 50 // number of cues per API call
 )
+
+// ModelResolver returns the current Gemini model from settings
+type ModelResolver func() string
 
 // GeminiTranslator translates subtitles using Google Gemini API
 type GeminiTranslator struct {
-	apiKey     string
-	httpClient *http.Client
+	apiKey        string
+	modelResolver ModelResolver // dynamically resolves model from DB
+	httpClient    *http.Client
 }
 
-func NewGeminiTranslator(apiKey string) *GeminiTranslator {
+func NewGeminiTranslator(apiKey string, modelResolver ModelResolver) *GeminiTranslator {
 	return &GeminiTranslator{
-		apiKey: apiKey,
+		apiKey:        apiKey,
+		modelResolver: modelResolver,
 		httpClient: &http.Client{
 			Timeout: 2 * time.Minute,
 		},
 	}
+}
+
+func (g *GeminiTranslator) currentModel() string {
+	if g.modelResolver != nil {
+		if m := g.modelResolver(); m != "" {
+			return m
+		}
+	}
+	return "gemini-2.0-flash"
 }
 
 func (g *GeminiTranslator) Name() string {
@@ -40,6 +54,9 @@ func (g *GeminiTranslator) Translate(ctx context.Context, cues []SubtitleCue, op
 	if g.apiKey == "" {
 		return nil, fmt.Errorf("Gemini API key not configured")
 	}
+
+	model := g.currentModel()
+	log.Printf("[gemini] using model: %s", model)
 
 	systemPrompt := GetSystemPrompt(opts.Preset, opts.SourceLang, opts.TargetLang)
 	if opts.Preset == "custom" && opts.CustomPrompt != "" {
@@ -63,7 +80,7 @@ func (g *GeminiTranslator) Translate(ctx context.Context, cues []SubtitleCue, op
 
 		log.Printf("[gemini] translating batch %d/%d (%d cues)", batchNum, totalBatches, len(batch))
 
-		translated, err := g.translateBatch(ctx, batch, systemPrompt)
+		translated, err := g.translateBatch(ctx, batch, systemPrompt, model)
 		if err != nil {
 			return nil, fmt.Errorf("batch %d: %w", batchNum, err)
 		}
@@ -74,7 +91,7 @@ func (g *GeminiTranslator) Translate(ctx context.Context, cues []SubtitleCue, op
 	return result, nil
 }
 
-func (g *GeminiTranslator) translateBatch(ctx context.Context, cues []SubtitleCue, systemPrompt string) ([]SubtitleCue, error) {
+func (g *GeminiTranslator) translateBatch(ctx context.Context, cues []SubtitleCue, systemPrompt string, model string) ([]SubtitleCue, error) {
 	// Build the prompt with numbered cues
 	var userPrompt strings.Builder
 	userPrompt.WriteString("Translate the following subtitle cues. Return ONLY a JSON array with the translated text for each cue, maintaining the same order and count.\n\n")
@@ -111,7 +128,7 @@ func (g *GeminiTranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 		return nil, err
 	}
 
-	url := fmt.Sprintf("%s?key=%s", geminiAPIURL, g.apiKey)
+	url := fmt.Sprintf("%s/%s:generateContent?key=%s", geminiAPIBase, model, g.apiKey)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, err
