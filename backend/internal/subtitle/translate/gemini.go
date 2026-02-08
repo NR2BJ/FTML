@@ -135,7 +135,15 @@ func (g *GeminiTranslator) Translate(ctx context.Context, cues []SubtitleCue, op
 					Text string `json:"text"`
 				} `json:"parts"`
 			} `json:"content"`
+			FinishReason string `json:"finishReason"`
 		} `json:"candidates"`
+		PromptFeedback struct {
+			BlockReason   string `json:"blockReason"`
+			SafetyRatings []struct {
+				Category    string `json:"category"`
+				Probability string `json:"probability"`
+			} `json:"safetyRatings"`
+		} `json:"promptFeedback"`
 	}
 
 	if err := json.Unmarshal(body, &geminiResp); err != nil {
@@ -143,7 +151,15 @@ func (g *GeminiTranslator) Translate(ctx context.Context, cues []SubtitleCue, op
 	}
 
 	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		log.Printf("[gemini] empty response body: %s", string(body))
+		if geminiResp.PromptFeedback.BlockReason != "" {
+			return nil, fmt.Errorf("Gemini blocked: %s", geminiResp.PromptFeedback.BlockReason)
+		}
 		return nil, fmt.Errorf("empty Gemini response")
+	}
+
+	if fr := geminiResp.Candidates[0].FinishReason; fr != "" && fr != "STOP" {
+		log.Printf("[gemini] WARNING: finishReason=%s", fr)
 	}
 
 	// Parse the JSON array of translated strings
