@@ -6,22 +6,16 @@ FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
     intel-opencl-icd libze1 \
-    libsndfile1 ffmpeg git \
+    libsndfile1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install CPU-only PyTorch first (required by demucs for vocal separation)
+# Install CPU-only PyTorch first (required by audio-separator + other deps)
 RUN pip3 install --break-system-packages --no-cache-dir \
     torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 
-# Install demucs separately (depends on torch).
-# Use --force-reinstall to ensure demucs.api module is included.
-# If PyPI version is incomplete, fall back to GitHub source.
-RUN pip3 install --break-system-packages --no-cache-dir --force-reinstall demucs && \
-    python3 -c "from demucs.api import Separator; print('demucs.api OK')" || \
-    (echo "PyPI demucs missing api module, installing from GitHub..." && \
-     pip3 install --break-system-packages --no-cache-dir \
-     git+https://github.com/facebookresearch/demucs.git && \
-     python3 -c "from demucs.api import Separator; print('demucs.api OK (GitHub)')")
+# Install audio-separator with CPU ONNX runtime for vocal separation
+RUN pip3 install --break-system-packages --no-cache-dir "audio-separator[cpu]" && \
+    python3 -c "from audio_separator.separator import Separator; print('audio-separator OK')"
 
 COPY requirements.txt /app/
 RUN pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt
@@ -32,7 +26,8 @@ WORKDIR /app
 ENV MODEL_ID=OpenVINO/distil-whisper-large-v3-int8-ov
 ENV DEVICE=GPU
 ENV PORT=8178
-ENV ENABLE_DEMUCS=1
+ENV ENABLE_VOCAL_SEP=1
+ENV VOCAL_SEP_MODEL=UVR_MDXNET_KARA_2.onnx
 # Prevent PyTorch from caching CUDA memory (we use CPU-only)
 ENV PYTORCH_NO_CUDA_MEMORY_CACHING=1
 

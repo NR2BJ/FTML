@@ -3,9 +3,10 @@ FTML Whisper Server — OpenVINO GenAI WhisperPipeline
 Lightweight FastAPI server wrapping OpenVINO's WhisperPipeline for
 Intel Arc GPU-accelerated speech-to-text with timestamp support.
 
-Pipeline (when ENABLE_DEMUCS=1):
-  Audio → Demucs vocal separation (CPU) → VAD segment extraction
-    → per-segment whisper inference (GPU) → timestamp remapping → VTT
+Pipeline (when ENABLE_VOCAL_SEP=1):
+  Audio → Vocal separation via audio-separator (CPU)
+    → VAD segment extraction → per-segment whisper inference (GPU)
+    → timestamp remapping → VTT
 
 Endpoints:
   POST /v1/audio/transcriptions  (OpenAI-compatible)
@@ -19,11 +20,14 @@ import gc
 import io
 import os
 import logging
+import shutil
+import tempfile
 import time
 
 import threading
 import numpy as np
 import librosa
+import soundfile as sf
 import uvicorn
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
@@ -57,10 +61,12 @@ _idle_timer_lock = threading.Lock()
 # before sending to Whisper — prevents hallucination on non-speech segments.
 vad_model = SileroVAD(16000)
 
-# Demucs vocal separation (lazy loaded)
-ENABLE_DEMUCS = os.environ.get("ENABLE_DEMUCS", "1") == "1"
-_demucs_separator = None
-_demucs_lock = threading.Lock()
+# Vocal separation via audio-separator (lazy loaded)
+ENABLE_VOCAL_SEP = os.environ.get("ENABLE_VOCAL_SEP",
+                    os.environ.get("ENABLE_DEMUCS", "1")) == "1"
+VOCAL_SEP_MODEL = os.environ.get("VOCAL_SEP_MODEL", "UVR_MDXNET_KARA_2.onnx")
+_vocal_separator = None
+_vocal_sep_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Model loading / unloading
@@ -165,7 +171,8 @@ async def startup():
         log.info(f"VRAM auto-release enabled: model unloads after {IDLE_TIMEOUT}s idle")
     else:
         log.info("VRAM auto-release disabled (IDLE_TIMEOUT=0)")
-    log.info(f"Demucs vocal separation: {'enabled' if ENABLE_DEMUCS else 'disabled'}")
+    log.info(f"Vocal separation: {'enabled' if ENABLE_VOCAL_SEP else 'disabled'}"
+             f"{f' (model={VOCAL_SEP_MODEL})' if ENABLE_VOCAL_SEP else ''}")
 
 
 # ---------------------------------------------------------------------------
@@ -229,62 +236,85 @@ def decode_audio(audio_bytes: bytes) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Demucs vocal separation
+# Vocal separation (audio-separator)
 # ---------------------------------------------------------------------------
 
-def _get_demucs_separator():
-    """Lazy-load the Demucs separator (downloads htdemucs model on first use)."""
-    global _demucs_separator, ENABLE_DEMUCS
-    with _demucs_lock:
-        if _demucs_separator is not None:
-            return _demucs_separator
+def _get_vocal_separator():
+    """Lazy-load audio-separator (downloads model on first use)."""
+    global _vocal_separator, ENABLE_VOCAL_SEP
+    with _vocal_sep_lock:
+        if _vocal_separator is not None:
+            return _vocal_separator
         try:
-            log.info("Loading Demucs htdemucs model (first use, may download)...")
-            import torch
-            from demucs.api import Separator
-            _demucs_separator = Separator(model="htdemucs", device="cpu", shifts=1, overlap=0.25)
-            log.info("Demucs model loaded")
-            return _demucs_separator
-        except ImportError as e:
-            log.error(f"Demucs import failed: {e}. Disabling demucs permanently for this session.")
-            ENABLE_DEMUCS = False
+            log.info(f"Loading audio-separator with model {VOCAL_SEP_MODEL}...")
+            from audio_separator.separator import Separator
+            _vocal_separator = Separator(
+                output_format="WAV",
+                output_single_stem="Vocals",
+                model_file_dir="/root/.cache/huggingface/audio-separator-models",
+            )
+            _vocal_separator.load_model(model_filename=VOCAL_SEP_MODEL)
+            log.info(f"audio-separator model loaded: {VOCAL_SEP_MODEL}")
+            return _vocal_separator
+        except Exception as e:
+            log.error(f"audio-separator init failed: {e}. Disabling vocal separation.")
+            ENABLE_VOCAL_SEP = False
             raise
 
 
-def demucs_separate(audio_16k: np.ndarray) -> np.ndarray:
-    """Extract vocals from audio using Demucs htdemucs model.
+def vocal_separate(audio_16k: np.ndarray) -> np.ndarray:
+    """Extract vocals from audio using audio-separator.
+
+    audio-separator only works with file paths, so we:
+    1. Write input audio to a temp WAV file
+    2. Run separation
+    3. Read vocals WAV back as numpy
+    4. Clean up temp files
 
     Args:
         audio_16k: 16kHz mono float32 numpy array
-
     Returns:
         vocals_16k: 16kHz mono float32 numpy array (vocals only)
     """
-    import torch
+    separator = _get_vocal_separator()
 
-    separator = _get_demucs_separator()
+    tmp_dir = tempfile.mkdtemp(prefix="vocal_sep_")
+    try:
+        # Write input audio as WAV (16kHz mono)
+        input_path = os.path.join(tmp_dir, "input.wav")
+        sf.write(input_path, audio_16k, 16000, subtype='FLOAT')
 
-    # Demucs expects 44.1kHz stereo — upsample and duplicate channels
-    audio_44k = librosa.resample(audio_16k, orig_sr=16000, target_sr=44100)
-    # Create stereo by duplicating mono
-    stereo = np.stack([audio_44k, audio_44k], axis=0)  # (2, samples)
-    wav_tensor = torch.from_numpy(stereo).float()
+        # Hold lock during separation (mutates separator.output_dir)
+        with _vocal_sep_lock:
+            separator.output_dir = tmp_dir
+            t0 = time.time()
+            output_files = separator.separate(input_path)
+            elapsed = time.time() - t0
 
-    t0 = time.time()
-    # Run separation
-    _, separated = separator.separate_tensor(wav_tensor, sr=44100)
-    elapsed = time.time() - t0
+        if not output_files:
+            raise RuntimeError("audio-separator returned no output files")
 
-    # Extract vocals stem — separated is a dict with stem names
-    vocals_44k = separated["vocals"].numpy()  # (2, samples)
-    # Convert back to mono 16kHz
-    vocals_mono = vocals_44k.mean(axis=0)  # average stereo to mono
-    vocals_16k = librosa.resample(vocals_mono, orig_sr=44100, target_sr=16000)
+        # Find the vocals output file
+        vocals_path = None
+        for f in output_files:
+            full_path = f if os.path.isabs(f) else os.path.join(tmp_dir, f)
+            if os.path.exists(full_path):
+                vocals_path = full_path
+                break
 
-    log.info(f"Demucs: vocal separation done in {elapsed:.1f}s "
-             f"({len(audio_16k)/16000:.1f}s audio)")
+        if vocals_path is None:
+            raise RuntimeError(f"Vocals output file not found. Got: {output_files}")
 
-    return vocals_16k.astype(np.float32)
+        # Read vocals WAV and resample to 16kHz mono
+        vocals, _ = librosa.load(vocals_path, sr=16000, mono=True)
+
+        log.info(f"Vocal separation done in {elapsed:.1f}s "
+                 f"({len(audio_16k)/16000:.1f}s audio, model={VOCAL_SEP_MODEL})")
+
+        return vocals.astype(np.float32)
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -488,37 +518,35 @@ def run_segment_inference(audio: np.ndarray, segments: list[dict],
 def run_inference(audio: np.ndarray, language: str = ""):
     """Run the full transcription pipeline.
 
-    When ENABLE_DEMUCS=1 (default):
-      1. Demucs vocal separation (remove BGM/SFX)
+    When ENABLE_VOCAL_SEP=1 (default):
+      1. Vocal separation via audio-separator (remove BGM/SFX)
       2. VAD segment extraction (find speech regions)
       3. Merge close segments (gap < 1.5s, max 28s)
       4. Per-segment whisper inference with timestamp remapping
 
-    When ENABLE_DEMUCS=0 (fallback):
+    When ENABLE_VOCAL_SEP=0 (fallback):
       Original method — replace non-speech with silence, single inference.
     """
-    if ENABLE_DEMUCS:
-        return _run_inference_demucs(audio, language)
+    if ENABLE_VOCAL_SEP:
+        return _run_inference_vocal_sep(audio, language)
     else:
         return _run_inference_legacy(audio, language)
 
 
-def _run_inference_demucs(audio: np.ndarray, language: str = ""):
-    """Demucs + VAD segment-based inference pipeline."""
-    # Step 1: Demucs vocal separation
+def _run_inference_vocal_sep(audio: np.ndarray, language: str = ""):
+    """Vocal separation + VAD segment-based inference pipeline."""
+    # Step 1: Vocal separation
     t0 = time.time()
-    demucs_ok = False
     try:
-        vocals = demucs_separate(audio)
-        demucs_ok = True
+        vocals = vocal_separate(audio)
     except Exception as e:
-        log.error(f"Demucs separation failed: {e}, falling back to legacy inference")
-        # Without demucs, VAD on raw audio is unreliable (BGM causes missed speech).
+        log.error(f"Vocal separation failed: {e}, falling back to legacy inference")
+        # Without vocal separation, VAD on raw audio is unreliable (BGM masks speech).
         # Fall back to legacy whole-audio inference instead of segment-based.
         return _run_inference_legacy(audio, language)
-    demucs_time = time.time() - t0
+    sep_time = time.time() - t0
 
-    # Step 2: VAD on vocals (clean audio after demucs) to find speech segments
+    # Step 2: VAD on vocals (clean audio after separation) to find speech segments
     speech_segments = vad_speech_timestamps(vocals)
     total_speech = sum(s['end'] - s['start'] for s in speech_segments) / 16000
     log.info(f"VAD: {len(speech_segments)} raw segments, "
@@ -539,8 +567,8 @@ def _run_inference_demucs(audio: np.ndarray, language: str = ""):
         vocals, merged, language
     )
 
-    total_time = demucs_time + inference_time
-    log.info(f"Pipeline complete: demucs={demucs_time:.1f}s, "
+    total_time = sep_time + inference_time
+    log.info(f"Pipeline complete: vocal_sep={sep_time:.1f}s, "
              f"inference={inference_time:.1f}s, total={total_time:.1f}s, "
              f"{len(all_chunks)} chunks")
 
@@ -720,7 +748,8 @@ async def model_info():
         "status": "loading" if loading_model else ("loaded" if pipeline else "unloaded"),
         "idle_timeout": IDLE_TIMEOUT,
         "vram_held": pipeline is not None,
-        "demucs_enabled": ENABLE_DEMUCS,
+        "vocal_sep_enabled": ENABLE_VOCAL_SEP,
+        "vocal_sep_model": VOCAL_SEP_MODEL if ENABLE_VOCAL_SEP else None,
     }
 
 
