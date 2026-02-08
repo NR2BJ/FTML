@@ -507,14 +507,18 @@ def _run_inference_demucs(audio: np.ndarray, language: str = ""):
     """Demucs + VAD segment-based inference pipeline."""
     # Step 1: Demucs vocal separation
     t0 = time.time()
+    demucs_ok = False
     try:
         vocals = demucs_separate(audio)
+        demucs_ok = True
     except Exception as e:
-        log.error(f"Demucs separation failed: {e}, falling back to raw audio")
-        vocals = audio
+        log.error(f"Demucs separation failed: {e}, falling back to legacy inference")
+        # Without demucs, VAD on raw audio is unreliable (BGM causes missed speech).
+        # Fall back to legacy whole-audio inference instead of segment-based.
+        return _run_inference_legacy(audio, language)
     demucs_time = time.time() - t0
 
-    # Step 2: VAD on vocals to find speech segments
+    # Step 2: VAD on vocals (clean audio after demucs) to find speech segments
     speech_segments = vad_speech_timestamps(vocals)
     total_speech = sum(s['end'] - s['start'] for s in speech_segments) / 16000
     log.info(f"VAD: {len(speech_segments)} raw segments, "
