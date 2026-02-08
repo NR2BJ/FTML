@@ -67,7 +67,7 @@ def load_model_by_id(mid: str):
 
 @app.on_event("startup")
 async def startup():
-    mid = os.environ.get("MODEL_ID", "OpenVINO/whisper-large-v3-turbo-int8-ov")
+    mid = os.environ.get("MODEL_ID", "OpenVINO/distil-whisper-large-v3-int8-ov")
     load_model_by_id(mid)
 
 

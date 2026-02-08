@@ -43,7 +43,7 @@ func NewWhisperModelsHandler(database *db.Database) *WhisperModelsHandler {
 	}
 }
 
-const defaultModelID = "OpenVINO/whisper-large-v3-turbo-int8-ov"
+const defaultModelID = "OpenVINO/distil-whisper-large-v3-int8-ov"
 
 // ListModels fetches OpenVINO whisper models from HuggingFace API
 func (h *WhisperModelsHandler) ListModels(w http.ResponseWriter, r *http.Request) {
