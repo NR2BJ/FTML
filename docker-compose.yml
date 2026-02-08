@@ -47,6 +47,9 @@ services:
       dockerfile: Dockerfile.sycl
     environment:
       - WHISPER_MODEL=${WHISPER_MODEL_SYCL:-${WHISPER_MODEL:-ggml-large-v3.bin}}
+      - BACKEND_URL=http://backend:8080
+    depends_on:
+      - backend
     volumes:
       - whisper_models:/models:ro
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
@@ -65,6 +68,9 @@ services:
       dockerfile: Dockerfile.openvino
     environment:
       - WHISPER_MODEL=${WHISPER_MODEL_OPENVINO:-${WHISPER_MODEL:-ggml-large-v3.bin}}
+      - BACKEND_URL=http://backend:8080
+    depends_on:
+      - backend
     volumes:
       - whisper_models:/models:ro
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro

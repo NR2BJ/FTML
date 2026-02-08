@@ -36,6 +36,11 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	presetsHandler := handlers.NewPresetsHandler(database)
 	whisperBackendsHandler := handlers.NewWhisperBackendsHandler(database)
 
+	// Internal routes (no auth — for container-to-container communication)
+	r.Route("/internal", func(r chi.Router) {
+		r.Get("/whisper/active-model", whisperModelsHandler.GetActiveModel)
+	})
+
 	// Public routes
 	r.Route("/api", func(r chi.Router) {
 		// Auth (public)

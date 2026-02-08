@@ -35,6 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /whisper/build/bin/whisper-server /usr/local/bin/
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Create model directory
 RUN mkdir -p /models
@@ -43,5 +45,5 @@ ENV WHISPER_MODEL=ggml-large-v3-turbo.bin
 
 EXPOSE 8178
 
-# Model can be overridden via WHISPER_MODEL env var or docker-compose
-ENTRYPOINT ["sh", "-c", "exec whisper-server --host 0.0.0.0 --port 8178 -m /models/${WHISPER_MODEL}"]
+# Entrypoint queries FTML backend for the active model, then falls back to env var
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

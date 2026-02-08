@@ -311,6 +311,17 @@ func (h *WhisperModelsHandler) SetActiveModel(w http.ResponseWriter, r *http.Req
 	})
 }
 
+// GetActiveModel returns the currently active whisper model filename.
+// This endpoint is designed for internal use by whisper containers at startup
+// (no authentication required).
+func (h *WhisperModelsHandler) GetActiveModel(w http.ResponseWriter, r *http.Request) {
+	activeModel := h.database.GetSetting("whisper_model", "ggml-large-v3.bin")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"model": activeModel,
+	})
+}
+
 func (h *WhisperModelsHandler) downloadModel(model *WhisperModelDef, ds *downloadState) {
 	url := fmt.Sprintf("%s/%s", huggingfaceBaseURL, model.Name)
 	filePath := filepath.Join(h.modelPath, model.Name)
