@@ -22,6 +22,7 @@ export default function Player({ path }: PlayerProps) {
   const probeDurationRef = useRef<number>(0)
   const lastSavedTimeRef = useRef<number>(0)
   const hlsStartTimeRef = useRef<number>(0) // HLS transcode start offset
+  const absTimeRef = useRef<number>(0)      // current absolute playback time (survives HLS destroy)
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const sessionIDRef = useRef<string | null>(null)
   const [useHLS, setUseHLS] = useState(true)
@@ -370,9 +371,9 @@ export default function Player({ path }: PlayerProps) {
     setCurrentFile(path)
     setError(null)
 
-    // Save current absolute time for quality switches (not new videos)
-    const prevStartOffset = hlsStartTimeRef.current
-    const savedAbsTime = (video.currentTime || 0) + prevStartOffset
+    // Save current absolute time for quality/audio-track switches (not new videos)
+    // Use absTimeRef which survives HLS destroy from the cleanup of the previous effect run
+    const savedAbsTime = absTimeRef.current
     const wasPlaying = !video.paused
 
     // Cleanup previous HLS instance
@@ -429,7 +430,9 @@ export default function Player({ path }: PlayerProps) {
     const video = videoRef.current
     if (video) {
       // Report absolute time (HLS video.currentTime is relative to transcode start)
-      setCurrentTime(video.currentTime + hlsStartTimeRef.current)
+      const abs = video.currentTime + hlsStartTimeRef.current
+      absTimeRef.current = abs
+      setCurrentTime(abs)
     }
   }, [setCurrentTime])
 

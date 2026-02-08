@@ -74,7 +74,14 @@ export default function AudioSelector() {
             const lang = formatLanguage(stream.language)
             const channels = formatChannels(stream.channels)
             const codec = stream.codec_name.toUpperCase()
-            const label = stream.title || lang || `Track ${stream.stream_index + 1}`
+            const title = stream.title
+            // Primary label: title if available, otherwise language, otherwise generic
+            const primaryLabel = title || lang || `Track ${stream.stream_index + 1}`
+            // Sub info: language (if title shown) + codec + channels
+            const subParts: string[] = []
+            if (title && lang) subParts.push(lang)
+            subParts.push(codec)
+            subParts.push(channels)
 
             return (
               <button
@@ -83,14 +90,14 @@ export default function AudioSelector() {
                   setAudioTrack(stream.stream_index)
                   setOpen(false)
                 }}
-                className={`block w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 transition-colors ${
+                className={`block w-full text-left px-3 py-1.5 hover:bg-gray-700 transition-colors ${
                   audioTrack === stream.stream_index ? 'text-primary-400' : 'text-gray-300'
                 }`}
               >
-                <span>{label}</span>
-                <span className="text-xs text-gray-500 ml-2">
-                  {codec} {channels}
-                </span>
+                <div className="text-sm">{primaryLabel}</div>
+                <div className="text-[11px] text-gray-500">
+                  {subParts.join(' · ')}
+                </div>
               </button>
             )
           })}
