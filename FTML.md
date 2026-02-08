@@ -964,6 +964,11 @@ server {
 | 9 | faster-whisper CUDA 테스트 | 구현 완료, NVIDIA GPU 환경에서 Docker 테스트 필요 | 중 |
 | 10 | OpenAI 번역 테스트 | 구현 완료, API 키 설정 후 번역 품질 테스트 필요 | 중 |
 | 11 | DeepL 번역 테스트 | 구현 완료, API 키 설정 후 번역 품질 테스트 필요 | 중 |
+| 12 | AMD ROCm/CLBlast whisper 지원 | AMD GPU용 whisper.cpp Dockerfile 작성 + 테스트. Dockerfile.rocm 틀만 존재, 실제 빌드/검증 필요. | 중 |
+| 13 | NVIDIA CUDA whisper 검증 | whisper-cuda (faster-whisper) 컨테이너 NVIDIA GPU 환경에서 Docker 빌드 + 전체 파이프라인 테스트. Dockerfile.cuda 존재하나 미검증. | 중 |
+| 14 | OpenVINO whisper 검증 | whisper-openvino 컨테이너 Intel GPU 환경에서 빌드 + 성능 비교 테스트. Dockerfile.openvino 작성 완료, 실환경 검증 필요. | 중 |
+| 15 | AMD AMF 트랜스코딩 지원 | AMD GPU용 AMF/VAAPI 인코딩 지원. hwaccel.go에 VAAPI는 있으나 AMF 전용 최적화 미구현. AMD 환경 테스트 필요. | 중 |
+| 16 | NVIDIA NVENC 트랜스코딩 검증 | NVENC 인코딩 파이프라인 NVIDIA 환경에서 테스트. hwaccel.go에 구현은 되어있으나 미검증. | 중 |
 
 ### 참고
 - 시청 기록 관련은 FTML.md 섹션 7 (관리자 대시보드)과 섹션 8 (사용자 기능)에 스펙이 정의되어 있음

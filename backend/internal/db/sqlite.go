@@ -73,9 +73,22 @@ func (d *Database) migrate() error {
 		prompt TEXT NOT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS whisper_backends (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		backend_type TEXT NOT NULL,
+		url TEXT NOT NULL DEFAULT '',
+		enabled INTEGER NOT NULL DEFAULT 1,
+		priority INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
 	`
-	_, err := d.db.Exec(schema)
-	return err
+	if _, err := d.db.Exec(schema); err != nil {
+		return err
+	}
+	d.migrateWhisperBackends()
+	return nil
 }
 
 func (d *Database) EnsureAdmin(username, password string) error {
@@ -239,4 +252,102 @@ func (d *Database) CreateTranslationPreset(name, prompt string) (int64, error) {
 func (d *Database) DeleteTranslationPreset(id int64) error {
 	_, err := d.db.Exec("DELETE FROM translation_presets WHERE id = ?", id)
 	return err
+}
+
+// WhisperBackend represents a registered whisper backend (SYCL, OpenVINO, CUDA, etc.)
+type WhisperBackend struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	BackendType string `json:"backend_type"`
+	URL         string `json:"url"`
+	Enabled     bool   `json:"enabled"`
+	Priority    int    `json:"priority"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// ListWhisperBackends returns all backends ordered by priority
+func (d *Database) ListWhisperBackends() ([]WhisperBackend, error) {
+	rows, err := d.db.Query("SELECT id, name, backend_type, url, enabled, priority, created_at FROM whisper_backends ORDER BY priority ASC, id ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var backends []WhisperBackend
+	for rows.Next() {
+		var b WhisperBackend
+		var enabled int
+		if err := rows.Scan(&b.ID, &b.Name, &b.BackendType, &b.URL, &enabled, &b.Priority, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		b.Enabled = enabled != 0
+		backends = append(backends, b)
+	}
+	if backends == nil {
+		backends = []WhisperBackend{}
+	}
+	return backends, nil
+}
+
+// GetWhisperBackend returns a single backend by ID
+func (d *Database) GetWhisperBackend(id int64) (*WhisperBackend, error) {
+	var b WhisperBackend
+	var enabled int
+	err := d.db.QueryRow(
+		"SELECT id, name, backend_type, url, enabled, priority, created_at FROM whisper_backends WHERE id = ?", id,
+	).Scan(&b.ID, &b.Name, &b.BackendType, &b.URL, &enabled, &b.Priority, &b.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	b.Enabled = enabled != 0
+	return &b, nil
+}
+
+// CreateWhisperBackend adds a new backend
+func (d *Database) CreateWhisperBackend(name, backendType, url string, priority int) (int64, error) {
+	result, err := d.db.Exec(
+		"INSERT INTO whisper_backends (name, backend_type, url, priority) VALUES (?, ?, ?, ?)",
+		name, backendType, url, priority,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// UpdateWhisperBackend modifies an existing backend
+func (d *Database) UpdateWhisperBackend(id int64, name, backendType, url string, enabled bool, priority int) error {
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	_, err := d.db.Exec(
+		"UPDATE whisper_backends SET name=?, backend_type=?, url=?, enabled=?, priority=? WHERE id=?",
+		name, backendType, url, enabledInt, priority, id,
+	)
+	return err
+}
+
+// DeleteWhisperBackend removes a backend by ID
+func (d *Database) DeleteWhisperBackend(id int64) error {
+	_, err := d.db.Exec("DELETE FROM whisper_backends WHERE id = ?", id)
+	return err
+}
+
+// migrateWhisperBackends seeds the whisper_backends table from legacy settings on first run
+func (d *Database) migrateWhisperBackends() {
+	var count int
+	d.db.QueryRow("SELECT COUNT(*) FROM whisper_backends").Scan(&count)
+	if count > 0 {
+		return
+	}
+
+	whisperURL := d.GetSetting("whisper_url", "")
+	if whisperURL != "" {
+		d.CreateWhisperBackend("Whisper (Local)", "sycl", whisperURL, 0)
+	}
+	openAIKey := d.GetSetting("openai_api_key", "")
+	if openAIKey != "" {
+		d.CreateWhisperBackend("OpenAI Whisper", "openai", "", 10)
+	}
 }

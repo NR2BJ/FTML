@@ -34,6 +34,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	settingsHandler := handlers.NewSettingsHandler(database)
 	whisperModelsHandler := handlers.NewWhisperModelsHandler(cfg.WhisperModelPath, database)
 	presetsHandler := handlers.NewPresetsHandler(database)
+	whisperBackendsHandler := handlers.NewWhisperBackendsHandler(database)
 
 	// Public routes
 	r.Route("/api", func(r chi.Router) {
@@ -96,6 +97,14 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			r.Get("/presets", presetsHandler.ListPresets)
 			r.Post("/presets", presetsHandler.CreatePreset)
 			r.Delete("/presets/{id}", presetsHandler.DeletePreset)
+
+			// Whisper Backends
+			r.Get("/whisper/backends", whisperBackendsHandler.ListBackends)
+			r.Get("/whisper/backends/available", whisperBackendsHandler.ListAvailable)
+			r.Post("/whisper/backends", whisperBackendsHandler.CreateBackend)
+			r.Put("/whisper/backends/{id}", whisperBackendsHandler.UpdateBackend)
+			r.Delete("/whisper/backends/{id}", whisperBackendsHandler.DeleteBackend)
+			r.Post("/whisper/backends/{id}/health", whisperBackendsHandler.HealthCheck)
 
 			// User
 			r.Put("/user/history/*", userHandler.SavePosition)

@@ -8,44 +8,79 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
+	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/job"
 )
 
 // Service manages whisper transcription engines and processes jobs
 type Service struct {
-	engines      map[string]Transcriber
+	database     *db.Database
 	mediaPath    string
 	subtitlePath string
 }
 
-// NewService creates a whisper service with available engines
-func NewService(mediaPath, subtitlePath, whisperURL, openAIKey string) *Service {
-	s := &Service{
-		engines:      make(map[string]Transcriber),
+// NewService creates a whisper service backed by database-registered backends
+func NewService(mediaPath, subtitlePath string, database *db.Database) *Service {
+	return &Service{
+		database:     database,
 		mediaPath:    mediaPath,
 		subtitlePath: subtitlePath,
 	}
-
-	// Register whisper.cpp engine (always available if URL configured)
-	if whisperURL != "" {
-		s.engines["whisper.cpp"] = NewWhisperCppClient(whisperURL)
-		log.Printf("[whisper] registered whisper.cpp engine at %s", whisperURL)
-	}
-
-	// Register OpenAI Whisper engine
-	if openAIKey != "" {
-		s.engines["openai"] = NewOpenAIWhisperClient(openAIKey)
-		log.Printf("[whisper] registered OpenAI Whisper engine")
-	}
-
-	return s
 }
 
-// RegisterEngine adds an engine (e.g., faster-whisper)
-func (s *Service) RegisterEngine(name string, engine Transcriber) {
-	s.engines[name] = engine
-	log.Printf("[whisper] registered %s engine", name)
+// resolveEngine dynamically resolves a whisper engine from the database
+func (s *Service) resolveEngine(engineKey string) (Transcriber, error) {
+	// Handle "backend:<id>" format (new dynamic backends)
+	if strings.HasPrefix(engineKey, "backend:") {
+		idStr := strings.TrimPrefix(engineKey, "backend:")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid backend id: %s", idStr)
+		}
+		backend, err := s.database.GetWhisperBackend(id)
+		if err != nil {
+			return nil, fmt.Errorf("backend not found: %d", id)
+		}
+		if !backend.Enabled {
+			return nil, fmt.Errorf("backend %q is disabled", backend.Name)
+		}
+		if backend.BackendType == "openai" {
+			key := s.database.GetSetting("openai_api_key", "")
+			if key == "" {
+				return nil, fmt.Errorf("OpenAI API key not configured")
+			}
+			return NewOpenAIWhisperClient(key), nil
+		}
+		return NewWhisperCppClient(backend.URL), nil
+	}
+
+	// Legacy: "openai" → use OpenAI API key from settings
+	if engineKey == "openai" {
+		key := s.database.GetSetting("openai_api_key", "")
+		if key == "" {
+			return nil, fmt.Errorf("OpenAI API key not configured")
+		}
+		return NewOpenAIWhisperClient(key), nil
+	}
+
+	// Legacy: "whisper.cpp" → first enabled local backend
+	if engineKey == "whisper.cpp" {
+		backends, err := s.database.ListWhisperBackends()
+		if err != nil {
+			return nil, fmt.Errorf("list backends: %w", err)
+		}
+		for _, b := range backends {
+			if b.Enabled && b.BackendType != "openai" {
+				return NewWhisperCppClient(b.URL), nil
+			}
+		}
+		return nil, fmt.Errorf("no local whisper backend configured")
+	}
+
+	return nil, fmt.Errorf("unknown engine: %s", engineKey)
 }
 
 // HandleJob processes a transcription job
@@ -55,9 +90,9 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		return fmt.Errorf("unmarshal params: %w", err)
 	}
 
-	engine, ok := s.engines[params.Engine]
-	if !ok {
-		return fmt.Errorf("unknown whisper engine: %s (available: %v)", params.Engine, s.engineNames())
+	engine, err := s.resolveEngine(params.Engine)
+	if err != nil {
+		return fmt.Errorf("resolve engine: %w", err)
 	}
 
 	// Resolve full path
@@ -104,14 +139,6 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 
 	updateProgress(1.0)
 	return nil
-}
-
-func (s *Service) engineNames() []string {
-	names := make([]string, 0, len(s.engines))
-	for name := range s.engines {
-		names = append(names, name)
-	}
-	return names
 }
 
 func videoHash(videoPath string) string {

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Settings as SettingsIcon, Save, Check, Loader2, Eye, EyeOff } from 'lucide-react'
 import { getSettings, updateSettings, type SettingItem } from '@/api/settings'
 import WhisperModelManager from '@/components/WhisperModelManager'
+import WhisperBackendManager from '@/components/WhisperBackendManager'
 
 export default function Settings() {
   const [settings, setSettings] = useState<SettingItem[]>([])
@@ -84,7 +85,6 @@ export default function Settings() {
   }
 
   const settingHelp: Record<string, string> = {
-    whisper_url: 'Internal Docker address of the Whisper server. Default works with the bundled whisper-sycl container.',
     whisper_model: 'Active model is managed via the model manager below. This field shows the current setting stored in the database.',
     whisper_language: 'Default language for transcription. Use "auto" for automatic detection, or ISO 639-1 codes (ko, en, ja, zh, etc.)',
     gemini_api_key: 'Google Gemini API key for subtitle translation. Get one at aistudio.google.com',
@@ -155,14 +155,22 @@ export default function Settings() {
             ))}
           </div>
 
-          {/* Show Model Manager after whisper settings group */}
+          {/* Show Backend Manager + Model Manager after whisper settings group */}
           {group === 'whisper' && (
-            <div className="mt-4">
-              <h3 className="text-sm font-medium text-gray-400 mb-3">
-                Whisper Models
-              </h3>
-              <WhisperModelManager />
-            </div>
+            <>
+              <div className="mt-4">
+                <h3 className="text-sm font-medium text-gray-400 mb-3">
+                  Whisper Backends
+                </h3>
+                <WhisperBackendManager />
+              </div>
+              <div className="mt-4">
+                <h3 className="text-sm font-medium text-gray-400 mb-3">
+                  Whisper Models
+                </h3>
+                <WhisperModelManager />
+              </div>
+            </>
           )}
         </div>
       ))}
@@ -187,8 +195,8 @@ export default function Settings() {
       </button>
 
       <p className="text-xs text-gray-600 mt-4">
-        Settings are stored in the database. Whisper model and language changes take effect on the next transcription job.
-        API key changes require a server restart.
+        Settings are stored in the database. All changes take effect on the next transcription/translation job.
+        Whisper backends can be managed above without restarting the server.
       </p>
     </div>
   )

@@ -17,12 +17,8 @@ import {
   type Job,
   type TranslationPreset,
 } from '@/api/subtitle'
+import { listAvailableEngines, type AvailableEngine } from '@/api/whisperBackends'
 import { isVideoFile } from '@/utils/format'
-
-const ENGINES_WHISPER = [
-  { value: 'whisper.cpp', label: 'Whisper.cpp (Local)' },
-  { value: 'openai', label: 'OpenAI Whisper' },
-]
 
 const ENGINES_TRANSLATE = [
   { value: 'gemini', label: 'Gemini' },
@@ -67,8 +63,11 @@ export default function BatchSubtitleDialog({ mode, files, onClose }: BatchSubti
   const videoFiles = files.filter(f => !f.is_dir && isVideoFile(f.name))
   const videoPaths = videoFiles.map(f => f.path)
 
+  // Available whisper engines (loaded from backend)
+  const [whisperEngines, setWhisperEngines] = useState<AvailableEngine[]>([])
+
   // Generate options
-  const [genEngine, setGenEngine] = useState('whisper.cpp')
+  const [genEngine, setGenEngine] = useState('')
   const [genLanguage, setGenLanguage] = useState('auto')
 
   // Translate options
@@ -83,6 +82,18 @@ export default function BatchSubtitleDialog({ mode, files, onClose }: BatchSubti
   const [phase, setPhase] = useState<'config' | 'running' | 'done'>('config')
   const [skipped, setSkipped] = useState<string[]>([])
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Load available whisper engines
+  useEffect(() => {
+    if (mode === 'generate' || mode === 'generate-translate') {
+      listAvailableEngines()
+        .then(({ data }) => {
+          setWhisperEngines(data || [])
+          if (data && data.length > 0) setGenEngine(data[0].value)
+        })
+        .catch(() => setWhisperEngines([]))
+    }
+  }, [mode])
 
   // Load saved presets
   useEffect(() => {
@@ -240,10 +251,13 @@ export default function BatchSubtitleDialog({ mode, files, onClose }: BatchSubti
                       onChange={(e) => setGenEngine(e.target.value)}
                       className="w-full bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600"
                     >
-                      {ENGINES_WHISPER.map(e => (
+                      {whisperEngines.map(e => (
                         <option key={e.value} value={e.value}>{e.label}</option>
                       ))}
                     </select>
+                    {whisperEngines.length === 0 && (
+                      <p className="text-[10px] text-amber-400 mt-0.5">No backends configured. Add one in Settings.</p>
+                    )}
                   </div>
                   <div>
                     <label className="text-xs text-gray-400 block mb-1">Language</label>
@@ -406,7 +420,7 @@ export default function BatchSubtitleDialog({ mode, files, onClose }: BatchSubti
               </button>
               <button
                 onClick={handleStart}
-                disabled={videoFiles.length === 0}
+                disabled={videoFiles.length === 0 || ((mode === 'generate' || mode === 'generate-translate') && whisperEngines.length === 0)}
                 className="text-sm bg-primary-600 hover:bg-primary-500 text-white px-4 py-1.5 rounded transition-colors disabled:opacity-50"
               >
                 Start ({videoFiles.length} files)

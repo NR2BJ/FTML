@@ -9,7 +9,6 @@ import (
 
 // settingsKeys defines which keys are allowed and their display metadata
 var settingsKeys = []SettingDef{
-	{Key: "whisper_url", Label: "Whisper Server URL", Group: "whisper", Placeholder: "http://whisper-sycl:8178", Secret: false},
 	{Key: "whisper_model", Label: "Whisper Model", Group: "whisper", Placeholder: "ggml-large-v3.bin", Secret: false},
 	{Key: "whisper_language", Label: "Default Language", Group: "whisper", Placeholder: "auto", Secret: false},
 	{Key: "gemini_api_key", Label: "Gemini API Key", Group: "translation", Placeholder: "AIza...", Secret: true},

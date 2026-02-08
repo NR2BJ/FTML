@@ -2,11 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Wand2, Loader2, X, Check, AlertCircle } from 'lucide-react'
 import { usePlayerStore } from '@/stores/playerStore'
 import { generateSubtitle, getJob, listSubtitles, type Job } from '@/api/subtitle'
-
-const ENGINES = [
-  { value: 'whisper.cpp', label: 'Whisper (Local)' },
-  { value: 'openai', label: 'OpenAI Whisper' },
-]
+import { listAvailableEngines, type AvailableEngine } from '@/api/whisperBackends'
 
 const MODELS = [
   { value: 'large-v3', label: 'Large V3 (Best)' },
@@ -33,13 +29,26 @@ interface Props {
 
 export default function SubtitleGenerate({ onClose }: Props) {
   const { currentFile, setSubtitles } = usePlayerStore()
-  const [engine, setEngine] = useState('whisper.cpp')
+  const [engines, setEngines] = useState<AvailableEngine[]>([])
+  const [engine, setEngine] = useState('')
   const [model, setModel] = useState('large-v3')
   const [language, setLanguage] = useState('auto')
   const [jobId, setJobId] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
   const [error, setError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Load available engines
+  useEffect(() => {
+    listAvailableEngines()
+      .then(({ data }) => {
+        setEngines(data || [])
+        if (data && data.length > 0) setEngine(data[0].value)
+      })
+      .catch(() => setEngines([]))
+  }, [])
+
+  const selectedType = engines.find(e => e.value === engine)?.type
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -110,14 +119,17 @@ export default function SubtitleGenerate({ onClose }: Props) {
               onChange={(e) => setEngine(e.target.value)}
               className="w-full bg-gray-800 text-sm text-white rounded px-2 py-1 border border-gray-600"
             >
-              {ENGINES.map((e) => (
+              {engines.map((e) => (
                 <option key={e.value} value={e.value}>{e.label}</option>
               ))}
             </select>
+            {engines.length === 0 && (
+              <p className="text-[10px] text-amber-400 mt-0.5">No backends configured. Add one in Settings.</p>
+            )}
           </div>
 
-          {/* Model (only for local engines) */}
-          {engine !== 'openai' && (
+          {/* Model (only for non-openai engines) */}
+          {selectedType !== 'openai' && (
             <div className="mb-2">
               <label className="text-xs text-gray-400 block mb-0.5">Model</label>
               <select
@@ -155,7 +167,8 @@ export default function SubtitleGenerate({ onClose }: Props) {
 
           <button
             onClick={handleGenerate}
-            className="w-full bg-primary-600 hover:bg-primary-500 text-white text-sm py-1.5 rounded transition-colors"
+            disabled={!engine || engines.length === 0}
+            className="w-full bg-primary-600 hover:bg-primary-500 disabled:opacity-50 text-white text-sm py-1.5 rounded transition-colors"
           >
             Generate
           </button>

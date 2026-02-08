@@ -54,14 +54,13 @@ func main() {
 	defer jobQueue.Stop()
 	log.Printf("Job queue started")
 
-	// Load subtitle settings from DB (configured via admin settings UI)
-	whisperURL := database.GetSetting("whisper_url", "http://whisper-sycl:8178")
-	openAIKey := database.GetSetting("openai_api_key", "")
+	// Load translation API keys from DB (configured via admin settings UI)
 	geminiKey := database.GetSetting("gemini_api_key", "")
+	openAIKey := database.GetSetting("openai_api_key", "")
 	deeplKey := database.GetSetting("deepl_api_key", "")
 
-	// Initialize whisper service and register with job queue
-	whisperSvc := whisper.NewService(cfg.MediaPath, cfg.SubtitlePath, whisperURL, openAIKey)
+	// Initialize whisper service (dynamically resolves backends from DB)
+	whisperSvc := whisper.NewService(cfg.MediaPath, cfg.SubtitlePath, database)
 	jobQueue.RegisterHandler(job.JobTranscribe, whisperSvc.HandleJob)
 
 	// Initialize translation service and register with job queue
