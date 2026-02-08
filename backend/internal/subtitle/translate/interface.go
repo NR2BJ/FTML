@@ -2,6 +2,10 @@ package translate
 
 import "context"
 
+const (
+	batchSize = 50 // number of cues per API call (used by DeepL, OpenAI)
+)
+
 // SubtitleCue represents a single subtitle entry with timing
 type SubtitleCue struct {
 	Index int     `json:"index"`

@@ -14,7 +14,6 @@ import (
 
 const (
 	geminiAPIBase = "https://generativelanguage.googleapis.com/v1beta/models"
-	batchSize     = 50 // number of cues per API call
 )
 
 // ModelResolver returns the current Gemini model from settings
@@ -32,7 +31,7 @@ func NewGeminiTranslator(apiKey string, modelResolver ModelResolver) *GeminiTran
 		apiKey:        apiKey,
 		modelResolver: modelResolver,
 		httpClient: &http.Client{
-			Timeout: 2 * time.Minute,
+			Timeout: 5 * time.Minute,
 		},
 	}
 }
@@ -56,42 +55,15 @@ func (g *GeminiTranslator) Translate(ctx context.Context, cues []SubtitleCue, op
 	}
 
 	model := g.currentModel()
-	log.Printf("[gemini] using model: %s", model)
+	log.Printf("[gemini] using model: %s, translating %d cues in single request", model, len(cues))
 
 	systemPrompt := GetSystemPrompt(opts.Preset, opts.SourceLang, opts.TargetLang)
 	if opts.Preset == "custom" && opts.CustomPrompt != "" {
 		systemPrompt += "\n\nUser instructions: " + opts.CustomPrompt
 	}
 
-	// Process in batches
-	var result []SubtitleCue
-	totalBatches := (len(cues) + batchSize - 1) / batchSize
+	updateProgress(0.1)
 
-	for i := 0; i < len(cues); i += batchSize {
-		end := i + batchSize
-		if end > len(cues) {
-			end = len(cues)
-		}
-		batch := cues[i:end]
-		batchNum := i/batchSize + 1
-
-		progress := float64(i) / float64(len(cues))
-		updateProgress(progress)
-
-		log.Printf("[gemini] translating batch %d/%d (%d cues)", batchNum, totalBatches, len(batch))
-
-		translated, err := g.translateBatch(ctx, batch, systemPrompt, model)
-		if err != nil {
-			return nil, fmt.Errorf("batch %d: %w", batchNum, err)
-		}
-
-		result = append(result, translated...)
-	}
-
-	return result, nil
-}
-
-func (g *GeminiTranslator) translateBatch(ctx context.Context, cues []SubtitleCue, systemPrompt string, model string) ([]SubtitleCue, error) {
 	// Build the prompt with numbered cues
 	var userPrompt strings.Builder
 	userPrompt.WriteString("Translate the following subtitle cues. Return ONLY a JSON array with the translated text for each cue, maintaining the same order and count.\n\n")
@@ -118,7 +90,7 @@ func (g *GeminiTranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 			},
 		},
 		"generationConfig": map[string]interface{}{
-			"temperature":     0.3,
+			"temperature":      0.3,
 			"responseMimeType": "application/json",
 		},
 	}
@@ -136,6 +108,8 @@ func (g *GeminiTranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-goog-api-key", g.apiKey)
 
+	updateProgress(0.3)
+
 	resp, err := g.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("Gemini API request: %w", err)
@@ -146,6 +120,8 @@ func (g *GeminiTranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 	if err != nil {
 		return nil, err
 	}
+
+	updateProgress(0.8)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("Gemini API error (status %d): %s", resp.StatusCode, string(body))
@@ -186,6 +162,10 @@ func (g *GeminiTranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 		}
 	}
 
+	if len(translations) != len(cues) {
+		log.Printf("[gemini] WARNING: expected %d translations, got %d", len(cues), len(translations))
+	}
+
 	// Map translations back to cues, defending against empty translations
 	result := make([]SubtitleCue, len(cues))
 	emptyCount := 0
@@ -207,6 +187,9 @@ func (g *GeminiTranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 	if emptyCount > 0 {
 		log.Printf("[gemini] WARNING: %d/%d translations were empty, kept original text", emptyCount, len(cues))
 	}
+
+	updateProgress(1.0)
+	log.Printf("[gemini] translation complete: %d cues", len(result))
 
 	return result, nil
 }
