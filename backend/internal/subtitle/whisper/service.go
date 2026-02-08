@@ -84,6 +84,18 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		return fmt.Errorf("resolve engine: %w", err)
 	}
 
+	// For openvino-genai: ensure whisper server has the correct model loaded.
+	// After server restart, it falls back to its default MODEL_ID env var
+	// instead of the DB-configured model.
+	if ovc, ok := engine.(*OpenVINOGenAIClient); ok {
+		activeModel := s.database.GetSetting("whisper_model_id", "")
+		if activeModel != "" {
+			if err := ovc.EnsureModel(activeModel); err != nil {
+				return fmt.Errorf("ensure model: %w", err)
+			}
+		}
+	}
+
 	// Resolve full path
 	fullPath := filepath.Join(s.mediaPath, j.FilePath)
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {

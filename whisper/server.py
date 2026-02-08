@@ -203,7 +203,8 @@ def run_inference(audio: np.ndarray, language: str = ""):
 
     if language and language != "auto":
         config.language = f"<|{language}|>"
-        log.info(f"Language token set: <|{language}|>")
+
+    log.info(f"Config: task={config.task}, language={config.language}, return_timestamps={config.return_timestamps}")
 
     t0 = time.time()
     result = pipeline.generate(audio, config)
@@ -211,6 +212,10 @@ def run_inference(audio: np.ndarray, language: str = ""):
 
     chunks = getattr(result, "chunks", [])
     full_text = "".join(c.text for c in chunks).strip() if chunks else str(result)
+
+    # Debug: log first 3 chunks to verify output language
+    for i, c in enumerate(chunks[:3]):
+        log.info(f"  chunk[{i}]: [{c.start_ts:.1f}-{c.end_ts:.1f}] {c.text.strip()}")
 
     # Schedule idle unload after inference completes
     _schedule_idle_unload()

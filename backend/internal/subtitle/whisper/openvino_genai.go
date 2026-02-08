@@ -3,6 +3,7 @@ package whisper
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -32,6 +33,54 @@ func NewOpenVINOGenAIClient(baseURL string) *OpenVINOGenAIClient {
 
 func (c *OpenVINOGenAIClient) Name() string {
 	return "openvino-genai"
+}
+
+// EnsureModel checks if the whisper server has the expected model loaded,
+// and loads it if not. This handles server restarts where the server falls
+// back to its default MODEL_ID env var instead of the DB-configured model.
+func (c *OpenVINOGenAIClient) EnsureModel(expectedModelID string) error {
+	if expectedModelID == "" {
+		return nil
+	}
+
+	// Check current model via /v1/model/info
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(c.baseURL + "/v1/model/info")
+	if err != nil {
+		log.Printf("[openvino-genai] cannot check model info: %v", err)
+		return nil // non-fatal, will fail later if server is truly down
+	}
+	defer resp.Body.Close()
+
+	var info struct {
+		Model  string `json:"model"`
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil
+	}
+
+	if info.Model == expectedModelID {
+		return nil // already correct
+	}
+
+	log.Printf("[openvino-genai] model mismatch: server has %q, expected %q — loading correct model", info.Model, expectedModelID)
+	loadURL := c.baseURL + "/v1/model/load"
+	body := fmt.Sprintf(`{"model_id":"%s"}`, expectedModelID)
+	loadClient := &http.Client{Timeout: 10 * time.Minute}
+	loadResp, err := loadClient.Post(loadURL, "application/json", strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to load model %s: %w", expectedModelID, err)
+	}
+	defer loadResp.Body.Close()
+
+	if loadResp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(loadResp.Body)
+		return fmt.Errorf("failed to load model %s: status %d: %s", expectedModelID, loadResp.StatusCode, string(respBody))
+	}
+
+	log.Printf("[openvino-genai] model synced to %s", expectedModelID)
+	return nil
 }
 
 // Transcribe sends an audio file to the OpenVINO GenAI server and returns VTT
