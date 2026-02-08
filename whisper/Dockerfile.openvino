@@ -19,7 +19,8 @@ RUN git clone --depth 1 --branch v1.8.3 https://github.com/ggerganov/whisper.cpp
 WORKDIR /whisper
 RUN cmake -B build \
     -DGGML_OPENVINO=ON \
-    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF
 RUN cmake --build build --config Release -j$(nproc) --target whisper-server
 
 # Runtime stage
