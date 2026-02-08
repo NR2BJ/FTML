@@ -100,7 +100,8 @@ services:
 volumes:
   ftml_data:
     external: true
-  whisper_models: {}
+  whisper_models:
+    external: true
 
 networks:
   homeserver-net:
