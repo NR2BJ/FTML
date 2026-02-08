@@ -26,6 +26,7 @@ import gc
 import io
 import os
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
 
@@ -92,8 +93,9 @@ if os.environ.get("ENABLE_VOCAL_SEP") == "0" and "PREPROCESS_MODE" not in os.env
     PREPROCESS_MODE = "none"
 
 # Base VAD threshold for media content. Lower = more sensitive to speech.
-# Default 0.35 is tuned for anime/TV/movie content where BGM/SFX are always present.
-VAD_BASE_THRESHOLD = float(os.environ.get("VAD_BASE_THRESHOLD", "0.35"))
+# Default 0.20 is tuned for anime/TV/movie with continuous BGM.
+# False positives from low threshold are handled by hallucination filtering.
+VAD_BASE_THRESHOLD = float(os.environ.get("VAD_BASE_THRESHOLD", "0.20"))
 
 # Vocal separation via MDX-Net ONNX (torch-free, lazy loaded) — used when PREPROCESS_MODE=vocal_sep
 ENABLE_VOCAL_SEP = PREPROCESS_MODE == "vocal_sep"
@@ -242,6 +244,10 @@ def chunks_to_vtt(chunks) -> str:
             repeat_count = 0
         prev_text = text
 
+        # Skip known hallucination patterns
+        if is_hallucination(text, duration):
+            continue
+
         start = format_ts(start_ts)
         end = format_ts(end_ts)
         lines.append(str(idx))
@@ -258,6 +264,70 @@ def decode_audio(audio_bytes: bytes) -> np.ndarray:
     audio_io = io.BytesIO(audio_bytes)
     audio, _ = librosa.load(audio_io, sr=16000, mono=True)
     return audio.astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Hallucination filtering
+# ---------------------------------------------------------------------------
+
+# Known Whisper hallucination phrases (exact match)
+_HALLUCINATION_EXACT = {
+    # Japanese
+    "ご視聴ありがとうございました", "ご視聴ありがとうございます",
+    "お疲れ様でした", "おやすみなさい", "では、また", "それでは、また",
+    # English
+    "thank you for watching", "thanks for watching",
+    "please subscribe", "like and subscribe", "see you next time",
+    # Korean
+    "시청해 주셔서 감사합니다", "구독과 좋아요 부탁드립니다",
+    # Chinese
+    "谢谢观看", "感谢收看",
+    # Generic
+    "...", "…",
+}
+
+# Regex patterns for hallucination artifacts
+_HALLUCINATION_PATTERNS = [
+    re.compile(r'^by\s+\w\.?$', re.IGNORECASE),   # "by H.", "by A."
+    re.compile(r'^[\.…\s]+$'),                      # dots/ellipsis only
+    re.compile(r'^[\s\W]+$'),                        # whitespace/punctuation only
+    re.compile(r'^\w{1,2}$'),                        # 1-2 char: "me", "a", "I"
+]
+
+
+def is_hallucination(text: str, duration: float) -> bool:
+    """Detect common Whisper hallucination patterns.
+
+    Args:
+        text: transcribed text (already stripped)
+        duration: chunk duration in seconds
+    Returns:
+        True if this is likely a hallucination to be discarded
+    """
+    if not text:
+        return True
+    t = text.strip()
+    if not t:
+        return True
+
+    # Exact match against known hallucination phrases
+    if t in _HALLUCINATION_EXACT or t.lower() in _HALLUCINATION_EXACT:
+        return True
+
+    # Regex pattern match
+    for pattern in _HALLUCINATION_PATTERNS:
+        if pattern.match(t):
+            return True
+
+    # Short text + short duration = noise artifact
+    if len(t) <= 4 and duration < 1.0:
+        return True
+
+    # Sub-0.3s is too short for real speech
+    if duration < 0.3:
+        return True
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +670,11 @@ def run_segment_inference(audio: np.ndarray, segments: list[dict],
             if abs_end <= abs_start:
                 continue
 
+            # Filter known Whisper hallucination patterns
+            chunk_duration = abs_end - abs_start
+            if is_hallucination(text, chunk_duration):
+                continue
+
             all_chunks.append({
                 'text': text,
                 'start_ts': abs_start,
@@ -655,13 +730,16 @@ def _run_inference_adaptive(audio: np.ndarray, language: str = ""):
     if bgm_level == 'heavy':
         vad_audio = apply_highpass(audio, cutoff=250)
         vad_audio = apply_light_denoise(vad_audio)
-        vad_threshold = VAD_BASE_THRESHOLD
+        vad_threshold = VAD_BASE_THRESHOLD       # 0.20
+        min_silence = 300   # short silence tolerance for rapid dialogue over heavy BGM
     elif bgm_level == 'light':
         vad_audio = apply_highpass(audio, cutoff=200)
-        vad_threshold = VAD_BASE_THRESHOLD
+        vad_threshold = VAD_BASE_THRESHOLD       # 0.20
+        min_silence = 400
     else:  # clean (rare for media, but possible for interviews/narration)
         vad_audio = apply_highpass(audio, cutoff=150)
-        vad_threshold = VAD_BASE_THRESHOLD + 0.05
+        vad_threshold = VAD_BASE_THRESHOLD + 0.10  # 0.30 — less sensitive for clean audio
+        min_silence = 500
 
     preprocess_time = time.time() - t0
     log.info(f"[adaptive] Preprocessing: {preprocess_time:.2f}s "
@@ -671,7 +749,7 @@ def _run_inference_adaptive(audio: np.ndarray, language: str = ""):
     # Lower min thresholds for media content: short interjections, rapid dialogue
     speech_segments = vad_speech_timestamps(
         vad_audio, threshold=vad_threshold,
-        min_speech_ms=150, min_silence_ms=400
+        min_speech_ms=150, min_silence_ms=min_silence
     )
     total_speech = sum(s['end'] - s['start'] for s in speech_segments) / 16000
     log.info(f"VAD: {len(speech_segments)} raw segments, "
@@ -683,7 +761,7 @@ def _run_inference_adaptive(audio: np.ndarray, language: str = ""):
         return [], "", 0.0
 
     # Step 4: Merge close segments (wider gap for scene transitions, keep short segments)
-    merged = merge_segments(speech_segments, gap_threshold_s=2.0, min_duration_s=0.3)
+    merged = merge_segments(speech_segments, gap_threshold_s=3.0, min_duration_s=0.3)
     merged_speech = sum((s['end'] - s['start']) / 16000 for s in merged)
     log.info(f"Merged: {len(merged)} segments, {merged_speech:.1f}s total")
 
