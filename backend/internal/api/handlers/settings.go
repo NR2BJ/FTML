@@ -3,9 +3,12 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/video-stream/backend/internal/db"
 )
+
+const maskedPrefix = "••••••••"
 
 // settingsKeys defines which keys are allowed and their display metadata
 var settingsKeys = []SettingDef{
@@ -90,16 +93,13 @@ func (h *SettingsHandler) UpdateSettings(w http.ResponseWriter, r *http.Request)
 		if !allowed[key] {
 			continue
 		}
-		// Skip masked values (don't overwrite with mask)
-		if len(value) > 0 && value[0] == 0xe2 { // "•" starts with 0xe2 in UTF-8
+		// Skip masked values — don't overwrite existing secrets with the mask
+		if strings.HasPrefix(value, maskedPrefix) {
 			continue
 		}
-		if value == "" || (len(value) > 8 && value[:len("••••••••")] == "••••••••") {
-			// Skip empty or masked values — don't clear existing secrets
-			if value == "" {
-				// Explicit clear
-				h.database.SetSetting(key, "")
-			}
+		// Explicit clear: empty string removes the setting
+		if value == "" {
+			h.database.SetSetting(key, "")
 			continue
 		}
 		if err := h.database.SetSetting(key, value); err != nil {
