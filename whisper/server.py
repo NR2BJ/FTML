@@ -3,10 +3,16 @@ FTML Whisper Server — OpenVINO GenAI WhisperPipeline
 Lightweight FastAPI server wrapping OpenVINO's WhisperPipeline for
 Intel Arc GPU-accelerated speech-to-text with timestamp support.
 
-Pipeline (when ENABLE_VOCAL_SEP=1):
-  Audio → Vocal separation via audio-separator (CPU)
-    → VAD segment extraction → per-segment whisper inference (GPU)
-    → timestamp remapping → VTT
+Pipeline (PREPROCESS_MODE):
+  'adaptive' (default):
+    Audio → BGM detection (spectral analysis, <1s)
+      → lightweight filtering (highpass/spectral subtraction, VAD only)
+      → VAD segment extraction → per-segment whisper on ORIGINAL audio (GPU)
+  'vocal_sep':
+    Audio → MDX-Net ONNX vocal separation (CPU, slow)
+      → VAD → per-segment whisper on vocals (GPU)
+  'none':
+    Audio → VAD → silence replacement → single whisper call (GPU)
 
 Endpoints:
   POST /v1/audio/transcriptions  (OpenAI-compatible)
@@ -31,6 +37,8 @@ from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel
 from silero_vad_lite import SileroVAD
+from scipy.signal import butter, sosfilt
+import scipy.signal
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,9 +67,14 @@ _idle_timer_lock = threading.Lock()
 # before sending to Whisper — prevents hallucination on non-speech segments.
 vad_model = SileroVAD(16000)
 
-# Vocal separation via MDX-Net ONNX (torch-free, lazy loaded)
-ENABLE_VOCAL_SEP = os.environ.get("ENABLE_VOCAL_SEP",
-                    os.environ.get("ENABLE_DEMUCS", "1")) == "1"
+# Preprocessing mode: 'adaptive' (BGM detect + lightweight filter), 'vocal_sep' (MDX-Net),
+# or 'none' (raw VAD only). Backwards compat: ENABLE_VOCAL_SEP=0 → 'none'.
+PREPROCESS_MODE = os.environ.get("PREPROCESS_MODE", "adaptive")
+if os.environ.get("ENABLE_VOCAL_SEP") == "0" and "PREPROCESS_MODE" not in os.environ:
+    PREPROCESS_MODE = "none"
+
+# Vocal separation via MDX-Net ONNX (torch-free, lazy loaded) — used when PREPROCESS_MODE=vocal_sep
+ENABLE_VOCAL_SEP = PREPROCESS_MODE == "vocal_sep"
 VOCAL_SEP_MODEL = os.environ.get("VOCAL_SEP_MODEL", "UVR_MDXNET_KARA_2.onnx")
 VOCAL_SEP_MODEL_URL = os.environ.get("VOCAL_SEP_MODEL_URL",
     "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/")
@@ -172,8 +185,8 @@ async def startup():
         log.info(f"VRAM auto-release enabled: model unloads after {IDLE_TIMEOUT}s idle")
     else:
         log.info("VRAM auto-release disabled (IDLE_TIMEOUT=0)")
-    log.info(f"Vocal separation: {'enabled' if ENABLE_VOCAL_SEP else 'disabled'}"
-             f"{f' (model={VOCAL_SEP_MODEL})' if ENABLE_VOCAL_SEP else ''}")
+    log.info(f"Preprocess mode: {PREPROCESS_MODE}"
+             f"{f' (model={VOCAL_SEP_MODEL})' if PREPROCESS_MODE == 'vocal_sep' else ''}")
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +250,109 @@ def decode_audio(audio_bytes: bytes) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Vocal separation (MDX-Net ONNX, torch-free)
+# Adaptive audio preprocessing (BGM detection + lightweight filtering)
+# ---------------------------------------------------------------------------
+
+def detect_bgm_level(audio: np.ndarray, sr: int = 16000) -> str:
+    """Detect background music level using spectral energy analysis.
+
+    Analyzes sub-band energy ratio and spectral flatness to classify audio as
+    'clean' (speech only), 'light' (some background), or 'heavy' (music/BGM).
+
+    Processes one 1-second window every 5 seconds — < 1s for any audio length.
+    """
+    window_size = sr  # 1 second
+    hop = sr * 5      # every 5 seconds
+
+    low_energy_ratios = []
+    spectral_flatness_values = []
+
+    for start in range(0, len(audio) - window_size, hop):
+        chunk = audio[start:start + window_size]
+
+        # Skip near-silent chunks (no useful spectral info)
+        if np.max(np.abs(chunk)) < 0.01:
+            continue
+
+        spectrum = np.abs(np.fft.rfft(chunk))
+        freqs = np.fft.rfftfreq(len(chunk), 1.0 / sr)
+
+        # Low-frequency energy ratio (< 300Hz vs total)
+        low_mask = freqs < 300
+        low_energy = np.sum(spectrum[low_mask] ** 2)
+        total_energy = np.sum(spectrum ** 2) + 1e-10
+        low_energy_ratios.append(low_energy / total_energy)
+
+        # Spectral flatness: geometric mean / arithmetic mean
+        # Low flatness = tonal/harmonic (music), high flatness = noise-like (speech)
+        log_spectrum = np.log(spectrum + 1e-10)
+        geo_mean = np.exp(np.mean(log_spectrum))
+        arith_mean = np.mean(spectrum) + 1e-10
+        spectral_flatness_values.append(geo_mean / arith_mean)
+
+    if not low_energy_ratios:
+        return 'clean'
+
+    avg_low_ratio = np.mean(low_energy_ratios)
+    avg_flatness = np.mean(spectral_flatness_values)
+
+    if avg_low_ratio > 0.4 and avg_flatness < 0.3:
+        level = 'heavy'
+    elif avg_low_ratio > 0.25 or avg_flatness < 0.4:
+        level = 'light'
+    else:
+        level = 'clean'
+
+    log.info(f"[adaptive] BGM level: {level} "
+             f"(low_freq_ratio={avg_low_ratio:.3f}, flatness={avg_flatness:.3f})")
+    return level
+
+
+def apply_highpass(audio: np.ndarray, cutoff: int = 200,
+                   sr: int = 16000, order: int = 4) -> np.ndarray:
+    """Apply Butterworth highpass filter to attenuate low-frequency BGM.
+
+    Only used for VAD preprocessing — Whisper always receives original audio.
+    """
+    nyq = sr / 2
+    sos = butter(order, cutoff / nyq, btype='high', output='sos')
+    return sosfilt(sos, audio).astype(np.float32)
+
+
+def apply_light_denoise(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
+    """Light spectral subtraction for VAD improvement.
+
+    Estimates noise from the quietest 10% of frames and subtracts it.
+    Only used for VAD preprocessing — Whisper always receives original audio.
+    """
+    n_fft = 512
+    hop_length = 128
+
+    f, t, Zxx = scipy.signal.stft(audio, fs=sr, nperseg=n_fft,
+                                    noverlap=n_fft - hop_length)
+    magnitude = np.abs(Zxx)
+    phase = np.angle(Zxx)
+
+    # Estimate noise floor from bottom 10% energy frames
+    frame_energy = np.sum(magnitude ** 2, axis=0)
+    noise_threshold = np.percentile(frame_energy, 10)
+    noise_frames = magnitude[:, frame_energy <= noise_threshold]
+    if noise_frames.shape[1] == 0:
+        return audio  # no quiet frames found, skip denoising
+    noise_estimate = np.mean(noise_frames, axis=1, keepdims=True)
+
+    # Spectral subtraction with flooring (preserve 10% of original to avoid artifacts)
+    clean_magnitude = np.maximum(magnitude - noise_estimate * 1.5, magnitude * 0.1)
+
+    _, denoised = scipy.signal.istft(clean_magnitude * np.exp(1j * phase),
+                                      fs=sr, nperseg=n_fft,
+                                      noverlap=n_fft - hop_length)
+
+    return denoised.astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Vocal separation (MDX-Net ONNX, torch-free) — PREPROCESS_MODE=vocal_sep only
 # ---------------------------------------------------------------------------
 
 def _ensure_model_downloaded() -> str:
@@ -496,19 +611,75 @@ def run_segment_inference(audio: np.ndarray, segments: list[dict],
 def run_inference(audio: np.ndarray, language: str = ""):
     """Run the full transcription pipeline.
 
-    When ENABLE_VOCAL_SEP=1 (default):
-      1. Vocal separation via audio-separator (remove BGM/SFX)
-      2. VAD segment extraction (find speech regions)
-      3. Merge close segments (gap < 1.5s, max 28s)
-      4. Per-segment whisper inference with timestamp remapping
-
-    When ENABLE_VOCAL_SEP=0 (fallback):
-      Original method — replace non-speech with silence, single inference.
+    PREPROCESS_MODE controls preprocessing strategy:
+      'adaptive' (default): BGM detection + lightweight filtering for VAD accuracy
+      'vocal_sep': MDX-Net ONNX vocal separation (slow but best for heavy BGM)
+      'none': Raw VAD + silence replacement (legacy)
     """
-    if ENABLE_VOCAL_SEP:
+    if PREPROCESS_MODE == "vocal_sep":
         return _run_inference_vocal_sep(audio, language)
+    elif PREPROCESS_MODE == "adaptive":
+        return _run_inference_adaptive(audio, language)
     else:
         return _run_inference_legacy(audio, language)
+
+
+def _run_inference_adaptive(audio: np.ndarray, language: str = ""):
+    """Adaptive pipeline: fast BGM detection + lightweight VAD preprocessing.
+
+    1. Detect BGM level via spectral analysis (< 1s)
+    2. Apply appropriate lightweight filter for VAD accuracy
+    3. Run VAD on filtered audio to find speech segments
+    4. Run per-segment whisper inference on ORIGINAL audio (quality preserved)
+    """
+    t0 = time.time()
+
+    # Step 1: Detect BGM presence
+    bgm_level = detect_bgm_level(audio)
+
+    # Step 2: Preprocess for VAD only (Whisper always gets original audio)
+    if bgm_level == 'clean':
+        vad_audio = audio
+        vad_threshold = 0.5
+    elif bgm_level == 'light':
+        vad_audio = apply_highpass(audio, cutoff=200)
+        vad_threshold = 0.6
+    else:  # heavy
+        vad_audio = apply_highpass(audio, cutoff=200)
+        vad_audio = apply_light_denoise(vad_audio)
+        vad_threshold = 0.65
+
+    preprocess_time = time.time() - t0
+    log.info(f"[adaptive] Preprocessing: {preprocess_time:.2f}s "
+             f"(bgm={bgm_level}, vad_threshold={vad_threshold})")
+
+    # Step 3: VAD on preprocessed audio
+    speech_segments = vad_speech_timestamps(vad_audio, threshold=vad_threshold)
+    total_speech = sum(s['end'] - s['start'] for s in speech_segments) / 16000
+    log.info(f"VAD: {len(speech_segments)} raw segments, "
+             f"{total_speech:.1f}s speech / {len(audio)/16000:.1f}s total")
+
+    if not speech_segments:
+        log.info("No speech detected, skipping inference")
+        _schedule_idle_unload()
+        return [], "", 0.0
+
+    # Step 4: Merge close segments
+    merged = merge_segments(speech_segments)
+    merged_speech = sum((s['end'] - s['start']) / 16000 for s in merged)
+    log.info(f"Merged: {len(merged)} segments, {merged_speech:.1f}s total")
+
+    # Step 5: Per-segment whisper inference on ORIGINAL audio
+    all_chunks, full_text, inference_time = run_segment_inference(
+        audio, merged, language
+    )
+
+    total_time = preprocess_time + inference_time
+    log.info(f"Pipeline complete: preprocess={preprocess_time:.1f}s, "
+             f"inference={inference_time:.1f}s, total={total_time:.1f}s, "
+             f"{len(all_chunks)} chunks")
+
+    return all_chunks, full_text, total_time
 
 
 def _run_inference_vocal_sep(audio: np.ndarray, language: str = ""):
@@ -726,8 +897,8 @@ async def model_info():
         "status": "loading" if loading_model else ("loaded" if pipeline else "unloaded"),
         "idle_timeout": IDLE_TIMEOUT,
         "vram_held": pipeline is not None,
-        "vocal_sep_enabled": ENABLE_VOCAL_SEP,
-        "vocal_sep_model": VOCAL_SEP_MODEL if ENABLE_VOCAL_SEP else None,
+        "preprocess_mode": PREPROCESS_MODE,
+        "vocal_sep_model": VOCAL_SEP_MODEL if PREPROCESS_MODE == "vocal_sep" else None,
     }
 
 
