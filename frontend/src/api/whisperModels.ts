@@ -3,8 +3,10 @@ import client from './client'
 export interface OVWhisperModel {
   model_id: string
   label: string
+  size: string          // "tiny", "base", "small", "medium", "large-v3", "distil-large-v2", "distil-large-v3"
+  quant: string         // "int8", "int4", "fp16"
+  english_only: boolean // true for .en models
   downloads: number
-  quant: string  // "int8", "int4", "fp16"
   active: boolean
 }
 

@@ -21,11 +21,13 @@ type hfModel struct {
 
 // OpenVINO whisper model for frontend
 type OVWhisperModel struct {
-	ModelID   string `json:"model_id"`
-	Label     string `json:"label"`
-	Downloads int    `json:"downloads"`
-	Quant     string `json:"quant"` // "int8", "int4", "fp16"
-	Active    bool   `json:"active"`
+	ModelID     string `json:"model_id"`
+	Label       string `json:"label"`
+	Size        string `json:"size"`         // "tiny", "base", "small", "medium", "large-v3", "distil-large-v2", "distil-large-v3"
+	Quant       string `json:"quant"`        // "int8", "int4", "fp16"
+	EnglishOnly bool   `json:"english_only"` // true for .en models
+	Downloads   int    `json:"downloads"`
+	Active      bool   `json:"active"`
 }
 
 type WhisperModelsHandler struct {
@@ -111,6 +113,7 @@ func (h *WhisperModelsHandler) getModels() ([]OVWhisperModel, error) {
 		label := strings.TrimPrefix(m.ModelID, "OpenVINO/")
 		label = strings.TrimSuffix(label, "-ov")
 
+		// Parse quantization
 		quant := "fp16"
 		if strings.Contains(m.ModelID, "-int8") {
 			quant = "int8"
@@ -118,11 +121,19 @@ func (h *WhisperModelsHandler) getModels() ([]OVWhisperModel, error) {
 			quant = "int4"
 		}
 
+		// Parse english-only (.en models)
+		englishOnly := strings.Contains(m.ModelID, ".en")
+
+		// Parse model size
+		size := parseModelSize(m.ModelID)
+
 		models = append(models, OVWhisperModel{
-			ModelID:   m.ModelID,
-			Label:     label,
-			Downloads: m.Downloads,
-			Quant:     quant,
+			ModelID:     m.ModelID,
+			Label:       label,
+			Size:        size,
+			Quant:       quant,
+			EnglishOnly: englishOnly,
+			Downloads:   m.Downloads,
 		})
 	}
 
@@ -132,6 +143,36 @@ func (h *WhisperModelsHandler) getModels() ([]OVWhisperModel, error) {
 	result := make([]OVWhisperModel, len(models))
 	copy(result, models)
 	return result, nil
+}
+
+// parseModelSize extracts the model size from HuggingFace model ID
+// e.g. "OpenVINO/whisper-large-v3-int8-ov" → "large-v3"
+//      "OpenVINO/distil-whisper-large-v3-int8-ov" → "distil-large-v3"
+//      "OpenVINO/whisper-tiny.en-int8-ov" → "tiny"
+func parseModelSize(modelID string) string {
+	name := strings.TrimPrefix(modelID, "OpenVINO/")
+	name = strings.TrimSuffix(name, "-ov")
+
+	// Remove quantization suffix
+	for _, q := range []string{"-int8", "-int4", "-fp16"} {
+		name = strings.TrimSuffix(name, q)
+	}
+
+	// Remove .en suffix
+	name = strings.TrimSuffix(name, ".en")
+
+	// Handle distil models: "distil-whisper-large-v3" → "distil-large-v3"
+	if strings.HasPrefix(name, "distil-whisper-") {
+		rest := strings.TrimPrefix(name, "distil-whisper-")
+		return "distil-" + rest
+	}
+
+	// Standard models: "whisper-large-v3" → "large-v3"
+	if strings.HasPrefix(name, "whisper-") {
+		return strings.TrimPrefix(name, "whisper-")
+	}
+
+	return name
 }
 
 // SetActiveModel changes the active model and tells the whisper server to load it
