@@ -7,12 +7,14 @@ import {
   Subtitles,
   Languages,
   Sparkles,
+  RotateCcw,
 } from 'lucide-react'
 import { type FileEntry } from '@/api/files'
 import {
   batchGenerate,
   batchTranslate,
   getJob,
+  retryJob,
   listPresets,
   type Job,
   type TranslationPreset,
@@ -209,6 +211,16 @@ export default function BatchSubtitleDialog({ mode, files, onClose }: BatchSubti
     }
   }
 
+  const handleRetry = async (jobId: string) => {
+    try {
+      await retryJob(jobId)
+      setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'pending', progress: 0, error: undefined } : j))
+      if (phase === 'done') setPhase('running')
+    } catch {
+      // ignore
+    }
+  }
+
   const completedCount = jobs.filter(j => j.status === 'completed').length
   const failedCount = jobs.filter(j => j.status === 'failed').length
   const totalProgress = jobs.length > 0
@@ -400,6 +412,15 @@ export default function BatchSubtitleDialog({ mode, files, onClose }: BatchSubti
                          j.status === 'failed' ? 'Failed' :
                          `${Math.round(j.progress * 100)}%`}
                       </span>
+                      {j.status === 'failed' && (
+                        <button
+                          onClick={() => handleRetry(j.id)}
+                          className="text-primary-400 hover:text-primary-300 shrink-0 ml-1"
+                          title="Retry"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                        </button>
+                      )}
                     </div>
                   )
                 })}

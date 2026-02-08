@@ -590,6 +590,37 @@ func (m *HLSManager) GetSessionDir(sessionID string) string {
 	return filepath.Join(m.baseDir, sessionID)
 }
 
+// SessionInfo is a snapshot of an active HLS session for API responses.
+type SessionInfo struct {
+	ID            string    `json:"id"`
+	InputPath     string    `json:"input_path"`
+	Quality       string    `json:"quality"`
+	Codec         string    `json:"codec"`
+	CreatedAt     time.Time `json:"created_at"`
+	LastHeartbeat time.Time `json:"last_heartbeat"`
+	Paused        bool      `json:"paused"`
+}
+
+// ListSessions returns a snapshot of all active sessions.
+func (m *HLSManager) ListSessions() []SessionInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	sessions := make([]SessionInfo, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, SessionInfo{
+			ID:            s.ID,
+			InputPath:     s.InputPath,
+			Quality:       s.Quality,
+			Codec:         s.Codec,
+			CreatedAt:     s.CreatedAt,
+			LastHeartbeat: s.LastHeartbeat,
+			Paused:        s.Paused,
+		})
+	}
+	return sessions
+}
+
 // PauseSession sends SIGSTOP to the FFmpeg process, freezing it immediately.
 // This releases GPU resources without killing the process.
 func (m *HLSManager) PauseSession(sessionID string) bool {

@@ -59,3 +59,24 @@ export interface BatchInfoResult {
 
 export const batchFileInfo = (paths: string[]) =>
   client.post<BatchInfoResult[]>('/files/batch-info', { paths })
+
+// File management (Admin only)
+export const uploadFile = (path: string, file: File, onProgress?: (pct: number) => void) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return client.post(`/files/upload/${path}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: onProgress
+      ? (e) => onProgress(Math.round((e.loaded * 100) / (e.total || 1)))
+      : undefined,
+  })
+}
+
+export const deleteFile = (path: string) =>
+  client.delete(`/files/delete/${path}`)
+
+export const moveFile = (source: string, destination: string) =>
+  client.put('/files/move', { source, destination })
+
+export const createFolder = (path: string) =>
+  client.post(`/files/mkdir/${path}`)

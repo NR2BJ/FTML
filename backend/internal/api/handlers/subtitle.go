@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -601,6 +602,73 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 		"job_ids": jobIDs,
 		"skipped": skipped,
 	})
+}
+
+// UploadSubtitle allows uploading an external subtitle file (Editor+ only)
+// POST /subtitle/upload/* — multipart/form-data with "file" field
+func (h *SubtitleHandler) UploadSubtitle(w http.ResponseWriter, r *http.Request) {
+	path := extractPath(r)
+	fullPath := filepath.Join(h.mediaPath, path)
+
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		jsonError(w, "video file not found", http.StatusNotFound)
+		return
+	}
+
+	// Limit upload to 10MB for subtitle files
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		jsonError(w, "failed to parse upload", http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		jsonError(w, "file field required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Validate extension
+	filename := filepath.Base(header.Filename)
+	ext := strings.ToLower(filepath.Ext(filename))
+	allowedExts := map[string]bool{".srt": true, ".vtt": true, ".ass": true, ".ssa": true}
+	if !allowedExts[ext] {
+		jsonError(w, "only .srt, .vtt, .ass, .ssa files are allowed", http.StatusBadRequest)
+		return
+	}
+
+	// Validate filename (no path traversal)
+	if strings.ContainsAny(filename, "/\\") || strings.Contains(filename, "..") {
+		jsonError(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+
+	// Save to generated subtitles directory
+	hash := videoHash(path)
+	genDir := filepath.Join(h.subtitlePath, hash)
+	os.MkdirAll(genDir, 0755)
+
+	destPath := filepath.Join(genDir, filename)
+
+	dst, err := os.Create(destPath)
+	if err != nil {
+		jsonError(w, "failed to save subtitle", http.StatusInternalServerError)
+		return
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		os.Remove(destPath)
+		jsonError(w, "failed to write subtitle", http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]string{
+		"id":       "generated:" + filename,
+		"filename": filename,
+	}, http.StatusCreated)
 }
 
 // DeleteSubtitle removes a generated subtitle file

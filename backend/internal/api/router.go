@@ -1,6 +1,8 @@
 package api
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -36,7 +38,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	presetsHandler := handlers.NewPresetsHandler(database)
 	whisperBackendsHandler := handlers.NewWhisperBackendsHandler(database)
 	geminiModelsHandler := handlers.NewGeminiModelsHandler(database)
-	adminHandler := handlers.NewAdminHandler(database)
+	adminHandler := handlers.NewAdminHandler(database, hlsManager)
 
 	// Internal routes (no auth — for container-to-container communication)
 	r.Route("/internal", func(r chi.Router) {
@@ -45,6 +47,12 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 
 	// Public routes
 	r.Route("/api", func(r chi.Router) {
+		// Health check (no auth)
+		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+		})
+
 		// Auth (public)
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/register", authHandler.Register)
@@ -56,7 +64,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			// Auth
 			r.Get("/auth/me", authHandler.Me)
 
-			// Files
+			// Files — read-only
 			r.Get("/files/tree", filesHandler.GetTree)
 			r.Get("/files/tree/*", filesHandler.GetTree)
 			r.Get("/files/info/*", filesHandler.GetInfo)
@@ -99,9 +107,11 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				r.Post("/subtitle/generate/*", subtitleHandler.GenerateSubtitle)
 				r.Post("/subtitle/translate/*", subtitleHandler.TranslateSubtitle)
 				r.Delete("/subtitle/delete/*", subtitleHandler.DeleteSubtitle)
+				r.Post("/subtitle/upload/*", subtitleHandler.UploadSubtitle)
 				r.Post("/subtitle/batch-generate", subtitleHandler.BatchGenerate)
 				r.Post("/subtitle/batch-translate", subtitleHandler.BatchTranslate)
 				r.Delete("/jobs/{id}", jobHandler.CancelJob)
+				r.Post("/jobs/{id}/retry", jobHandler.RetryJob)
 			})
 
 			// Admin-only routes
@@ -146,6 +156,15 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				r.Get("/admin/registrations/count", adminHandler.PendingRegistrationCount)
 				r.Post("/admin/registrations/{id}/approve", adminHandler.ApproveRegistration)
 				r.Post("/admin/registrations/{id}/reject", adminHandler.RejectRegistration)
+
+				// Admin — File Management
+				r.Post("/files/upload/*", filesHandler.Upload)
+				r.Delete("/files/delete/*", filesHandler.Delete)
+				r.Put("/files/move", filesHandler.Move)
+				r.Post("/files/mkdir/*", filesHandler.CreateFolder)
+
+				// Admin — Active Sessions
+				r.Get("/admin/sessions", adminHandler.ListSessions)
 			})
 		})
 	})

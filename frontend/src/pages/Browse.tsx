@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { getTree, getThumbnailUrl, type FileEntry } from '@/api/files'
-import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid, CheckSquare } from 'lucide-react'
+import { getTree, getThumbnailUrl, type FileEntry, uploadFile, deleteFile, moveFile, createFolder } from '@/api/files'
+import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid, CheckSquare, Upload, FolderPlus } from 'lucide-react'
 import { isVideoFile, formatBytes } from '@/utils/format'
 import { useBrowseStore } from '@/stores/browseStore'
+import { useAuthStore } from '@/stores/authStore'
 import DetailsView from '@/components/Browse/DetailsView'
 import ContextMenu from '@/components/Browse/ContextMenu'
 import BatchSubtitleDialog from '@/components/Browse/BatchSubtitleDialog'
@@ -73,7 +74,6 @@ function IconsView({ entries, onClickEntry, iconSize, selectedPaths, onSelection
   const padding = Math.max(4, Math.min(12, iconSize * 0.05))
 
   const handleContextMenu = (e: React.MouseEvent, entry: FileEntry) => {
-    if (!isVideoFile(entry.name) || entry.is_dir) return
     e.preventDefault()
     if (!selectedPaths.has(entry.path)) {
       onSelectionChange(new Set([entry.path]))
@@ -189,7 +189,24 @@ export default function Browse() {
   const [batchDialog, setBatchDialog] = useState<{ mode: BatchMode; files: FileEntry[] } | null>(null)
   const [subtitleManager, setSubtitleManager] = useState<FileEntry | null>(null)
 
+  // File management state
+  const { user } = useAuthStore()
+  const isAdmin = user?.role === 'admin'
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
+  const [newFolderName, setNewFolderName] = useState<string | null>(null)
+  const [renameEntry, setRenameEntry] = useState<FileEntry | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [deleteConfirm, setDeleteConfirm] = useState<FileEntry[] | null>(null)
+  const [actionError, setActionError] = useState('')
+
   const { viewMode, iconSize, setViewMode, setIconSize } = useBrowseStore()
+
+  const refreshEntries = useCallback(() => {
+    getTree(path)
+      .then(({ data }) => setEntries(data.entries || []))
+      .catch(() => setEntries([]))
+  }, [path])
 
   useEffect(() => {
     setLoading(true)
@@ -203,6 +220,69 @@ export default function Browse() {
   useEffect(() => {
     setSelectedPaths(new Set())
   }, [path])
+
+  // File management handlers
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setActionError('')
+    setUploadProgress(0)
+    try {
+      await uploadFile(path, file, (pct) => setUploadProgress(pct))
+      refreshEntries()
+    } catch {
+      setActionError('Upload failed')
+    } finally {
+      setUploadProgress(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const handleCreateFolder = async () => {
+    if (!newFolderName?.trim()) { setNewFolderName(null); return }
+    setActionError('')
+    try {
+      const folderPath = path ? `${path}/${newFolderName.trim()}` : newFolderName.trim()
+      await createFolder(folderPath)
+      refreshEntries()
+    } catch {
+      setActionError('Failed to create folder')
+    } finally {
+      setNewFolderName(null)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!deleteConfirm) return
+    setActionError('')
+    try {
+      for (const entry of deleteConfirm) {
+        await deleteFile(entry.path)
+      }
+      setSelectedPaths(new Set())
+      refreshEntries()
+    } catch {
+      setActionError('Failed to delete')
+    } finally {
+      setDeleteConfirm(null)
+    }
+  }
+
+  const handleRename = async () => {
+    if (!renameEntry || !renameValue.trim()) { setRenameEntry(null); return }
+    setActionError('')
+    try {
+      const parts = renameEntry.path.split('/')
+      parts.pop()
+      const dest = parts.length > 0 ? `${parts.join('/')}/${renameValue.trim()}` : renameValue.trim()
+      await moveFile(renameEntry.path, dest)
+      refreshEntries()
+    } catch {
+      setActionError('Failed to rename')
+    } finally {
+      setRenameEntry(null)
+    }
+  }
 
   const handleClick = (entry: FileEntry) => {
     if (entry.is_dir) {
@@ -219,6 +299,7 @@ export default function Browse() {
   }
 
   const handleContextMenu = useCallback((e: React.MouseEvent, contextEntries: FileEntry[]) => {
+    e.preventDefault()
     setContextMenu({ x: e.clientX, y: e.clientY, entries: contextEntries })
   }, [])
 
@@ -253,6 +334,29 @@ export default function Browse() {
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
+          {/* Admin file management buttons */}
+          {isAdmin && (
+            <div className="flex items-center gap-1.5">
+              <input ref={fileInputRef} type="file" className="hidden" onChange={handleUpload} />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadProgress !== null}
+                className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-white bg-dark-800 hover:bg-dark-700 border border-dark-700 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                title="Upload file"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                {uploadProgress !== null ? `${uploadProgress}%` : 'Upload'}
+              </button>
+              <button
+                onClick={() => setNewFolderName('')}
+                className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-white bg-dark-800 hover:bg-dark-700 border border-dark-700 px-3 py-1.5 rounded-lg transition-colors"
+                title="New folder"
+              >
+                <FolderPlus className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* Selected count + batch action */}
           {selectedCount > 0 && (
             <div className="flex items-center gap-2">
@@ -314,6 +418,32 @@ export default function Browse() {
         </div>
       </div>
 
+      {/* Action error */}
+      {actionError && (
+        <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-2 rounded-lg text-sm mb-4 flex items-center justify-between">
+          {actionError}
+          <button onClick={() => setActionError('')} className="text-red-400 hover:text-red-300 ml-2">&times;</button>
+        </div>
+      )}
+
+      {/* New folder inline input */}
+      {newFolderName !== null && (
+        <div className="flex items-center gap-2 mb-4">
+          <FolderPlus className="w-4 h-4 text-yellow-400" />
+          <input
+            type="text"
+            value={newFolderName}
+            onChange={(e) => setNewFolderName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleCreateFolder(); if (e.key === 'Escape') setNewFolderName(null) }}
+            placeholder="Folder name"
+            className="bg-dark-800 border border-dark-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary-500 w-64"
+            autoFocus
+          />
+          <button onClick={handleCreateFolder} className="text-sm text-primary-400 hover:text-primary-300">Create</button>
+          <button onClick={() => setNewFolderName(null)} className="text-sm text-gray-500 hover:text-gray-300">Cancel</button>
+        </div>
+      )}
+
       {/* Content */}
       {viewMode === 'icons' && (
         <IconsView
@@ -356,6 +486,13 @@ export default function Browse() {
             const videoFiles = contextMenu.entries.filter(e => !e.is_dir && isVideoFile(e.name))
             if (videoFiles.length === 1) setSubtitleManager(videoFiles[0])
           }}
+          onDelete={() => setDeleteConfirm(contextMenu.entries)}
+          onRename={() => {
+            if (contextMenu.entries.length === 1) {
+              setRenameEntry(contextMenu.entries[0])
+              setRenameValue(contextMenu.entries[0].name)
+            }
+          }}
         />
       )}
 
@@ -380,6 +517,48 @@ export default function Browse() {
             setSubtitleManager(null)
           }}
         />
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setDeleteConfirm(null)}>
+          <div className="bg-dark-800 border border-dark-600 rounded-xl p-6 max-w-sm w-full mx-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-white font-medium mb-2">Delete {deleteConfirm.length} item{deleteConfirm.length > 1 ? 's' : ''}?</h3>
+            <p className="text-sm text-gray-400 mb-1">This cannot be undone.</p>
+            <ul className="text-sm text-gray-500 mb-4 max-h-32 overflow-y-auto">
+              {deleteConfirm.map(e => <li key={e.path} className="truncate">{e.name}</li>)}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setDeleteConfirm(null)} className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
+              <button onClick={handleDelete} className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rename Dialog */}
+      {renameEntry && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setRenameEntry(null)}>
+          <div className="bg-dark-800 border border-dark-600 rounded-xl p-6 max-w-sm w-full mx-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-white font-medium mb-3">Rename</h3>
+            <input
+              type="text"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleRename(); if (e.key === 'Escape') setRenameEntry(null) }}
+              className="w-full bg-dark-900 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-primary-500 mb-4"
+              autoFocus
+              onFocus={(e) => {
+                const dotIdx = e.target.value.lastIndexOf('.')
+                if (dotIdx > 0) e.target.setSelectionRange(0, dotIdx)
+              }}
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setRenameEntry(null)} className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
+              <button onClick={handleRename} className="px-4 py-2 text-sm bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors">Rename</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

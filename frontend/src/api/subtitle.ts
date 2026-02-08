@@ -62,6 +62,17 @@ export const listJobs = () =>
 export const cancelJob = (jobId: string) =>
   client.delete(`/jobs/${jobId}`)
 
+export const retryJob = (jobId: string) =>
+  client.post(`/jobs/${jobId}/retry`)
+
+export const uploadSubtitle = (videoPath: string, file: File) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return client.post(`/subtitle/upload/${videoPath}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
 // Translation Presets
 export interface TranslationPreset {
   id: number

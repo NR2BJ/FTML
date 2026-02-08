@@ -284,13 +284,12 @@ export default function DetailsView({
   }
 
   const handleRowContextMenu = (e: React.MouseEvent, entry: FileEntry) => {
-    if (!onContextMenu || !isVideoFile(entry.name) || entry.is_dir) return
+    if (!onContextMenu) return
     e.preventDefault()
     // If right-clicked item is not selected, select only it
     if (!selectedPaths.has(entry.path)) {
       onSelectionChange?.(new Set([entry.path]))
-      const selected = [entry]
-      onContextMenu(e, selected)
+      onContextMenu(e, [entry])
     } else {
       // Use currently selected entries
       const selected = sortedEntries.filter(e => selectedPaths.has(e.path))

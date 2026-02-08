@@ -1,0 +1,13 @@
+# FTML Caddy reverse proxy configuration
+#
+# Add this block to your Caddyfile on the Caddy server (e.g., Proxmox LXC).
+# Replace:
+#   - ftml.yourdomain.com → your actual domain
+#   - 192.168.x.x:7979    → your FTML Docker host IP and port (FTML_PORT)
+#
+# Caddy automatically provisions HTTPS via Let's Encrypt
+# and redirects HTTP → HTTPS.
+
+ftml.yourdomain.com {
+    reverse_proxy 192.168.x.x:7979
+}

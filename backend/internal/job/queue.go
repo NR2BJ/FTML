@@ -183,6 +183,38 @@ func (q *JobQueue) CancelJob(id string) error {
 	return err
 }
 
+// RetryJob re-queues a failed or cancelled job
+func (q *JobQueue) RetryJob(id string) error {
+	job, err := q.GetJob(id)
+	if err != nil {
+		return fmt.Errorf("job not found")
+	}
+
+	if job.Status != StatusFailed && job.Status != StatusCancelled {
+		return fmt.Errorf("only failed or cancelled jobs can be retried")
+	}
+
+	// Reset job state to pending
+	_, err = q.db.Exec(`
+		UPDATE jobs SET status = ?, progress = 0, error = NULL, started_at = NULL, completed_at = NULL
+		WHERE id = ?`,
+		StatusPending, id,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to reset job: %w", err)
+	}
+
+	// Push to worker channel
+	select {
+	case q.pending <- id:
+	default:
+		log.Printf("[job] queue full, retried job %s will be picked up on next poll", id)
+	}
+
+	log.Printf("[job] retrying job %s", id)
+	return nil
+}
+
 // UpdateProgress updates the progress of a running job
 func (q *JobQueue) UpdateProgress(id string, progress float64) {
 	q.db.Exec("UPDATE jobs SET progress = ? WHERE id = ?", progress, id)

@@ -10,6 +10,11 @@ services:
     networks:
       - homeserver-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   backend:
     build:
@@ -18,7 +23,7 @@ services:
     expose:
       - "8080"
     volumes:
-      - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
+      - ${MEDIA_PATH:-/mnt/storage/video}:/media
       - ftml_data:/data
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
@@ -38,6 +43,11 @@ services:
     networks:
       - homeserver-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # Whisper STT - OpenVINO GenAI (Intel Arc GPU accelerated)
   # Model is managed via web UI Settings — no MODEL_ID env var needed
@@ -57,6 +67,11 @@ services:
     networks:
       - homeserver-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   ftml_data:

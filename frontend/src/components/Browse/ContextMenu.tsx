@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Subtitles, Languages, Sparkles, ListVideo } from 'lucide-react'
+import { Subtitles, Languages, Sparkles, ListVideo, Trash2, Pencil } from 'lucide-react'
 import { type FileEntry } from '@/api/files'
 import { isVideoFile } from '@/utils/format'
 import { useAuthStore } from '@/stores/authStore'
@@ -13,6 +13,8 @@ interface ContextMenuProps {
   onTranslateSubtitles: () => void
   onGenerateAndTranslate: () => void
   onManageSubtitles?: () => void
+  onDelete?: () => void
+  onRename?: () => void
 }
 
 export default function ContextMenu({
@@ -24,11 +26,15 @@ export default function ContextMenu({
   onTranslateSubtitles,
   onGenerateAndTranslate,
   onManageSubtitles,
+  onDelete,
+  onRename,
 }: ContextMenuProps) {
   const { user } = useAuthStore()
-  const canEdit = user?.role === 'admin' || user?.role === 'editor'
+  const isAdmin = user?.role === 'admin'
+  const canEdit = isAdmin || user?.role === 'editor'
   const videoFiles = selectedEntries.filter(e => !e.is_dir && isVideoFile(e.name))
-  const count = videoFiles.length
+  const videoCount = videoFiles.length
+  const totalCount = selectedEntries.length
 
   // Close on outside click or escape
   useEffect(() => {
@@ -44,11 +50,11 @@ export default function ContextMenu({
     }
   }, [onClose])
 
-  if (count === 0) return null
+  if (totalCount === 0) return null
 
   // Adjust position to stay within viewport
   const menuWidth = 260
-  const menuHeight = count === 1 ? 220 : 160
+  const menuHeight = 280
   const adjustedX = Math.min(x, window.innerWidth - menuWidth - 8)
   const adjustedY = Math.min(y, window.innerHeight - menuHeight - 8)
 
@@ -59,10 +65,11 @@ export default function ContextMenu({
       onClick={(e) => e.stopPropagation()}
     >
       <div className="px-3 py-1.5 text-xs text-gray-500 border-b border-dark-700">
-        {count} video file{count > 1 ? 's' : ''} selected
+        {totalCount} item{totalCount > 1 ? 's' : ''} selected
       </div>
 
-      {canEdit && (
+      {/* Subtitle operations — only when video files are selected */}
+      {videoCount > 0 && canEdit && (
         <>
           <button
             onClick={() => { onGenerateSubtitles(); onClose() }}
@@ -92,8 +99,8 @@ export default function ContextMenu({
         </>
       )}
 
-      {/* Single file: manage subtitles (view, delete, translate individual) */}
-      {count === 1 && onManageSubtitles && (
+      {/* Single video file: manage subtitles */}
+      {videoCount === 1 && onManageSubtitles && (
         <>
           <div className="border-t border-dark-700 my-0.5" />
           <button
@@ -103,6 +110,33 @@ export default function ContextMenu({
             <ListVideo className="w-4 h-4 text-purple-400" />
             Manage Subtitles
           </button>
+        </>
+      )}
+
+      {/* File management — admin only */}
+      {isAdmin && (
+        <>
+          <div className="border-t border-dark-700 my-0.5" />
+
+          {totalCount === 1 && onRename && (
+            <button
+              onClick={() => { onRename(); onClose() }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 hover:text-white transition-colors"
+            >
+              <Pencil className="w-4 h-4 text-blue-400" />
+              Rename
+            </button>
+          )}
+
+          {onDelete && (
+            <button
+              onClick={() => { onDelete(); onClose() }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-400 hover:bg-dark-700 hover:text-red-300 transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+              Delete
+            </button>
+          )}
         </>
       )}
     </div>

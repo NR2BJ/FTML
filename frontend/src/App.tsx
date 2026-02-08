@@ -9,6 +9,7 @@ import WatchHistory from '@/pages/WatchHistory'
 import Account from '@/pages/Account'
 import UserManagement from '@/pages/admin/UserManagement'
 import Registrations from '@/pages/admin/Registrations'
+import Sessions from '@/pages/admin/Sessions'
 import Layout from '@/components/layout/Layout'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -64,6 +65,7 @@ export default function App() {
           <Route path="settings" element={<AdminRoute><Settings /></AdminRoute>} />
           <Route path="admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
           <Route path="admin/registrations" element={<AdminRoute><Registrations /></AdminRoute>} />
+          <Route path="admin/sessions" element={<AdminRoute><Sessions /></AdminRoute>} />
         </Route>
       </Routes>
     </BrowserRouter>

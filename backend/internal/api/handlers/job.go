@@ -63,3 +63,19 @@ func (h *JobHandler) CancelJob(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// RetryJob re-queues a failed or cancelled job
+func (h *JobHandler) RetryJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		jsonError(w, "missing job ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.queue.RetryJob(id); err != nil {
+		jsonError(w, "failed to retry job: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	jsonResponse(w, map[string]string{"status": "retrying"}, http.StatusOK)
+}

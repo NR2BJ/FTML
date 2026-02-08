@@ -9,14 +9,16 @@ import (
 	"github.com/video-stream/backend/internal/api/middleware"
 	"github.com/video-stream/backend/internal/auth"
 	"github.com/video-stream/backend/internal/db"
+	"github.com/video-stream/backend/internal/ffmpeg"
 )
 
 type AdminHandler struct {
-	db *db.Database
+	db         *db.Database
+	hlsManager *ffmpeg.HLSManager
 }
 
-func NewAdminHandler(db *db.Database) *AdminHandler {
-	return &AdminHandler{db: db}
+func NewAdminHandler(db *db.Database, hlsManager *ffmpeg.HLSManager) *AdminHandler {
+	return &AdminHandler{db: db, hlsManager: hlsManager}
 }
 
 // ListUsers returns all users
@@ -272,4 +274,10 @@ func (h *AdminHandler) PendingRegistrationCount(w http.ResponseWriter, r *http.R
 		return
 	}
 	jsonResponse(w, map[string]int{"count": len(regs)}, http.StatusOK)
+}
+
+// ListSessions returns all active HLS streaming sessions
+func (h *AdminHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
+	sessions := h.hlsManager.ListSessions()
+	jsonResponse(w, sessions, http.StatusOK)
 }

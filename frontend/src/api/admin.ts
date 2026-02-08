@@ -64,3 +64,17 @@ export const approveRegistration = (id: number) =>
 
 export const rejectRegistration = (id: number) =>
   client.post(`/admin/registrations/${id}/reject`)
+
+// Active sessions
+export interface StreamSession {
+  id: string
+  input_path: string
+  quality: string
+  codec: string
+  created_at: string
+  last_heartbeat: string
+  paused: boolean
+}
+
+export const listSessions = () =>
+  client.get<StreamSession[]>('/admin/sessions')

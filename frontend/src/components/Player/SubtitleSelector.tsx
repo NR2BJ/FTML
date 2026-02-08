@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
-import { Subtitles, Settings, Wand2, Languages, Trash2 } from 'lucide-react'
+import { Subtitles, Settings, Wand2, Languages, Trash2, Upload } from 'lucide-react'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useAuthStore } from '@/stores/authStore'
-import { deleteSubtitle, listSubtitles } from '@/api/subtitle'
+import { deleteSubtitle, listSubtitles, uploadSubtitle } from '@/api/subtitle'
 import SubtitleSettings from './SubtitleSettings'
 import SubtitleGenerate from './SubtitleGenerate'
 import SubtitleTranslate from './SubtitleTranslate'
@@ -16,7 +16,9 @@ export default function SubtitleSelector() {
   const [panel, setPanel] = useState<Panel | null>(null)
   const [translateSource, setTranslateSource] = useState<SubtitleEntry | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const {
     subtitles,
@@ -62,6 +64,22 @@ export default function SubtitleSelector() {
       // Silent fail
     } finally {
       setDeleting(null)
+    }
+  }
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !currentFile) return
+    setUploading(true)
+    try {
+      await uploadSubtitle(currentFile, file)
+      const { data } = await listSubtitles(currentFile)
+      setSubtitles(data || [])
+    } catch {
+      // Silent fail
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
 
@@ -167,6 +185,21 @@ export default function SubtitleSelector() {
               <Wand2 className="w-3.5 h-3.5" />
               Generate (AI)
             </button>
+          )}
+
+          {/* Upload subtitle — editor/admin only */}
+          {canEdit && (
+            <>
+              <input ref={fileInputRef} type="file" accept=".srt,.vtt,.ass,.ssa" className="hidden" onChange={handleUpload} />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                {uploading ? 'Uploading...' : 'Upload Subtitle'}
+              </button>
+            </>
           )}
 
           {/* Settings button */}
