@@ -897,7 +897,7 @@ def _run_inference_raw(audio: np.ndarray, language: str = ""):
     full_text = "".join(c.text for c in chunks).strip() if chunks else str(result)
 
     log.info(f"[raw] Done: {len(chunks)} chunks, {len(full_text)} chars in {elapsed:.1f}s")
-    for i, c in enumerate(chunks[:5]):
+    for i, c in enumerate(chunks):
         log.info(f"  chunk[{i}]: [{c.start_ts:.1f}-{c.end_ts:.1f}] {c.text.strip()}")
 
     _schedule_idle_unload()
