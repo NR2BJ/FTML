@@ -4,6 +4,9 @@ uvicorn[standard]
 python-multipart
 librosa
 numpy
+scipy
 huggingface_hub
 silero-vad-lite
 soundfile
+onnxruntime
+requests

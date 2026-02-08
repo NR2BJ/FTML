@@ -1,5 +1,6 @@
 # OpenVINO GenAI WhisperPipeline — Intel GPU accelerated speech-to-text
 # Lightweight Python server replacing whisper.cpp (SYCL/OpenVINO/CUDA)
+# Vocal separation uses MDX-Net ONNX (no PyTorch needed)
 
 FROM ubuntu:24.04
 
@@ -9,18 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install CPU-only PyTorch first (required by audio-separator + other deps)
-RUN pip3 install --break-system-packages --no-cache-dir \
-    torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-# Install audio-separator with CPU ONNX runtime for vocal separation
-RUN pip3 install --break-system-packages --no-cache-dir "audio-separator[cpu]" && \
-    python3 -c "from audio_separator.separator import Separator; print('audio-separator OK')"
-
+# No PyTorch needed — vocal separation uses onnxruntime + numpy/scipy
 COPY requirements.txt /app/
 RUN pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt
 
-COPY server.py /app/
+COPY server.py vocal_separator.py /app/
 WORKDIR /app
 
 ENV MODEL_ID=OpenVINO/distil-whisper-large-v3-int8-ov
@@ -28,8 +22,6 @@ ENV DEVICE=GPU
 ENV PORT=8178
 ENV ENABLE_VOCAL_SEP=1
 ENV VOCAL_SEP_MODEL=UVR_MDXNET_KARA_2.onnx
-# Prevent PyTorch from caching CUDA memory (we use CPU-only)
-ENV PYTORCH_NO_CUDA_MEMORY_CACHING=1
 
 EXPOSE 8178
 

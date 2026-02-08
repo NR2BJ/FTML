@@ -20,14 +20,12 @@ import gc
 import io
 import os
 import logging
-import shutil
-import tempfile
 import time
 
 import threading
 import numpy as np
 import librosa
-import soundfile as sf
+import requests
 import uvicorn
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
@@ -61,11 +59,14 @@ _idle_timer_lock = threading.Lock()
 # before sending to Whisper — prevents hallucination on non-speech segments.
 vad_model = SileroVAD(16000)
 
-# Vocal separation via audio-separator (lazy loaded)
+# Vocal separation via MDX-Net ONNX (torch-free, lazy loaded)
 ENABLE_VOCAL_SEP = os.environ.get("ENABLE_VOCAL_SEP",
                     os.environ.get("ENABLE_DEMUCS", "1")) == "1"
 VOCAL_SEP_MODEL = os.environ.get("VOCAL_SEP_MODEL", "UVR_MDXNET_KARA_2.onnx")
-_vocal_separator = None
+VOCAL_SEP_MODEL_URL = os.environ.get("VOCAL_SEP_MODEL_URL",
+    "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/")
+MODEL_CACHE_DIR = os.environ.get("MODEL_CACHE_DIR",
+    "/root/.cache/huggingface/audio-separator-models")
 _vocal_sep_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
@@ -236,85 +237,62 @@ def decode_audio(audio_bytes: bytes) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Vocal separation (audio-separator)
+# Vocal separation (MDX-Net ONNX, torch-free)
 # ---------------------------------------------------------------------------
 
-def _get_vocal_separator():
-    """Lazy-load audio-separator (downloads model on first use)."""
-    global _vocal_separator, ENABLE_VOCAL_SEP
-    with _vocal_sep_lock:
-        if _vocal_separator is not None:
-            return _vocal_separator
-        try:
-            log.info(f"Loading audio-separator with model {VOCAL_SEP_MODEL}...")
-            from audio_separator.separator import Separator
-            _vocal_separator = Separator(
-                output_format="WAV",
-                output_single_stem="Vocals",
-                model_file_dir="/root/.cache/huggingface/audio-separator-models",
-            )
-            _vocal_separator.load_model(model_filename=VOCAL_SEP_MODEL)
-            log.info(f"audio-separator model loaded: {VOCAL_SEP_MODEL}")
-            return _vocal_separator
-        except Exception as e:
-            log.error(f"audio-separator init failed: {e}. Disabling vocal separation.")
-            ENABLE_VOCAL_SEP = False
-            raise
+def _ensure_model_downloaded() -> str:
+    """Download the ONNX model if not cached. Returns path to model file."""
+    os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
+    model_path = os.path.join(MODEL_CACHE_DIR, VOCAL_SEP_MODEL)
+    if os.path.exists(model_path):
+        return model_path
+
+    url = VOCAL_SEP_MODEL_URL + VOCAL_SEP_MODEL
+    log.info(f"Downloading vocal separation model: {url}")
+    resp = requests.get(url, stream=True, timeout=300)
+    resp.raise_for_status()
+    tmp_path = model_path + ".tmp"
+    total = int(resp.headers.get('content-length', 0))
+    downloaded = 0
+    with open(tmp_path, 'wb') as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            f.write(chunk)
+            downloaded += len(chunk)
+            if total > 0 and downloaded % (1024 * 1024) < 8192:
+                log.info(f"  {downloaded / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB")
+    os.rename(tmp_path, model_path)
+    log.info(f"Model downloaded: {model_path} ({downloaded / 1024 / 1024:.1f} MB)")
+    return model_path
 
 
 def vocal_separate(audio_16k: np.ndarray) -> np.ndarray:
-    """Extract vocals from audio using audio-separator.
-
-    audio-separator only works with file paths, so we:
-    1. Write input audio to a temp WAV file
-    2. Run separation
-    3. Read vocals WAV back as numpy
-    4. Clean up temp files
+    """Extract vocals from 16kHz mono audio using MDX-Net ONNX model.
 
     Args:
         audio_16k: 16kHz mono float32 numpy array
     Returns:
         vocals_16k: 16kHz mono float32 numpy array (vocals only)
     """
-    separator = _get_vocal_separator()
+    global ENABLE_VOCAL_SEP
 
-    tmp_dir = tempfile.mkdtemp(prefix="vocal_sep_")
     try:
-        # Write input audio as WAV (16kHz mono)
-        input_path = os.path.join(tmp_dir, "input.wav")
-        sf.write(input_path, audio_16k, 16000, subtype='FLOAT')
+        model_path = _ensure_model_downloaded()
+    except Exception as e:
+        log.error(f"Model download failed: {e}. Disabling vocal separation.")
+        ENABLE_VOCAL_SEP = False
+        raise
 
-        # Hold lock during separation (mutates separator.output_dir)
-        with _vocal_sep_lock:
-            separator.output_dir = tmp_dir
-            t0 = time.time()
-            output_files = separator.separate(input_path)
-            elapsed = time.time() - t0
+    from vocal_separator import separate_vocals
 
-        if not output_files:
-            raise RuntimeError("audio-separator returned no output files")
+    with _vocal_sep_lock:
+        t0 = time.time()
+        vocals = separate_vocals(audio_16k, model_path)
+        elapsed = time.time() - t0
 
-        # Find the vocals output file
-        vocals_path = None
-        for f in output_files:
-            full_path = f if os.path.isabs(f) else os.path.join(tmp_dir, f)
-            if os.path.exists(full_path):
-                vocals_path = full_path
-                break
+    log.info(f"Vocal separation done in {elapsed:.1f}s "
+             f"({len(audio_16k)/16000:.1f}s audio, model={VOCAL_SEP_MODEL})")
 
-        if vocals_path is None:
-            raise RuntimeError(f"Vocals output file not found. Got: {output_files}")
-
-        # Read vocals WAV and resample to 16kHz mono
-        vocals, _ = librosa.load(vocals_path, sr=16000, mono=True)
-
-        log.info(f"Vocal separation done in {elapsed:.1f}s "
-                 f"({len(audio_16k)/16000:.1f}s audio, model={VOCAL_SEP_MODEL})")
-
-        return vocals.astype(np.float32)
-
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    return vocals
 
 
 # ---------------------------------------------------------------------------
