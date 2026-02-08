@@ -41,13 +41,12 @@ services:
     restart: unless-stopped
 
   # Whisper STT - Intel Arc (SYCL)
-  # Runs by default with backend. Remove this service if you don't need STT.
   whisper-sycl:
     build:
       context: ./whisper
       dockerfile: Dockerfile.sycl
     environment:
-      - WHISPER_MODEL=${WHISPER_MODEL:-ggml-large-v3.bin}
+      - WHISPER_MODEL=${WHISPER_MODEL_SYCL:-${WHISPER_MODEL:-ggml-large-v3.bin}}
     volumes:
       - whisper_models:/models:ro
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
@@ -65,7 +64,7 @@ services:
       context: ./whisper
       dockerfile: Dockerfile.openvino
     environment:
-      - WHISPER_MODEL=${WHISPER_MODEL:-ggml-large-v3-turbo.bin}
+      - WHISPER_MODEL=${WHISPER_MODEL_OPENVINO:-${WHISPER_MODEL:-ggml-large-v3.bin}}
     volumes:
       - whisper_models:/models:ro
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
