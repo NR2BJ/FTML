@@ -41,13 +41,10 @@ services:
     restart: unless-stopped
 
   # Whisper STT - Intel Arc (SYCL)
-  # Enable with: docker compose --profile whisper-sycl up -d
   whisper-sycl:
     build:
       context: ./whisper
       dockerfile: Dockerfile.sycl
-    profiles:
-      - whisper-sycl
     environment:
       - WHISPER_MODEL=${WHISPER_MODEL_SYCL:-${WHISPER_MODEL:-ggml-large-v3.bin}}
       - BACKEND_URL=http://backend:8080
