@@ -47,7 +47,6 @@ services:
       dockerfile: Dockerfile.openvino-genai
     environment:
       - DEVICE=${WHISPER_DEVICE:-GPU}
-      - PREPROCESS_MODE=raw  # TEMP: baseline measurement, revert to adaptive after test
     volumes:
       - whisper_models:/root/.cache/huggingface
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
