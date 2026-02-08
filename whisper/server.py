@@ -91,6 +91,10 @@ PREPROCESS_MODE = os.environ.get("PREPROCESS_MODE", "adaptive")
 if os.environ.get("ENABLE_VOCAL_SEP") == "0" and "PREPROCESS_MODE" not in os.environ:
     PREPROCESS_MODE = "none"
 
+# Base VAD threshold for media content. Lower = more sensitive to speech.
+# Default 0.35 is tuned for anime/TV/movie content where BGM/SFX are always present.
+VAD_BASE_THRESHOLD = float(os.environ.get("VAD_BASE_THRESHOLD", "0.35"))
+
 # Vocal separation via MDX-Net ONNX (torch-free, lazy loaded) — used when PREPROCESS_MODE=vocal_sep
 ENABLE_VOCAL_SEP = PREPROCESS_MODE == "vocal_sep"
 VOCAL_SEP_MODEL = os.environ.get("VOCAL_SEP_MODEL", "UVR_MDXNET_KARA_2.onnx")
@@ -303,9 +307,9 @@ def detect_bgm_level(audio: np.ndarray, sr: int = 16000) -> str:
     avg_low_ratio = np.mean(low_energy_ratios)
     avg_flatness = np.mean(spectral_flatness_values)
 
-    if avg_low_ratio > 0.4 and avg_flatness < 0.3:
+    if avg_low_ratio > 0.35 and avg_flatness < 0.35:
         level = 'heavy'
-    elif avg_low_ratio > 0.25 or avg_flatness < 0.4:
+    elif avg_low_ratio > 0.15 or avg_flatness < 0.50:
         level = 'light'
     else:
         level = 'clean'
@@ -645,23 +649,30 @@ def _run_inference_adaptive(audio: np.ndarray, language: str = ""):
     bgm_level = detect_bgm_level(audio)
 
     # Step 2: Preprocess for VAD only (Whisper always gets original audio)
-    if bgm_level == 'clean':
-        vad_audio = audio
-        vad_threshold = 0.5
+    # Media-first approach: all input is movies/TV/anime with BGM/SFX,
+    # so always apply at least a mild highpass filter.
+    # Preprocessing removes BGM interference → threshold stays low for speech detection.
+    if bgm_level == 'heavy':
+        vad_audio = apply_highpass(audio, cutoff=250)
+        vad_audio = apply_light_denoise(vad_audio)
+        vad_threshold = VAD_BASE_THRESHOLD
     elif bgm_level == 'light':
         vad_audio = apply_highpass(audio, cutoff=200)
-        vad_threshold = 0.6
-    else:  # heavy
-        vad_audio = apply_highpass(audio, cutoff=200)
-        vad_audio = apply_light_denoise(vad_audio)
-        vad_threshold = 0.65
+        vad_threshold = VAD_BASE_THRESHOLD
+    else:  # clean (rare for media, but possible for interviews/narration)
+        vad_audio = apply_highpass(audio, cutoff=150)
+        vad_threshold = VAD_BASE_THRESHOLD + 0.05
 
     preprocess_time = time.time() - t0
     log.info(f"[adaptive] Preprocessing: {preprocess_time:.2f}s "
              f"(bgm={bgm_level}, vad_threshold={vad_threshold})")
 
     # Step 3: VAD on preprocessed audio
-    speech_segments = vad_speech_timestamps(vad_audio, threshold=vad_threshold)
+    # Lower min thresholds for media content: short interjections, rapid dialogue
+    speech_segments = vad_speech_timestamps(
+        vad_audio, threshold=vad_threshold,
+        min_speech_ms=150, min_silence_ms=400
+    )
     total_speech = sum(s['end'] - s['start'] for s in speech_segments) / 16000
     log.info(f"VAD: {len(speech_segments)} raw segments, "
              f"{total_speech:.1f}s speech / {len(audio)/16000:.1f}s total")
@@ -671,8 +682,8 @@ def _run_inference_adaptive(audio: np.ndarray, language: str = ""):
         _schedule_idle_unload()
         return [], "", 0.0
 
-    # Step 4: Merge close segments
-    merged = merge_segments(speech_segments)
+    # Step 4: Merge close segments (wider gap for scene transitions, keep short segments)
+    merged = merge_segments(speech_segments, gap_threshold_s=2.0, min_duration_s=0.3)
     merged_speech = sum((s['end'] - s['start']) / 16000 for s in merged)
     log.info(f"Merged: {len(merged)} segments, {merged_speech:.1f}s total")
 
