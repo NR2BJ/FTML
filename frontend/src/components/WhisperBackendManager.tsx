@@ -39,6 +39,14 @@ const BACKEND_TYPES = [
   { value: 'openai', label: 'OpenAI (Cloud)' },
 ]
 
+const DEFAULT_URLS: Record<string, string> = {
+  sycl:     'http://whisper-sycl:8178',
+  openvino: 'http://whisper-openvino:8178',
+  cuda:     'http://whisper-cuda:8178',
+  cpu:      'http://whisper-cpu:8178',
+  openai:   '',
+}
+
 export default function WhisperBackendManager() {
   const [backends, setBackends] = useState<WhisperBackend[]>([])
   const [loading, setLoading] = useState(true)
@@ -48,7 +56,7 @@ export default function WhisperBackendManager() {
   // Add form state
   const [newName, setNewName] = useState('')
   const [newType, setNewType] = useState('sycl')
-  const [newURL, setNewURL] = useState('')
+  const [newURL, setNewURL] = useState(DEFAULT_URLS['sycl'])
   const [addError, setAddError] = useState<string | null>(null)
 
   // Edit state
@@ -90,7 +98,7 @@ export default function WhisperBackendManager() {
       })
       setNewName('')
       setNewType('sycl')
-      setNewURL('')
+      setNewURL(DEFAULT_URLS['sycl'])
       setShowAdd(false)
       loadBackends()
     } catch {
@@ -311,7 +319,11 @@ export default function WhisperBackendManager() {
             />
             <select
               value={newType}
-              onChange={(e) => setNewType(e.target.value)}
+              onChange={(e) => {
+                const t = e.target.value
+                setNewType(t)
+                setNewURL(DEFAULT_URLS[t] || '')
+              }}
               className="bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600"
             >
               {BACKEND_TYPES.map(t => (
@@ -325,7 +337,7 @@ export default function WhisperBackendManager() {
               value={newURL}
               onChange={(e) => setNewURL(e.target.value)}
               className="w-full bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600 focus:outline-none focus:border-primary-500"
-              placeholder="http://whisper-sycl:8178"
+              placeholder={DEFAULT_URLS[newType] || 'http://whisper-sycl:8178'}
             />
           )}
           {addError && (
