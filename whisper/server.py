@@ -11,6 +11,7 @@ Endpoints:
   GET  /health
 """
 
+import gc
 import io
 import os
 import logging
@@ -40,8 +41,15 @@ model_id_str = None
 model_lock = threading.Lock()
 loading_model = False
 
+# VRAM auto-release: unload model after idle timeout to free GPU memory.
+# The model is automatically reloaded on the next inference request.
+IDLE_TIMEOUT = int(os.environ.get("IDLE_TIMEOUT", "120"))  # seconds (0 = disabled)
+_last_inference_time = 0.0
+_idle_timer = None
+_idle_timer_lock = threading.Lock()
+
 # ---------------------------------------------------------------------------
-# Model loading
+# Model loading / unloading
 # ---------------------------------------------------------------------------
 
 def load_model_by_id(mid: str):
@@ -65,10 +73,61 @@ def load_model_by_id(mid: str):
         loading_model = False
 
 
+def unload_model():
+    """Unload the model from GPU memory to free VRAM."""
+    global pipeline
+    with model_lock:
+        if pipeline is None:
+            return
+        pipeline = None
+    gc.collect()
+    log.info("Model unloaded from GPU (VRAM released)")
+
+
+def ensure_model_loaded():
+    """Ensure the model is loaded, reloading if it was unloaded for VRAM release."""
+    global pipeline
+    if pipeline is not None:
+        return
+    mid = model_id_str or os.environ.get("MODEL_ID", "OpenVINO/distil-whisper-large-v3-int8-ov")
+    log.info(f"Reloading model for inference: {mid}")
+    load_model_by_id(mid)
+
+
+def _schedule_idle_unload():
+    """Schedule model unload after IDLE_TIMEOUT seconds of inactivity."""
+    global _idle_timer, _last_inference_time
+    if IDLE_TIMEOUT <= 0:
+        return
+
+    with _idle_timer_lock:
+        if _idle_timer is not None:
+            _idle_timer.cancel()
+        _last_inference_time = time.time()
+        _idle_timer = threading.Timer(IDLE_TIMEOUT, _check_and_unload)
+        _idle_timer.daemon = True
+        _idle_timer.start()
+
+
+def _check_and_unload():
+    """Check if idle timeout has elapsed and unload model if so."""
+    global _idle_timer
+    elapsed = time.time() - _last_inference_time
+    if elapsed >= IDLE_TIMEOUT - 1:  # 1s tolerance
+        log.info(f"Idle for {elapsed:.0f}s (timeout={IDLE_TIMEOUT}s), unloading model to free VRAM")
+        unload_model()
+    with _idle_timer_lock:
+        _idle_timer = None
+
+
 @app.on_event("startup")
 async def startup():
     mid = os.environ.get("MODEL_ID", "OpenVINO/distil-whisper-large-v3-int8-ov")
     load_model_by_id(mid)
+    if IDLE_TIMEOUT > 0:
+        log.info(f"VRAM auto-release enabled: model unloads after {IDLE_TIMEOUT}s idle")
+    else:
+        log.info("VRAM auto-release disabled (IDLE_TIMEOUT=0)")
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +169,9 @@ def decode_audio(audio_bytes: bytes) -> np.ndarray:
 
 def run_inference(audio: np.ndarray, language: str = ""):
     """Run whisper inference and return (chunks, full_text, elapsed)."""
+    # Ensure model is loaded (may have been unloaded for VRAM release)
+    ensure_model_loaded()
+
     config = pipeline.get_generation_config()
     config.return_timestamps = True
 
@@ -122,6 +184,9 @@ def run_inference(audio: np.ndarray, language: str = ""):
 
     chunks = getattr(result, "chunks", [])
     full_text = "".join(c.text for c in chunks).strip() if chunks else str(result)
+
+    # Schedule idle unload after inference completes
+    _schedule_idle_unload()
 
     return chunks, full_text, elapsed
 
@@ -136,8 +201,8 @@ async def transcribe_openai(
     language: str = Form(default=""),
     response_format: str = Form(default="vtt"),
 ):
-    if pipeline is None:
-        raise HTTPException(503, "Model not loaded")
+    if loading_model:
+        raise HTTPException(503, "Model is loading, please wait")
 
     audio_bytes = await file.read()
     log.info(f"Received: {file.filename} ({len(audio_bytes)} bytes)")
@@ -180,8 +245,8 @@ async def transcribe_legacy(
     temperature: str = Form(default="0.0"),
 ):
     """Legacy endpoint matching whisper.cpp /inference for backwards compat."""
-    if pipeline is None:
-        raise HTTPException(503, "Model not loaded")
+    if loading_model:
+        raise HTTPException(503, "Model is loading, please wait")
 
     audio_bytes = await file.read()
     log.info(f"[legacy] Received: {file.filename} ({len(audio_bytes)} bytes)")
@@ -228,12 +293,22 @@ async def load_new_model(req: ModelLoadRequest):
         raise HTTPException(500, f"Failed to load model: {e}")
     return {"status": "ok", "model": model_id_str}
 
+@app.post("/v1/model/unload")
+async def unload_model_endpoint():
+    """Manually unload the model to free VRAM immediately."""
+    if pipeline is None:
+        return {"status": "ok", "message": "model already unloaded"}
+    unload_model()
+    return {"status": "ok", "message": "model unloaded, VRAM released"}
+
 @app.get("/v1/model/info")
 async def model_info():
     """Return current model info."""
     return {
         "model": model_id_str,
-        "status": "loading" if loading_model else ("loaded" if pipeline else "not_loaded"),
+        "status": "loading" if loading_model else ("loaded" if pipeline else "unloaded"),
+        "idle_timeout": IDLE_TIMEOUT,
+        "vram_held": pipeline is not None,
     }
 
 
@@ -243,9 +318,12 @@ async def model_info():
 
 @app.get("/health")
 async def health():
-    if pipeline is None:
-        raise HTTPException(503, "Model not loaded")
-    return {"status": "ok", "model": model_id_str}
+    # Server is healthy even if model is unloaded (it auto-reloads on demand)
+    return {
+        "status": "ok",
+        "model": model_id_str,
+        "model_loaded": pipeline is not None,
+    }
 
 
 # ---------------------------------------------------------------------------

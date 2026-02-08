@@ -7,6 +7,7 @@ import { useBrowseStore } from '@/stores/browseStore'
 import DetailsView from '@/components/Browse/DetailsView'
 import ContextMenu from '@/components/Browse/ContextMenu'
 import BatchSubtitleDialog from '@/components/Browse/BatchSubtitleDialog'
+import SubtitleManagerDialog from '@/components/Browse/SubtitleManagerDialog'
 
 // ── Thumbnail component ──
 
@@ -186,6 +187,7 @@ export default function Browse() {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: FileEntry[] } | null>(null)
   const [batchDialog, setBatchDialog] = useState<{ mode: BatchMode; files: FileEntry[] } | null>(null)
+  const [subtitleManager, setSubtitleManager] = useState<FileEntry | null>(null)
 
   const { viewMode, iconSize, setViewMode, setIconSize } = useBrowseStore()
 
@@ -350,6 +352,10 @@ export default function Browse() {
           onGenerateSubtitles={() => openBatchDialog('generate')}
           onTranslateSubtitles={() => openBatchDialog('translate')}
           onGenerateAndTranslate={() => openBatchDialog('generate-translate')}
+          onManageSubtitles={() => {
+            const videoFiles = contextMenu.entries.filter(e => !e.is_dir && isVideoFile(e.name))
+            if (videoFiles.length === 1) setSubtitleManager(videoFiles[0])
+          }}
         />
       )}
 
@@ -359,6 +365,20 @@ export default function Browse() {
           mode={batchDialog.mode}
           files={batchDialog.files}
           onClose={() => setBatchDialog(null)}
+        />
+      )}
+
+      {/* Subtitle Manager Dialog (single file) */}
+      {subtitleManager && (
+        <SubtitleManagerDialog
+          file={subtitleManager}
+          onClose={() => setSubtitleManager(null)}
+          onTranslate={(subtitleId) => {
+            // Open translate batch dialog with the selected file
+            // The subtitle ID will be used by the translate dialog
+            setBatchDialog({ mode: 'translate', files: [subtitleManager] })
+            setSubtitleManager(null)
+          }}
         />
       )}
     </div>

@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Subtitles, Languages, Sparkles } from 'lucide-react'
+import { Subtitles, Languages, Sparkles, ListVideo } from 'lucide-react'
 import { type FileEntry } from '@/api/files'
 import { isVideoFile } from '@/utils/format'
 
@@ -11,6 +11,7 @@ interface ContextMenuProps {
   onGenerateSubtitles: () => void
   onTranslateSubtitles: () => void
   onGenerateAndTranslate: () => void
+  onManageSubtitles?: () => void
 }
 
 export default function ContextMenu({
@@ -21,6 +22,7 @@ export default function ContextMenu({
   onGenerateSubtitles,
   onTranslateSubtitles,
   onGenerateAndTranslate,
+  onManageSubtitles,
 }: ContextMenuProps) {
   const videoFiles = selectedEntries.filter(e => !e.is_dir && isVideoFile(e.name))
   const count = videoFiles.length
@@ -43,7 +45,7 @@ export default function ContextMenu({
 
   // Adjust position to stay within viewport
   const menuWidth = 260
-  const menuHeight = 160
+  const menuHeight = count === 1 ? 220 : 160
   const adjustedX = Math.min(x, window.innerWidth - menuWidth - 8)
   const adjustedY = Math.min(y, window.innerHeight - menuHeight - 8)
 
@@ -82,6 +84,20 @@ export default function ContextMenu({
         <Sparkles className="w-4 h-4 text-amber-400" />
         Generate & Translate
       </button>
+
+      {/* Single file: manage subtitles (view, delete, translate individual) */}
+      {count === 1 && onManageSubtitles && (
+        <>
+          <div className="border-t border-dark-700 my-0.5" />
+          <button
+            onClick={() => { onManageSubtitles(); onClose() }}
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 hover:text-white transition-colors"
+          >
+            <ListVideo className="w-4 h-4 text-purple-400" />
+            Manage Subtitles
+          </button>
+        </>
+      )}
     </div>
   )
 }

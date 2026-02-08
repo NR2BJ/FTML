@@ -433,19 +433,18 @@ func GetTranscodeParams(quality string, presets []QualityOption, encoder *Encode
 	}
 
 	// Passthrough: video copy + audio transcode
+	// Always use fmp4 for passthrough regardless of codec.
+	// MKV→mpegts remux causes DTS/timestamp issues that break playback,
+	// while fmp4 handles negative DTS gracefully via init segment + moof/mdat.
 	if quality == "passthrough" {
 		for _, p := range presets {
 			if p.Value == "passthrough" {
-				segFmt := codecSegmentFmt[Codec(p.VideoCodec)]
-				if segFmt == "" {
-					segFmt = "mpegts"
-				}
 				return &TranscodeParams{
 					Label:            p.Label,
 					VideoCodec:       "copy",
 					AudioCodec:       "aac",
 					Encoder:          "copy",
-					SegmentFmt:       segFmt,
+					SegmentFmt:       "fmp4",
 					SourceVideoCodec: p.VideoCodec,
 				}
 			}
