@@ -29,86 +29,105 @@ class ConvTDFNet:
         self.n = 11 // 2  # L=11
 
     def stft(self, x):
-        """Compute STFT on audio chunks. Input: (batch, chunk_size)."""
-        batch = x.shape[0]
-        x = x.reshape(-1, self.chunk_size)
+        """Compute STFT on audio chunks.
 
-        # Manual STFT using numpy (matching torch.stft behavior)
+        Input: (batch, 2, chunk_size) where 2 = stereo channels.
+        Output: (batch, 4, dim_f, dim_t) where 4 = [L_real, L_imag, R_real, R_imag].
+
+        Matches torch.stft(center=True) by applying reflection padding
+        of n_fft//2 on each side before computing the STFT.
+        """
+        batch = x.shape[0]
+        # Flatten stereo: (batch, 2, chunk_size) -> (batch*2, chunk_size)
+        x = x.reshape(-1, self.chunk_size)
+        n_channels = x.shape[0]
+        center_pad = self.n_fft // 2
+
         results = []
-        for i in range(x.shape[0]):
-            # Frame the signal
+        for i in range(n_channels):
+            # Reflection pad to match torch.stft(center=True)
+            x_padded = np.pad(x[i], (center_pad, center_pad), mode='reflect')
+
+            # Frame the padded signal
             frames = librosa.util.frame(
-                x[i], frame_length=self.n_fft, hop_length=self.hop
-            )  # (n_fft, n_frames)
-            # Apply window
+                x_padded, frame_length=self.n_fft, hop_length=self.hop
+            )  # (n_fft, dim_t) where dim_t = 256
+
+            # Apply window and FFT
             windowed = frames * self.window[:, np.newaxis]
-            # FFT
-            spectrum = np.fft.rfft(windowed, n=self.n_fft, axis=0)  # (n_bins, n_frames)
+            spectrum = np.fft.rfft(windowed, n=self.n_fft, axis=0)  # (n_bins, dim_t)
+
             # Stack real and imaginary as separate channels
             real = spectrum.real.astype(np.float32)
             imag = spectrum.imag.astype(np.float32)
-            results.append(np.stack([real, imag], axis=0))  # (2, n_bins, n_frames)
+            results.append(np.stack([real, imag], axis=0))  # (2, n_bins, dim_t)
 
-        stft_out = np.stack(results, axis=0)  # (batch_flat, 2, n_bins, n_frames)
+        stft_out = np.stack(results, axis=0)  # (batch*2, 2, n_bins, dim_t)
 
-        # Reshape to match expected format: (batch, dim_c, n_bins, dim_t)
-        # batch_flat = batch * 2 (stereo), each has 2 channels (real/imag)
-        # Combine into dim_c = 4: [left_real, left_imag, right_real, right_imag]
-        stft_out = stft_out.reshape(batch, -1, self.n_bins, self.dim_t)
+        # Reshape: (batch*2, 2, n_bins, dim_t) -> (batch, 4, n_bins, dim_t)
+        stft_out = stft_out.reshape(batch, self.dim_c, self.n_bins, self.dim_t)
 
-        # Trim frequency dimension
+        # Trim frequency dimension to dim_f
         return stft_out[:, :, :self.dim_f, :]
 
     def istft(self, x, freq_pad=None):
-        """Compute inverse STFT. Input: (batch, dim_c, dim_f, dim_t)."""
+        """Compute inverse STFT.
+
+        Input: (batch, 4, dim_f, dim_t).
+        Output: (batch, 2, chunk_size) where 2 = stereo channels.
+
+        Matches torch.istft(center=True) behavior.
+        """
         batch = x.shape[0]
 
         # Pad frequency back to full n_bins
         if freq_pad is None:
             pad_shape = (batch, x.shape[1], self.n_bins - self.dim_f, self.dim_t)
             freq_pad = np.zeros(pad_shape, dtype=np.float32)
-        x = np.concatenate([x, freq_pad], axis=2)  # (batch, dim_c, n_bins, dim_t)
+        x = np.concatenate([x, freq_pad], axis=2)  # (batch, 4, n_bins, dim_t)
 
-        # Reshape to (batch_flat, 2, n_bins, dim_t) where 2 = real/imag
-        c = 2  # output channels for vocals (real, imag per channel)
-        x = x.reshape(-1, c, 2, self.n_bins, self.dim_t)
-        x = x.reshape(-1, 2, self.n_bins, self.dim_t)
+        # Reshape: (batch, 4, n_bins, dim_t)
+        #   -> (batch, 2, 2, n_bins, dim_t)  [stereo, real/imag]
+        #   -> (batch*2, 2, n_bins, dim_t)
+        c = 2  # stereo channels
+        x = x.reshape(batch, c, 2, self.n_bins, self.dim_t)
+        x = x.reshape(batch * c, 2, self.n_bins, self.dim_t)
 
-        # Reconstruct complex spectrum and run iSTFT
+        center_pad = self.n_fft // 2
+        padded_length = self.chunk_size + self.n_fft
+
         results = []
         for i in range(x.shape[0]):
             real = x[i, 0]  # (n_bins, dim_t)
             imag = x[i, 1]  # (n_bins, dim_t)
             spectrum = real + 1j * imag  # (n_bins, dim_t)
 
-            # Manual overlap-add iSTFT
             n_frames = spectrum.shape[1]
-            expected_length = self.chunk_size
-            output = np.zeros(expected_length + self.n_fft, dtype=np.float32)
-            window_sum = np.zeros(expected_length + self.n_fft, dtype=np.float32)
+
+            # Overlap-add iSTFT
+            output = np.zeros(padded_length, dtype=np.float32)
+            window_sum = np.zeros(padded_length, dtype=np.float32)
 
             for frame_idx in range(n_frames):
-                frame_spectrum = spectrum[:, frame_idx]
-                frame_signal = np.fft.irfft(frame_spectrum, n=self.n_fft).astype(np.float32)
+                frame_signal = np.fft.irfft(
+                    spectrum[:, frame_idx], n=self.n_fft
+                ).astype(np.float32)
                 frame_signal *= self.window
 
                 start = frame_idx * self.hop
                 end = start + self.n_fft
-                if end <= len(output):
-                    output[start:end] += frame_signal
-                    window_sum[start:end] += self.window ** 2
+                output[start:end] += frame_signal
+                window_sum[start:end] += self.window ** 2
 
-            # Normalize by window sum
+            # Normalize by window sum (COLA condition)
             nonzero = window_sum > 1e-8
             output[nonzero] /= window_sum[nonzero]
 
-            # Center trim (matching torch.stft center=True behavior)
-            trim_start = self.n_fft // 2
-            results.append(output[trim_start:trim_start + self.chunk_size])
+            # Remove center padding: extract the middle chunk_size samples
+            results.append(output[center_pad:center_pad + self.chunk_size])
 
-        out = np.stack(results, axis=0)  # (batch_flat, chunk_size)
-        # Reshape back: (batch, c, chunk_size) where c=2 (stereo channels)
-        return out.reshape(batch, -1, c, self.chunk_size).reshape(batch, c, self.chunk_size)
+        out = np.stack(results, axis=0)  # (batch*2, chunk_size)
+        return out.reshape(batch, c, self.chunk_size)
 
 
 class VocalSeparator:
