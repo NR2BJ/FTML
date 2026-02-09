@@ -24,7 +24,7 @@ func NewOpenAITranslator(apiKey string) *OpenAITranslator {
 	return &OpenAITranslator{
 		apiKey: apiKey,
 		httpClient: &http.Client{
-			Timeout: 2 * time.Minute,
+			Timeout: 5 * time.Minute,
 		},
 	}
 }
