@@ -27,6 +27,7 @@ type HLSSession struct {
 	Stopped       bool      // set true before intentional cancel to prevent false SW fallback
 	Paused        bool      // true when FFmpeg is frozen via SIGSTOP
 	PausedAt      time.Time // when the session was paused
+	FFmpegDone    bool      // true after FFmpeg process exits (all segments written)
 }
 
 type HLSManager struct {
@@ -181,6 +182,12 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 			}
 		} else {
 			log.Printf("[HLS] FFmpeg completed: session=%s", sessionID)
+			// Mark session as done so cleanup uses a longer timeout
+			m.mu.Lock()
+			if s, ok := m.sessions[sessionID]; ok {
+				s.FFmpegDone = true
+			}
+			m.mu.Unlock()
 		}
 	}()
 
@@ -490,6 +497,11 @@ func (m *HLSManager) retryWithHybrid(sessionID, inputPath, outputDir string, sta
 			}
 		} else {
 			log.Printf("[HLS] Hybrid fallback completed: session=%s encoder=%s", sessionID, hybridParams.Encoder)
+			m.mu.Lock()
+			if s, ok := m.sessions[sessionID]; ok {
+				s.FFmpegDone = true
+			}
+			m.mu.Unlock()
 		}
 	}()
 }
@@ -582,6 +594,11 @@ func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, s
 			}
 		} else {
 			log.Printf("[HLS] Software fallback completed: session=%s encoder=%s", sessionID, fallback)
+			m.mu.Lock()
+			if s, ok := m.sessions[sessionID]; ok {
+				s.FFmpegDone = true
+			}
+			m.mu.Unlock()
 		}
 	}()
 }
@@ -764,13 +781,20 @@ func (m *HLSManager) cleanup() {
 				}
 				continue // skip active heartbeat check for paused sessions
 			}
-			// Active sessions: idle timeout 45 seconds without heartbeat
-			if now.Sub(s.LastHeartbeat) > 45*time.Second {
+			// Active sessions: idle timeout depends on FFmpeg state.
+			// If FFmpeg already finished (all segments written), use 5-minute timeout
+			// so viewers can watch the remaining buffered content.
+			// If FFmpeg is still running, use 45s timeout.
+			activeTimeout := 45 * time.Second
+			if s.FFmpegDone {
+				activeTimeout = 5 * time.Minute
+			}
+			if now.Sub(s.LastHeartbeat) > activeTimeout {
 				s.Stopped = true
 				s.Cancel()
 				os.RemoveAll(s.OutputDir)
 				delete(m.sessions, id)
-				log.Printf("[HLS] Stopped session: %s (heartbeat timeout 45s)", id)
+				log.Printf("[HLS] Stopped session: %s (heartbeat timeout %.0fs)", id, activeTimeout.Seconds())
 			}
 		}
 		// Purge stale fallback cache entries (30-minute TTL to prevent memory leaks)
