@@ -35,8 +35,8 @@ export default function Account() {
       return
     }
 
-    if (newPassword.length < 4) {
-      setError('New password must be at least 4 characters')
+    if (newPassword.length < 8) {
+      setError('New password must be at least 8 characters')
       return
     }
 

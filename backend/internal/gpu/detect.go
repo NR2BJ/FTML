@@ -22,7 +22,17 @@ var (
 	detectOnce sync.Once
 )
 
-// DetectGPU probes the system for discrete GPU VRAM info via sysfs.
+// Known VRAM sizes for Intel Arc GPUs (bytes)
+var knownVRAM = map[string]int64{
+	"56a5": 6 * 1024 * 1024 * 1024,  // Arc A380 — 6GB
+	"56a6": 4 * 1024 * 1024 * 1024,  // Arc A310 — 4GB
+	"5690": 16 * 1024 * 1024 * 1024, // Arc A770 — 16GB
+	"5692": 8 * 1024 * 1024 * 1024,  // Arc A750 — 8GB
+	"56c0": 12 * 1024 * 1024 * 1024, // Arc B580 — 12GB
+	"56c1": 10 * 1024 * 1024 * 1024, // Arc B570 — 10GB
+}
+
+// DetectGPU probes the system for discrete GPU info via sysfs.
 // Uses sync.Once — safe to call multiple times.
 func DetectGPU() *GPUInfo {
 	detectOnce.Do(func() {
@@ -38,14 +48,13 @@ func DetectGPU() *GPUInfo {
 func detectGPU() *GPUInfo {
 	info := &GPUInfo{}
 
-	// Scan /sys/class/drm/card* for discrete GPUs with VRAM info
 	cards, err := filepath.Glob("/sys/class/drm/card[0-9]*")
 	if err != nil {
 		return info
 	}
 
+	// First pass: look for cards with sysfs VRAM info (AMD-style)
 	for _, card := range cards {
-		// Skip render nodes (cardN-XXX)
 		base := filepath.Base(card)
 		if strings.Contains(base, "-") {
 			continue
@@ -53,36 +62,92 @@ func detectGPU() *GPUInfo {
 
 		deviceDir := filepath.Join(card, "device")
 
-		// Check for discrete GPU VRAM
 		vramPath := filepath.Join(deviceDir, "mem_info_vram_total")
 		vramBytes, err := readSysfsInt(vramPath)
 		if err != nil || vramBytes == 0 {
-			continue // Not a discrete GPU or no VRAM info
+			continue
 		}
 
 		info.VRAMTotal = vramBytes
 
-		// Try to read free VRAM
 		vramFreePath := filepath.Join(deviceDir, "mem_info_vram_used")
 		vramUsed, err := readSysfsInt(vramFreePath)
 		if err == nil && vramUsed > 0 {
 			info.VRAMFree = vramBytes - vramUsed
 		}
 
-		// Read device name from uevent
 		info.Device = readDeviceName(deviceDir)
-
-		// Read driver name
 		driverLink, err := os.Readlink(filepath.Join(deviceDir, "driver"))
 		if err == nil {
 			info.Driver = filepath.Base(driverLink)
 		}
+		return info
+	}
 
-		// Found a discrete GPU with VRAM, use it
-		break
+	// Second pass (fallback): detect by PCI ID even without VRAM sysfs
+	// Intel Arc GPUs in VMs don't expose mem_info_vram_total
+	for _, card := range cards {
+		base := filepath.Base(card)
+		if strings.Contains(base, "-") {
+			continue
+		}
+
+		deviceDir := filepath.Join(card, "device")
+		vendorID, deviceID := readPCIIDs(deviceDir)
+		if vendorID == "" || deviceID == "" {
+			continue
+		}
+
+		if isKnownDiscreteGPU(vendorID, deviceID) {
+			info.Device = readDeviceName(deviceDir)
+
+			if vram, ok := knownVRAM[deviceID]; ok {
+				info.VRAMTotal = vram
+				info.VRAMFree = vram // approximate — can't read actual usage without sysfs
+			}
+
+			driverLink, err := os.Readlink(filepath.Join(deviceDir, "driver"))
+			if err == nil {
+				info.Driver = filepath.Base(driverLink)
+			}
+			return info
+		}
 	}
 
 	return info
+}
+
+// isKnownDiscreteGPU checks if a PCI device is a known discrete GPU
+func isKnownDiscreteGPU(vendorID, deviceID string) bool {
+	if vendorID == "8086" {
+		switch deviceID {
+		case "56a5", "56a6", "5690", "5691", "5692", "56a0", "56a1", "56c0", "56c1":
+			return true
+		}
+	}
+	// NVIDIA (10de) and AMD (1002) are always discrete
+	if vendorID == "10de" || vendorID == "1002" {
+		return true
+	}
+	return false
+}
+
+// readPCIIDs extracts vendor and device IDs from uevent
+func readPCIIDs(deviceDir string) (string, string) {
+	ueventPath := filepath.Join(deviceDir, "uevent")
+	data, err := os.ReadFile(ueventPath)
+	if err != nil {
+		return "", ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "PCI_ID=") {
+			parts := strings.Split(strings.TrimPrefix(line, "PCI_ID="), ":")
+			if len(parts) == 2 {
+				return strings.ToLower(parts[0]), strings.ToLower(parts[1])
+			}
+		}
+	}
+	return "", ""
 }
 
 func readSysfsInt(path string) (int64, error) {
@@ -94,14 +159,12 @@ func readSysfsInt(path string) (int64, error) {
 }
 
 func readDeviceName(deviceDir string) string {
-	// Try uevent for device info
 	ueventPath := filepath.Join(deviceDir, "uevent")
 	data, err := os.ReadFile(ueventPath)
 	if err != nil {
 		return "Unknown GPU"
 	}
 
-	// Parse PCI_ID to identify common Intel GPUs
 	var vendorID, deviceID string
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "PCI_ID=") {
@@ -113,7 +176,6 @@ func readDeviceName(deviceDir string) string {
 		}
 	}
 
-	// Known Intel Arc GPU device IDs
 	if vendorID == "8086" {
 		switch deviceID {
 		case "56a5":

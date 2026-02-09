@@ -94,6 +94,16 @@ func (d *Database) migrate() error {
 		reviewed_by INTEGER,
 		FOREIGN KEY (reviewed_by) REFERENCES users(id)
 	);
+
+	CREATE TABLE IF NOT EXISTS file_logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		username TEXT NOT NULL,
+		action TEXT NOT NULL,
+		file_path TEXT NOT NULL,
+		detail TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	if _, err := d.db.Exec(schema); err != nil {
 		return err
@@ -559,6 +569,71 @@ func (d *Database) RejectRegistration(id int64, reviewerID int64) error {
 		now, reviewerID, id,
 	)
 	return err
+}
+
+// --- Registration Delete ---
+
+// DeleteRegistration removes a non-pending registration record
+func (d *Database) DeleteRegistration(id int64) error {
+	result, err := d.db.Exec("DELETE FROM registrations WHERE id = ? AND status != 'pending'", id)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// --- File Logs ---
+
+// FileLog represents a file operation log entry
+type FileLog struct {
+	ID        int64  `json:"id"`
+	UserID    int64  `json:"user_id"`
+	Username  string `json:"username"`
+	Action    string `json:"action"`
+	FilePath  string `json:"file_path"`
+	Detail    string `json:"detail"`
+	CreatedAt string `json:"created_at"`
+}
+
+// CreateFileLog records a file operation
+func (d *Database) CreateFileLog(userID int64, username, action, filePath, detail string) error {
+	_, err := d.db.Exec(
+		"INSERT INTO file_logs (user_id, username, action, file_path, detail) VALUES (?, ?, ?, ?, ?)",
+		userID, username, action, filePath, detail,
+	)
+	return err
+}
+
+// ListFileLogs returns the most recent file operation logs
+func (d *Database) ListFileLogs(limit int) ([]FileLog, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := d.db.Query(
+		"SELECT id, user_id, username, action, file_path, COALESCE(detail, ''), created_at FROM file_logs ORDER BY created_at DESC LIMIT ?",
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []FileLog
+	for rows.Next() {
+		var l FileLog
+		if err := rows.Scan(&l.ID, &l.UserID, &l.Username, &l.Action, &l.FilePath, &l.Detail, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		logs = append(logs, l)
+	}
+	if logs == nil {
+		logs = []FileLog{}
+	}
+	return logs, nil
 }
 
 // migrateWhisperBackends seeds the whisper_backends table from legacy settings on first run

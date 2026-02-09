@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { getTree, type FileEntry } from '@/api/files'
+import { useLayoutStore } from '@/stores/layoutStore'
 import { ChevronRight, ChevronDown, Folder, FolderOpen, FileVideo, File } from 'lucide-react'
 import { isVideoFile } from '@/utils/format'
 
-function TreeNode({ entry, level = 0 }: { entry: FileEntry; level?: number }) {
+function TreeNode({ entry, level = 0, onNavigate }: { entry: FileEntry; level?: number; onNavigate?: () => void }) {
   const [expanded, setExpanded] = useState(false)
   const [children, setChildren] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(false)
@@ -17,6 +18,7 @@ function TreeNode({ entry, level = 0 }: { entry: FileEntry; level?: number }) {
     if (!entry.is_dir) {
       if (isVideoFile(entry.name)) {
         navigate(`/watch/${entry.path}`)
+        onNavigate?.()
       }
       return
     }
@@ -72,7 +74,7 @@ function TreeNode({ entry, level = 0 }: { entry: FileEntry; level?: number }) {
             </div>
           )}
           {children.map((child) => (
-            <TreeNode key={child.path} entry={child} level={level + 1} />
+            <TreeNode key={child.path} entry={child} level={level + 1} onNavigate={onNavigate} />
           ))}
         </div>
       )}
@@ -82,6 +84,7 @@ function TreeNode({ entry, level = 0 }: { entry: FileEntry; level?: number }) {
 
 export default function Sidebar() {
   const [entries, setEntries] = useState<FileEntry[]>([])
+  const { sidebarOpen, setSidebarOpen } = useLayoutStore()
 
   useEffect(() => {
     getTree()
@@ -89,19 +92,49 @@ export default function Sidebar() {
       .catch(() => setEntries([]))
   }, [])
 
+  const closeSidebar = () => setSidebarOpen(false)
+
   return (
-    <aside className="w-64 bg-dark-900 border-r border-dark-700 overflow-y-auto shrink-0">
-      <div className="p-3">
-        <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          Files
-        </h2>
-        {entries.map((entry) => (
-          <TreeNode key={entry.path} entry={entry} />
-        ))}
-        {entries.length === 0 && (
-          <p className="text-sm text-gray-500 px-2">No files found</p>
-        )}
-      </div>
-    </aside>
+    <>
+      {/* Desktop sidebar */}
+      <aside className="hidden md:block w-64 bg-dark-900 border-r border-dark-700 overflow-y-auto shrink-0">
+        <div className="p-3">
+          <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            Files
+          </h2>
+          {entries.map((entry) => (
+            <TreeNode key={entry.path} entry={entry} />
+          ))}
+          {entries.length === 0 && (
+            <p className="text-sm text-gray-500 px-2">No files found</p>
+          )}
+        </div>
+      </aside>
+
+      {/* Mobile sidebar overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          onClick={closeSidebar}
+        />
+      )}
+      <aside
+        className={`fixed top-0 left-0 z-50 h-full w-64 bg-dark-900 border-r border-dark-700 overflow-y-auto transform transition-transform duration-300 md:hidden ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <div className="p-3 pt-16">
+          <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            Files
+          </h2>
+          {entries.map((entry) => (
+            <TreeNode key={entry.path} entry={entry} onNavigate={closeSidebar} />
+          ))}
+          {entries.length === 0 && (
+            <p className="text-sm text-gray-500 px-2">No files found</p>
+          )}
+        </div>
+      </aside>
+    </>
   )
 }

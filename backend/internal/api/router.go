@@ -37,7 +37,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 
 	// Handlers
 	authHandler := handlers.NewAuthHandler(database, jwtService)
-	filesHandler := handlers.NewFilesHandler(cfg.MediaPath, cfg.DataPath)
+	filesHandler := handlers.NewFilesHandler(cfg.MediaPath, cfg.DataPath, database)
 	hlsManager := ffmpeg.NewHLSManager(cfg.DataPath)
 	streamHandler := handlers.NewStreamHandler(cfg.MediaPath, hlsManager)
 	userHandler := handlers.NewUserHandler(database)
@@ -196,6 +196,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				r.Get("/admin/registrations/count", adminHandler.PendingRegistrationCount)
 				r.Post("/admin/registrations/{id}/approve", adminHandler.ApproveRegistration)
 				r.Post("/admin/registrations/{id}/reject", adminHandler.RejectRegistration)
+				r.Delete("/admin/registrations/{id}", adminHandler.DeleteRegistration)
 
 				// Admin — File Management (upload uses its own body limit)
 				r.Post("/files/upload/*", filesHandler.Upload)
@@ -203,11 +204,20 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				r.Put("/files/move", filesHandler.Move)
 				r.Post("/files/mkdir/*", filesHandler.CreateFolder)
 
+				// Admin — Trash Management
+				r.Get("/files/trash", filesHandler.ListTrash)
+				r.Post("/files/trash/restore", filesHandler.RestoreTrash)
+				r.Delete("/files/trash/empty", filesHandler.EmptyTrash)
+				r.Delete("/files/trash/{name}", filesHandler.PermanentDelete)
+
 				// Admin — Active Sessions
 				r.Get("/admin/sessions", adminHandler.ListSessions)
 
 				// Admin — Dashboard Stats
 				r.Get("/admin/dashboard", adminHandler.DashboardStats)
+
+				// Admin — File Logs
+				r.Get("/admin/file-logs", adminHandler.ListFileLogs)
 
 				// Admin — Rate Limit Management
 				r.Get("/admin/ratelimit", func(w http.ResponseWriter, r *http.Request) {

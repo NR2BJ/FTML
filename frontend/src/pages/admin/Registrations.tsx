@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { UserPlus, Check, X, Clock } from 'lucide-react'
+import { UserPlus, Check, X, Trash2, Loader2 } from 'lucide-react'
 import {
   listRegistrations,
   approveRegistration,
   rejectRegistration,
+  deleteRegistration,
   type Registration,
 } from '@/api/admin'
 
@@ -11,11 +12,11 @@ export default function Registrations() {
   const [registrations, setRegistrations] = useState<Registration[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [filter, setFilter] = useState<'pending' | 'approved' | 'rejected' | ''>('pending')
+  const [filter, setFilter] = useState<'pending' | 'approved' | 'rejected'>('pending')
 
   const fetchRegistrations = async () => {
     try {
-      const { data } = await listRegistrations(filter || undefined)
+      const { data } = await listRegistrations(filter)
       setRegistrations(data)
       setError('')
     } catch {
@@ -30,10 +31,15 @@ export default function Registrations() {
     fetchRegistrations()
   }, [filter])
 
+  const notifyBadge = () => {
+    window.dispatchEvent(new Event('registration-updated'))
+  }
+
   const handleApprove = async (id: number) => {
     try {
       await approveRegistration(id)
       fetchRegistrations()
+      notifyBadge()
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to approve registration')
     }
@@ -44,8 +50,19 @@ export default function Registrations() {
     try {
       await rejectRegistration(id)
       fetchRegistrations()
+      notifyBadge()
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to reject registration')
+    }
+  }
+
+  const handleDelete = async (id: number) => {
+    if (!confirm('Delete this registration record?')) return
+    try {
+      await deleteRegistration(id)
+      fetchRegistrations()
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to delete registration')
     }
   }
 
@@ -65,7 +82,7 @@ export default function Registrations() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-400">Loading...</div>
+        <Loader2 className="w-6 h-6 text-gray-400 animate-spin" />
       </div>
     )
   }
@@ -79,17 +96,17 @@ export default function Registrations() {
         </div>
 
         <div className="flex items-center gap-1 bg-dark-800 border border-dark-700 rounded-lg p-1">
-          {(['pending', 'approved', 'rejected', ''] as const).map((f) => (
+          {(['pending', 'approved', 'rejected'] as const).map((f) => (
             <button
-              key={f || 'all'}
+              key={f}
               onClick={() => setFilter(f)}
-              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+              className={`px-3 py-1 rounded text-xs font-medium transition-colors capitalize ${
                 filter === f
                   ? 'bg-primary-600 text-white'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
-              {f || 'All'}
+              {f}
             </button>
           ))}
         </div>
@@ -139,7 +156,13 @@ export default function Registrations() {
                       </button>
                     </div>
                   ) : (
-                    <Clock className="w-4 h-4 text-gray-600 inline-block" />
+                    <button
+                      onClick={() => handleDelete(reg.id)}
+                      className="text-gray-500 hover:text-red-400 p-1 transition-colors"
+                      title="Delete record"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   )}
                 </td>
               </tr>
@@ -148,7 +171,7 @@ export default function Registrations() {
         </table>
         {registrations.length === 0 && (
           <div className="text-center text-gray-400 py-8 text-sm">
-            No {filter || ''} registrations
+            No {filter} registrations
           </div>
         )}
       </div>

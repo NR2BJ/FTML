@@ -65,6 +65,9 @@ export const approveRegistration = (id: number) =>
 export const rejectRegistration = (id: number) =>
   client.post(`/admin/registrations/${id}/reject`)
 
+export const deleteRegistration = (id: number) =>
+  client.delete(`/admin/registrations/${id}`)
+
 // Active sessions
 export interface StreamSession {
   id: string
@@ -98,6 +101,10 @@ export interface DashboardStats {
     uptime_seconds: number
     mem_alloc: number
     mem_sys: number
+    total_memory: number
+    avail_memory: number
+    cpu_model: string
+    cpu_cores: number
   }
   active_sessions: number
   user_count: number
@@ -105,6 +112,20 @@ export interface DashboardStats {
 
 export const getDashboardStats = () =>
   client.get<DashboardStats>('/admin/dashboard')
+
+// File logs
+export interface FileLog {
+  id: number
+  user_id: number
+  username: string
+  action: string
+  file_path: string
+  detail: string
+  created_at: string
+}
+
+export const listFileLogs = (limit = 50) =>
+  client.get<FileLog[]>('/admin/file-logs', { params: { limit } })
 
 // Rate limit management
 export interface RateLimitEntry {

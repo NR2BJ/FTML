@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
+import { initTheme } from '@/stores/themeStore'
 import Login from '@/pages/Login'
 import Browse from '@/pages/Browse'
 import Watch from '@/pages/Watch'
@@ -12,7 +13,11 @@ import Registrations from '@/pages/admin/Registrations'
 import Sessions from '@/pages/admin/Sessions'
 import Dashboard from '@/pages/admin/Dashboard'
 import RateLimits from '@/pages/admin/RateLimits'
+import Trash from '@/pages/admin/Trash'
 import Layout from '@/components/layout/Layout'
+
+// Initialize theme before render
+initTheme()
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuthStore()
@@ -70,6 +75,7 @@ export default function App() {
           <Route path="admin/sessions" element={<AdminRoute><Sessions /></AdminRoute>} />
           <Route path="admin/dashboard" element={<AdminRoute><Dashboard /></AdminRoute>} />
           <Route path="admin/ratelimits" element={<AdminRoute><RateLimits /></AdminRoute>} />
+          <Route path="admin/trash" element={<AdminRoute><Trash /></AdminRoute>} />
         </Route>
       </Routes>
     </BrowserRouter>

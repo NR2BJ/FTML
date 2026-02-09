@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { getDashboardStats, type DashboardStats } from '@/api/admin'
-import { Cpu, HardDrive, MemoryStick, Users, Monitor, Clock, Loader2, RefreshCw } from 'lucide-react'
+import { getDashboardStats, listFileLogs, type DashboardStats, type FileLog } from '@/api/admin'
+import { Cpu, HardDrive, MemoryStick, Users, Monitor, Clock, Loader2, RefreshCw, FileText } from 'lucide-react'
 import { formatBytes } from '@/utils/format'
 
 function formatUptime(seconds: number): string {
@@ -42,15 +42,41 @@ function StatCard({ icon: Icon, label, value, sub }: {
   )
 }
 
+function formatTimeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const m = Math.floor(diff / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return `${d}d ago`
+}
+
+const actionLabels: Record<string, { label: string; color: string }> = {
+  upload: { label: 'Upload', color: 'text-green-400' },
+  delete: { label: 'Delete', color: 'text-red-400' },
+  move: { label: 'Move', color: 'text-blue-400' },
+  mkdir: { label: 'New Folder', color: 'text-yellow-400' },
+  restore: { label: 'Restore', color: 'text-emerald-400' },
+  permanent_delete: { label: 'Perm. Delete', color: 'text-red-500' },
+  empty_trash: { label: 'Empty Trash', color: 'text-red-500' },
+}
+
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [logs, setLogs] = useState<FileLog[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const loadStats = async () => {
     try {
-      const { data } = await getDashboardStats()
-      setStats(data)
+      const [statsRes, logsRes] = await Promise.all([
+        getDashboardStats(),
+        listFileLogs(20),
+      ])
+      setStats(statsRes.data)
+      setLogs(logsRes.data || [])
       setError(null)
     } catch {
       setError('Failed to load dashboard')
@@ -61,7 +87,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadStats()
-    const interval = setInterval(loadStats, 15000) // refresh every 15s
+    const interval = setInterval(loadStats, 15000)
     return () => clearInterval(interval)
   }, [])
 
@@ -82,6 +108,8 @@ export default function Dashboard() {
   const vramUsed = stats.gpu.vram_total - stats.gpu.vram_free
   const vramPct = stats.gpu.vram_total > 0 ? (vramUsed / stats.gpu.vram_total) * 100 : 0
   const storagePct = stats.storage.total > 0 ? (stats.storage.used / stats.storage.total) * 100 : 0
+  const memUsed = stats.system.total_memory - stats.system.avail_memory
+  const memPct = stats.system.total_memory > 0 ? (memUsed / stats.system.total_memory) * 100 : 0
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -106,9 +134,9 @@ export default function Dashboard() {
         <StatCard icon={Clock} label="Uptime" value={formatUptime(stats.system.uptime_seconds)} />
         <StatCard
           icon={Cpu}
-          label="Goroutines"
-          value={stats.system.goroutines}
-          sub={stats.system.go_version}
+          label="CPU"
+          value={`${stats.system.cpu_cores} Cores`}
+          sub={stats.system.cpu_model || stats.system.go_version}
         />
       </div>
 
@@ -122,7 +150,7 @@ export default function Dashboard() {
           <span className="text-sm text-gray-300">{stats.gpu.device || 'No GPU detected'}</span>
           <span className="text-xs text-gray-500">Driver: {stats.gpu.driver || 'N/A'}</span>
         </div>
-        {stats.gpu.vram_total > 0 && (
+        {stats.gpu.vram_total > 0 ? (
           <>
             <ProgressBar
               value={vramUsed}
@@ -136,6 +164,45 @@ export default function Dashboard() {
               <span className="text-xs text-gray-500">{vramPct.toFixed(1)}%</span>
             </div>
           </>
+        ) : stats.gpu.device ? (
+          <p className="text-xs text-gray-500">VRAM info unavailable</p>
+        ) : null}
+      </div>
+
+      {/* Memory */}
+      <div className="bg-dark-900 border border-dark-700 rounded-lg p-5 mb-4">
+        <div className="flex items-center gap-2 mb-4">
+          <MemoryStick className="w-5 h-5 text-purple-400" />
+          <h2 className="text-sm font-medium text-white">Memory</h2>
+        </div>
+        {stats.system.total_memory > 0 ? (
+          <>
+            <ProgressBar
+              value={memUsed}
+              max={stats.system.total_memory}
+              color={memPct > 90 ? 'bg-red-500' : memPct > 70 ? 'bg-yellow-500' : 'bg-purple-500'}
+            />
+            <div className="flex justify-between mt-1.5">
+              <span className="text-xs text-gray-500">
+                System RAM: {formatBytes(memUsed)} / {formatBytes(stats.system.total_memory)}
+              </span>
+              <span className="text-xs text-gray-500">{memPct.toFixed(1)}%</span>
+            </div>
+            <div className="mt-2 text-xs text-gray-600">
+              Go Heap: {formatBytes(stats.system.mem_alloc)} · System: {formatBytes(stats.system.mem_sys)}
+            </div>
+          </>
+        ) : (
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <span className="text-xs text-gray-500">Heap Allocated</span>
+              <p className="text-lg font-medium text-white">{formatBytes(stats.system.mem_alloc)}</p>
+            </div>
+            <div>
+              <span className="text-xs text-gray-500">System Memory</span>
+              <p className="text-lg font-medium text-white">{formatBytes(stats.system.mem_sys)}</p>
+            </div>
+          </div>
         )}
       </div>
 
@@ -166,22 +233,40 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Memory */}
+      {/* File Activity Logs */}
       <div className="bg-dark-900 border border-dark-700 rounded-lg p-5">
         <div className="flex items-center gap-2 mb-4">
-          <MemoryStick className="w-5 h-5 text-purple-400" />
-          <h2 className="text-sm font-medium text-white">Process Memory</h2>
+          <FileText className="w-5 h-5 text-amber-400" />
+          <h2 className="text-sm font-medium text-white">Recent File Activity</h2>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <span className="text-xs text-gray-500">Heap Allocated</span>
-            <p className="text-lg font-medium text-white">{formatBytes(stats.system.mem_alloc)}</p>
+        {logs.length === 0 ? (
+          <p className="text-sm text-gray-500">No file activity yet</p>
+        ) : (
+          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+            {logs.map((log) => {
+              const actionInfo = actionLabels[log.action] || { label: log.action, color: 'text-gray-400' }
+              return (
+                <div key={log.id} className="flex items-center gap-3 text-sm py-1.5 px-2 rounded hover:bg-dark-800/50">
+                  <span className={`text-xs font-medium w-20 shrink-0 ${actionInfo.color}`}>
+                    {actionInfo.label}
+                  </span>
+                  <span className="text-gray-300 truncate flex-1" title={log.file_path}>
+                    {log.file_path}
+                  </span>
+                  {log.detail && (
+                    <span className="text-xs text-gray-600 shrink-0">{log.detail}</span>
+                  )}
+                  <span className="text-xs text-gray-600 shrink-0 w-16 text-right">
+                    {log.username}
+                  </span>
+                  <span className="text-xs text-gray-600 shrink-0 w-14 text-right">
+                    {formatTimeAgo(log.created_at)}
+                  </span>
+                </div>
+              )
+            })}
           </div>
-          <div>
-            <span className="text-xs text-gray-500">System Memory</span>
-            <p className="text-lg font-medium text-white">{formatBytes(stats.system.mem_sys)}</p>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   )

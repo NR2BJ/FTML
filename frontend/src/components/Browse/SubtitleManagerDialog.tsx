@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { X, Trash2, Languages, Loader2, Subtitles } from 'lucide-react'
 import { type FileEntry } from '@/api/files'
 import { listSubtitles, deleteSubtitle, type SubtitleEntry } from '@/api/subtitle'
+import { useAuthStore } from '@/stores/authStore'
 
 interface SubtitleManagerDialogProps {
   file: FileEntry
@@ -13,6 +14,8 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
   const [subtitles, setSubtitles] = useState<SubtitleEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const { user } = useAuthStore()
+  const canEdit = user?.role === 'admin' || user?.role === 'editor'
 
   const fetchSubtitles = () => {
     setLoading(true)
@@ -102,32 +105,34 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      {/* Translate button */}
-                      <button
-                        onClick={() => handleTranslate(sub)}
-                        title="Translate this subtitle"
-                        className="p-1.5 rounded text-gray-600 hover:text-emerald-400 hover:bg-dark-600 transition-colors opacity-0 group-hover:opacity-100"
-                      >
-                        <Languages className="w-3.5 h-3.5" />
-                      </button>
-
-                      {/* Delete button (generated only) */}
-                      {isGenerated && (
+                    {canEdit && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        {/* Translate button */}
                         <button
-                          onClick={() => handleDelete(sub)}
-                          disabled={deleting === sub.id}
-                          title="Delete this subtitle"
-                          className="p-1.5 rounded text-gray-600 hover:text-red-400 hover:bg-dark-600 transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50"
+                          onClick={() => handleTranslate(sub)}
+                          title="Translate this subtitle"
+                          className="p-1.5 rounded text-gray-600 hover:text-emerald-400 hover:bg-dark-600 transition-colors opacity-0 group-hover:opacity-100"
                         >
-                          {deleting === sub.id ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <Trash2 className="w-3.5 h-3.5" />
-                          )}
+                          <Languages className="w-3.5 h-3.5" />
                         </button>
-                      )}
-                    </div>
+
+                        {/* Delete button (generated only) */}
+                        {isGenerated && (
+                          <button
+                            onClick={() => handleDelete(sub)}
+                            disabled={deleting === sub.id}
+                            title="Delete this subtitle"
+                            className="p-1.5 rounded text-gray-600 hover:text-red-400 hover:bg-dark-600 transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50"
+                          >
+                            {deleting === sub.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -137,7 +142,8 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
 
         {/* Footer */}
         <div className="px-5 py-3 border-t border-dark-700 text-xs text-gray-600">
-          {subtitles.length} subtitle{subtitles.length !== 1 ? 's' : ''} · Only generated subtitles can be deleted
+          {subtitles.length} subtitle{subtitles.length !== 1 ? 's' : ''}
+          {canEdit && ' · Only generated subtitles can be deleted'}
         </div>
       </div>
     </div>

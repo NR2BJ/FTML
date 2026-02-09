@@ -98,3 +98,25 @@ export interface SiblingsResponse {
 
 export const getSiblings = (path: string) =>
   client.get<SiblingsResponse>(`/files/siblings/${path}`)
+
+// Trash management (Admin only)
+export interface TrashEntry {
+  name: string
+  original_path: string
+  deleted_at: string
+  deleted_by: string
+  is_dir: boolean
+  size: number
+}
+
+export const listTrash = () =>
+  client.get<TrashEntry[]>('/files/trash')
+
+export const restoreTrash = (name: string) =>
+  client.post('/files/trash/restore', { name })
+
+export const permanentDeleteTrash = (name: string) =>
+  client.delete(`/files/trash/${encodeURIComponent(name)}`)
+
+export const emptyTrash = () =>
+  client.delete('/files/trash/empty')

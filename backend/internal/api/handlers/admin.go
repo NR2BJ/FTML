@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"bufio"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -311,6 +314,23 @@ func (h *AdminHandler) PendingRegistrationCount(w http.ResponseWriter, r *http.R
 	jsonResponse(w, map[string]int{"count": len(regs)}, http.StatusOK)
 }
 
+// DeleteRegistration removes a non-pending registration record
+func (h *AdminHandler) DeleteRegistration(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		jsonError(w, "invalid registration ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeleteRegistration(id); err != nil {
+		jsonError(w, "registration not found or is still pending", http.StatusNotFound)
+		return
+	}
+
+	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
+}
+
 // ListSessions returns all active HLS streaming sessions
 func (h *AdminHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 	sessions := h.hlsManager.ListSessions()
@@ -333,9 +353,15 @@ func (h *AdminHandler) DashboardStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Memory usage
+	// Go process memory
 	var memStat runtime.MemStats
 	runtime.ReadMemStats(&memStat)
+
+	// System RAM from /proc/meminfo
+	totalMem, availMem := readMemInfo()
+
+	// CPU info from /proc/cpuinfo
+	cpuModel, cpuCores := readCPUInfo()
 
 	// Active sessions
 	sessions := h.hlsManager.ListSessions()
@@ -351,13 +377,108 @@ func (h *AdminHandler) DashboardStats(w http.ResponseWriter, r *http.Request) {
 			"free":  diskFree,
 		},
 		"system": map[string]interface{}{
-			"go_version":    runtime.Version(),
-			"goroutines":    runtime.NumGoroutine(),
+			"go_version":     runtime.Version(),
+			"goroutines":     runtime.NumGoroutine(),
 			"uptime_seconds": int(time.Since(startTime).Seconds()),
-			"mem_alloc":     memStat.Alloc,
-			"mem_sys":       memStat.Sys,
+			"mem_alloc":      memStat.Alloc,
+			"mem_sys":        memStat.Sys,
+			"total_memory":   totalMem,
+			"avail_memory":   availMem,
+			"cpu_model":      cpuModel,
+			"cpu_cores":      cpuCores,
 		},
 		"active_sessions": len(sessions),
 		"user_count":      len(users),
 	}, http.StatusOK)
+}
+
+// ListFileLogs returns recent file operation logs
+func (h *AdminHandler) ListFileLogs(w http.ResponseWriter, r *http.Request) {
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	logs, err := h.db.ListFileLogs(limit)
+	if err != nil {
+		log.Printf("[admin] failed to list file logs: %v", err)
+		jsonError(w, "failed to list file logs", http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, logs, http.StatusOK)
+}
+
+// readMemInfo reads system memory from /proc/meminfo
+func readMemInfo() (total, avail uint64) {
+	f, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return 0, 0
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "MemTotal:") {
+			total = parseProcKB(line)
+		} else if strings.HasPrefix(line, "MemAvailable:") {
+			avail = parseProcKB(line)
+		}
+		if total > 0 && avail > 0 {
+			break
+		}
+	}
+	return total, avail
+}
+
+// parseProcKB parses a /proc line like "MemTotal:       16384 kB" and returns bytes
+func parseProcKB(line string) uint64 {
+	parts := strings.Fields(line)
+	if len(parts) >= 2 {
+		val, err := strconv.ParseUint(parts[1], 10, 64)
+		if err == nil {
+			return val * 1024 // kB to bytes
+		}
+	}
+	return 0
+}
+
+// readCPUInfo reads CPU model and core count from /proc/cpuinfo
+func readCPUInfo() (model string, cores int) {
+	f, err := os.Open("/proc/cpuinfo")
+	if err != nil {
+		return "Unknown", runtime.NumCPU()
+	}
+	defer f.Close()
+
+	coreSet := make(map[string]bool)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "model name") && model == "" {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				model = strings.TrimSpace(parts[1])
+			}
+		}
+		if strings.HasPrefix(line, "processor") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				coreSet[strings.TrimSpace(parts[1])] = true
+			}
+		}
+	}
+
+	if model == "" {
+		model = "Unknown"
+	}
+	cores = len(coreSet)
+	if cores == 0 {
+		cores = runtime.NumCPU()
+	}
+	return model, cores
 }

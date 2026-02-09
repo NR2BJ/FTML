@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getTree, getThumbnailUrl, batchFileInfo, type FileEntry, type MediaInfo, uploadFile, deleteFile, moveFile, createFolder } from '@/api/files'
-import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid, CheckSquare, Upload, FolderPlus, Home, ChevronRight } from 'lucide-react'
+import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid, CheckSquare, Upload, FolderPlus, Home, ChevronRight, Loader2 } from 'lucide-react'
 import { isVideoFile, formatBytes } from '@/utils/format'
 import { useBrowseStore } from '@/stores/browseStore'
 import { useAuthStore } from '@/stores/authStore'
@@ -389,7 +389,11 @@ export default function Browse() {
   const selectedCount = selectedPaths.size
 
   if (loading) {
-    return <div className="text-gray-400">Loading...</div>
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-6 h-6 text-gray-400 animate-spin" />
+      </div>
+    )
   }
 
   return (

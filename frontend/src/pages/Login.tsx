@@ -39,8 +39,8 @@ export default function Login() {
       return
     }
 
-    if (password.length < 4) {
-      setError('Password must be at least 4 characters')
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters')
       return
     }
 
@@ -72,7 +72,7 @@ export default function Login() {
       <div className="bg-dark-900 border border-dark-700 rounded-xl p-8 w-full max-w-sm">
         <div className="flex items-center justify-center gap-3 mb-8">
           <Film className="w-8 h-8 text-primary-500" />
-          <h1 className="text-2xl font-bold text-white">Video Stream</h1>
+          <h1 className="text-2xl font-bold text-white">FTML</h1>
         </div>
 
         <form onSubmit={isRegister ? handleRegister : handleLogin} className="space-y-4">
@@ -95,7 +95,7 @@ export default function Login() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="w-full bg-dark-800 border border-dark-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-primary-500 transition-colors"
-              placeholder={isRegister ? 'Choose a username' : 'admin'}
+              placeholder={isRegister ? 'Choose a username' : ''}
               required
               autoFocus
             />
@@ -108,7 +108,7 @@ export default function Login() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full bg-dark-800 border border-dark-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-primary-500 transition-colors"
-              placeholder={isRegister ? 'Choose a password' : 'password'}
+              placeholder={isRegister ? 'Choose a password' : ''}
               required
             />
           </div>
