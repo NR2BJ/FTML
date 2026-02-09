@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { getDashboardStats, listFileLogs, type DashboardStats, type FileLog } from '@/api/admin'
 import { Cpu, HardDrive, MemoryStick, Users, Monitor, Clock, Loader2, RefreshCw, FileText } from 'lucide-react'
-import { formatBytes } from '@/utils/format'
+import { formatBytes, formatDateTime } from '@/utils/format'
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400)
@@ -42,17 +42,6 @@ function StatCard({ icon: Icon, label, value, sub }: {
   )
 }
 
-function formatTimeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const m = Math.floor(diff / 60000)
-  if (m < 1) return 'just now'
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  return `${d}d ago`
-}
-
 const actionLabels: Record<string, { label: string; color: string }> = {
   upload: { label: 'Upload', color: 'text-green-400' },
   delete: { label: 'Delete', color: 'text-red-400' },
@@ -69,17 +58,26 @@ const actionLabels: Record<string, { label: string; color: string }> = {
   subtitle_delete_request: { label: 'Del. Request', color: 'text-orange-400' },
 }
 
+const logFilterTabs = [
+  { label: 'All', value: '' },
+  { label: 'Upload', value: 'upload' },
+  { label: 'Move', value: 'move' },
+  { label: 'Delete', value: 'delete' },
+  { label: 'Subtitle', value: 'subtitle' },
+]
+
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [logs, setLogs] = useState<FileLog[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [logFilter, setLogFilter] = useState('')
 
-  const loadStats = async () => {
+  const loadStats = useCallback(async () => {
     try {
       const [statsRes, logsRes] = await Promise.all([
         getDashboardStats(),
-        listFileLogs(20),
+        listFileLogs(50, logFilter || undefined),
       ])
       setStats(statsRes.data)
       setLogs(logsRes.data || [])
@@ -89,13 +87,17 @@ export default function Dashboard() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [logFilter])
 
   useEffect(() => {
     loadStats()
     const interval = setInterval(loadStats, 15000)
     return () => clearInterval(interval)
-  }, [])
+  }, [loadStats])
+
+  const handleFilterChange = (value: string) => {
+    setLogFilter(value)
+  }
 
   if (loading) {
     return (
@@ -111,6 +113,7 @@ export default function Dashboard() {
     )
   }
 
+  const tz = stats.timezone || undefined
   const vramUsed = stats.gpu.vram_total - stats.gpu.vram_free
   const vramPct = stats.gpu.vram_total > 0 ? (vramUsed / stats.gpu.vram_total) * 100 : 0
   const storagePct = stats.storage.total > 0 ? (stats.storage.used / stats.storage.total) * 100 : 0
@@ -241,14 +244,31 @@ export default function Dashboard() {
 
       {/* File Activity Logs */}
       <div className="bg-dark-900 border border-dark-700 rounded-lg p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <FileText className="w-5 h-5 text-amber-400" />
-          <h2 className="text-sm font-medium text-white">Recent File Activity</h2>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <FileText className="w-5 h-5 text-amber-400" />
+            <h2 className="text-sm font-medium text-white">File Activity</h2>
+          </div>
+          <div className="flex items-center gap-1 bg-dark-800 border border-dark-700 rounded-lg p-0.5">
+            {logFilterTabs.map((tab) => (
+              <button
+                key={tab.value}
+                onClick={() => handleFilterChange(tab.value)}
+                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                  logFilter === tab.value
+                    ? 'bg-primary-600 text-white'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
         {logs.length === 0 ? (
           <p className="text-sm text-gray-500">No file activity yet</p>
         ) : (
-          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+          <div className="space-y-1.5 max-h-80 overflow-y-auto">
             {logs.map((log) => {
               const actionInfo = actionLabels[log.action] || { label: log.action, color: 'text-gray-400' }
               return (
@@ -265,8 +285,8 @@ export default function Dashboard() {
                   <span className="text-xs text-gray-600 shrink-0 w-16 text-right">
                     {log.username}
                   </span>
-                  <span className="text-xs text-gray-600 shrink-0 w-14 text-right">
-                    {formatTimeAgo(log.created_at)}
+                  <span className="text-xs text-gray-600 shrink-0 w-28 text-right">
+                    {formatDateTime(log.created_at, tz)}
                   </span>
                 </div>
               )

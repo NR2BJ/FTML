@@ -5,14 +5,23 @@ import {
   approveDeleteRequest,
   rejectDeleteRequest,
   removeDeleteRequest,
+  getDashboardStats,
   type DeleteRequestAdmin,
 } from '@/api/admin'
+import { formatDateTime } from '@/utils/format'
 
 export default function DeleteRequests() {
   const [requests, setRequests] = useState<DeleteRequestAdmin[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<'pending' | 'approved' | 'rejected'>('pending')
+  const [timezone, setTimezone] = useState<string | undefined>()
+
+  useEffect(() => {
+    getDashboardStats()
+      .then(({ data }) => { if (data.timezone) setTimezone(data.timezone) })
+      .catch(() => {})
+  }, [])
 
   const fetchRequests = async () => {
     try {
@@ -146,8 +155,7 @@ export default function DeleteRequests() {
                 </td>
                 <td className="px-4 py-3">{statusBadge(req.status)}</td>
                 <td className="px-4 py-3 text-sm text-gray-400 hidden sm:table-cell">
-                  {new Date(req.created_at).toLocaleDateString()}{' '}
-                  {new Date(req.created_at).toLocaleTimeString()}
+                  {formatDateTime(req.created_at, timezone)}
                 </td>
                 <td className="px-4 py-3 text-right">
                   {req.status === 'pending' ? (

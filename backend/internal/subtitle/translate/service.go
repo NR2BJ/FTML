@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -132,15 +133,36 @@ func (s *Service) loadSubtitle(videoPath, subtitleID string) (string, error) {
 		fullPath := filepath.Join(s.mediaPath, videoPath)
 		videoDir := filepath.Dir(fullPath)
 		subPath := filepath.Join(videoDir, filename)
-		data, err := os.ReadFile(subPath)
-		if err != nil {
-			return "", fmt.Errorf("read external subtitle: %w", err)
-		}
-		// Convert SRT to VTT if needed
-		if strings.HasSuffix(strings.ToLower(filename), ".srt") {
+
+		ext := strings.ToLower(filepath.Ext(filename))
+		switch ext {
+		case ".srt":
+			data, err := os.ReadFile(subPath)
+			if err != nil {
+				return "", fmt.Errorf("read external subtitle: %w", err)
+			}
 			return srtToVTTString(string(data)), nil
+		case ".ass", ".ssa":
+			// Convert ASS/SSA to VTT via FFmpeg
+			cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
+				"-i", subPath, "-f", "webvtt", "pipe:1")
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			output, err := cmd.Output()
+			if err != nil {
+				return "", fmt.Errorf("convert %s to VTT: %w, stderr: %s", ext, err, stderr.String())
+			}
+			if len(strings.TrimSpace(string(output))) == 0 {
+				return "", fmt.Errorf("empty VTT output from %s conversion", ext)
+			}
+			return string(output), nil
+		default:
+			data, err := os.ReadFile(subPath)
+			if err != nil {
+				return "", fmt.Errorf("read external subtitle: %w", err)
+			}
+			return string(data), nil
 		}
-		return string(data), nil
 	}
 
 	if strings.HasPrefix(subtitleID, "embedded:") {
@@ -158,9 +180,14 @@ func (s *Service) loadSubtitle(videoPath, subtitleID string) (string, error) {
 			"pipe:1",
 		)
 
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
 		output, err := cmd.Output()
 		if err != nil {
-			return "", fmt.Errorf("extract embedded subtitle (stream %d): %w", streamIndex, err)
+			return "", fmt.Errorf("extract embedded subtitle (stream %d): %w, stderr: %s", streamIndex, err, stderr.String())
+		}
+		if len(strings.TrimSpace(string(output))) == 0 {
+			return "", fmt.Errorf("empty VTT output for embedded stream %d", streamIndex)
 		}
 		return string(output), nil
 	}

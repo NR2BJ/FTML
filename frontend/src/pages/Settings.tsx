@@ -100,11 +100,21 @@ export default function Settings() {
   }, {})
 
   const groupLabels: Record<string, string> = {
+    general: 'General',
     translation: 'Translation API Keys',
     subtitle: 'Subtitle & Translation',
   }
 
+  const timezoneOptions = [
+    '', 'UTC',
+    'Asia/Seoul', 'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Singapore', 'Asia/Kolkata',
+    'Europe/London', 'Europe/Berlin', 'Europe/Paris', 'Europe/Moscow',
+    'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+    'America/Sao_Paulo', 'Australia/Sydney', 'Pacific/Auckland',
+  ]
+
   const settingHelp: Record<string, string> = {
+    timezone: 'IANA timezone for displaying dates and times (e.g. Asia/Seoul). Leave empty for browser default.',
     gemini_api_key: 'Google Gemini API key for subtitle translation. Get one at aistudio.google.com',
     gemini_model: 'Select a Gemini model for translation. Models are fetched from Google API automatically.',
     openai_api_key: 'OpenAI API key for Whisper API and GPT translation. Used for both transcription and translation.',
@@ -112,6 +122,27 @@ export default function Settings() {
   }
 
   const renderSettingInput = (setting: SettingItem) => {
+    // Special: Timezone dropdown
+    if (setting.key === 'timezone') {
+      return (
+        <div className="relative">
+          <select
+            value={values[setting.key] || ''}
+            onChange={(e) =>
+              setValues((prev) => ({ ...prev, [setting.key]: e.target.value }))
+            }
+            className="appearance-none w-full bg-dark-800 border border-dark-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary-500 pr-8 cursor-pointer"
+          >
+            <option value="">Browser default</option>
+            {timezoneOptions.filter(Boolean).map((tz) => (
+              <option key={tz} value={tz}>{tz}</option>
+            ))}
+          </select>
+          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+        </div>
+      )
+    }
+
     // Special: Gemini model dropdown
     if (setting.key === 'gemini_model') {
       return (

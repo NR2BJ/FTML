@@ -627,15 +627,33 @@ func (d *Database) CreateFileLog(userID int64, username, action, filePath, detai
 	return err
 }
 
-// ListFileLogs returns the most recent file operation logs
-func (d *Database) ListFileLogs(limit int) ([]FileLog, error) {
+// ListFileLogs returns the most recent file operation logs, optionally filtered by action
+func (d *Database) ListFileLogs(limit int, action string) ([]FileLog, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := d.db.Query(
-		"SELECT id, user_id, username, action, file_path, COALESCE(detail, ''), created_at FROM file_logs ORDER BY created_at DESC LIMIT ?",
-		limit,
-	)
+
+	var rows *sql.Rows
+	var err error
+
+	if action == "" {
+		rows, err = d.db.Query(
+			"SELECT id, user_id, username, action, file_path, COALESCE(detail, ''), created_at FROM file_logs ORDER BY created_at DESC LIMIT ?",
+			limit,
+		)
+	} else if action == "subtitle" {
+		// Group all subtitle-related actions
+		rows, err = d.db.Query(
+			"SELECT id, user_id, username, action, file_path, COALESCE(detail, ''), created_at FROM file_logs WHERE action LIKE 'subtitle_%' ORDER BY created_at DESC LIMIT ?",
+			limit,
+		)
+	} else {
+		rows, err = d.db.Query(
+			"SELECT id, user_id, username, action, file_path, COALESCE(detail, ''), created_at FROM file_logs WHERE action = ? ORDER BY created_at DESC LIMIT ?",
+			action, limit,
+		)
+	}
+
 	if err != nil {
 		return nil, err
 	}

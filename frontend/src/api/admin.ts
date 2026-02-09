@@ -138,6 +138,7 @@ export interface DashboardStats {
   }
   active_sessions: number
   user_count: number
+  timezone?: string
 }
 
 export const getDashboardStats = () =>
@@ -154,8 +155,8 @@ export interface FileLog {
   created_at: string
 }
 
-export const listFileLogs = (limit = 50) =>
-  client.get<FileLog[]>('/admin/file-logs', { params: { limit } })
+export const listFileLogs = (limit = 50, action?: string) =>
+  client.get<FileLog[]>('/admin/file-logs', { params: { limit, action } })
 
 // Rate limit management
 export interface RateLimitEntry {

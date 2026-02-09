@@ -24,3 +24,16 @@ export function formatDuration(seconds: number): string {
   }
   return `${m}:${s.toString().padStart(2, '0')}`
 }
+
+export function formatDateTime(dateStr: string, timezone?: string): string {
+  const d = new Date(dateStr)
+  const opts: Intl.DateTimeFormatOptions = {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }
+  if (timezone) opts.timeZone = timezone
+  return d.toLocaleString('en-US', opts).replace(',', '')
+}

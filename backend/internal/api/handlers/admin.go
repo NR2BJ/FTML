@@ -389,6 +389,7 @@ func (h *AdminHandler) DashboardStats(w http.ResponseWriter, r *http.Request) {
 		},
 		"active_sessions": len(sessions),
 		"user_count":      len(users),
+		"timezone":        h.db.GetSetting("timezone", ""),
 	}, http.StatusOK)
 }
 
@@ -402,7 +403,9 @@ func (h *AdminHandler) ListFileLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	logs, err := h.db.ListFileLogs(limit)
+	action := r.URL.Query().Get("action")
+
+	logs, err := h.db.ListFileLogs(limit, action)
 	if err != nil {
 		log.Printf("[admin] failed to list file logs: %v", err)
 		jsonError(w, "failed to list file logs", http.StatusInternalServerError)
