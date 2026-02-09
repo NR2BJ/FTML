@@ -28,13 +28,14 @@ services:
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
-      - JWT_SECRET=${JWT_SECRET:-change-this-secret}
+      - JWT_SECRET=${JWT_SECRET:-}
       - MEDIA_PATH=/media
       - DATA_PATH=/data
       - DB_PATH=/data/videostream.db
       - SUBTITLE_PATH=/data/subtitles
       # WHISPER_MODEL_PATH no longer needed — models cached on whisper container
       - PORT=8080
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - LIBVA_DRIVER_NAME=iHD
     devices:
       - /dev/dri:/dev/dri

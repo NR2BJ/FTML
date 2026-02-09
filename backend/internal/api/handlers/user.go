@@ -117,6 +117,11 @@ func (h *UserHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(req.NewPassword) < 8 {
+		jsonError(w, "password must be at least 8 characters", http.StatusBadRequest)
+		return
+	}
+
 	// Verify current password
 	user, err := h.db.GetUserByID(claims.UserID)
 	if err != nil {

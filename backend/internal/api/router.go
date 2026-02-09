@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -19,11 +21,14 @@ import (
 func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.Config, jobQueue *job.JobQueue) *chi.Mux {
 	r := chi.NewRouter()
 
+	// Rate limiters
+	authLimiter := middleware.NewRateLimiter(5, time.Minute) // 5 req/min for login/register
+
 	// Global middleware
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RealIP)
 	r.Use(middleware.Logger)
-	r.Use(cors.Handler(middleware.CORSHandler()))
+	r.Use(cors.Handler(middleware.CORSHandler(cfg.CORSOrigins)))
 
 	// Handlers
 	authHandler := handlers.NewAuthHandler(database, jwtService)
@@ -53,9 +58,12 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			w.Write([]byte(`{"status":"ok"}`))
 		})
 
-		// Auth (public)
-		r.Post("/auth/login", authHandler.Login)
-		r.Post("/auth/register", authHandler.Register)
+		// Auth (public, rate limited)
+		r.Group(func(r chi.Router) {
+			r.Use(authLimiter.Handler)
+			r.Post("/auth/login", authHandler.Login)
+			r.Post("/auth/register", authHandler.Register)
+		})
 
 		// Protected routes — all authenticated users (viewer, editor, admin)
 		r.Group(func(r chi.Router) {
@@ -170,6 +178,17 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 
 				// Admin — Dashboard Stats
 				r.Get("/admin/dashboard", adminHandler.DashboardStats)
+
+				// Admin — Rate Limit Management
+				r.Get("/admin/ratelimit", func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(authLimiter.Status())
+				})
+				r.Delete("/admin/ratelimit", func(w http.ResponseWriter, r *http.Request) {
+					authLimiter.Clear()
+					w.Header().Set("Content-Type", "application/json")
+					w.Write([]byte(`{"message":"rate limit cleared"}`))
+				})
 			})
 		})
 	})

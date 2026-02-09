@@ -100,8 +100,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Password) < 4 {
-		jsonError(w, "password must be at least 4 characters", http.StatusBadRequest)
+	if len(req.Password) < 8 {
+		jsonError(w, "password must be at least 8 characters", http.StatusBadRequest)
 		return
 	}
 
