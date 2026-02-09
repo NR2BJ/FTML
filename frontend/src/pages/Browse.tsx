@@ -222,7 +222,7 @@ export default function Browse() {
   const [loading, setLoading] = useState(true)
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: FileEntry[] } | null>(null)
-  const [batchDialog, setBatchDialog] = useState<{ mode: BatchMode; files: FileEntry[] } | null>(null)
+  const [batchDialog, setBatchDialog] = useState<{ mode: BatchMode; files: FileEntry[]; subtitleId?: string } | null>(null)
   const [subtitleManager, setSubtitleManager] = useState<FileEntry | null>(null)
 
   // File management state
@@ -230,6 +230,8 @@ export default function Browse() {
   const isAdmin = user?.role === 'admin'
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const dragCounter = useRef(0)
   const [newFolderName, setNewFolderName] = useState<string | null>(null)
   const [renameEntry, setRenameEntry] = useState<FileEntry | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -314,6 +316,54 @@ export default function Browse() {
     }
   }
 
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current++
+    if (e.dataTransfer?.types?.includes('Files')) {
+      setIsDragging(true)
+    }
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current--
+    if (dragCounter.current === 0) {
+      setIsDragging(false)
+    }
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    dragCounter.current = 0
+
+    if (!isAdmin) return
+
+    const files = Array.from(e.dataTransfer?.files || [])
+    if (files.length === 0) return
+
+    setActionError('')
+    for (const file of files) {
+      setUploadProgress(0)
+      try {
+        await uploadFile(path, file, (pct) => setUploadProgress(pct))
+      } catch {
+        setActionError(`Upload failed: ${file.name}`)
+        break
+      }
+    }
+    setUploadProgress(null)
+    refreshEntries()
+  }, [isAdmin, path, refreshEntries])
+
   const handleCreateFolder = async () => {
     if (!newFolderName?.trim()) { setNewFolderName(null); return }
     setActionError('')
@@ -397,7 +447,26 @@ export default function Browse() {
   }
 
   return (
-    <div>
+    <div
+      onDragEnter={isAdmin ? handleDragEnter : undefined}
+      onDragLeave={isAdmin ? handleDragLeave : undefined}
+      onDragOver={isAdmin ? handleDragOver : undefined}
+      onDrop={isAdmin ? handleDrop : undefined}
+      className="relative"
+    >
+      {/* Drag overlay */}
+      {isDragging && isAdmin && (
+        <div className="fixed inset-0 z-50 bg-primary-500/10 border-2 border-dashed border-primary-400 flex items-center justify-center pointer-events-none">
+          <div className="bg-dark-900 border border-primary-500 rounded-xl px-8 py-6 text-center shadow-2xl">
+            <Upload className="w-10 h-10 text-primary-400 mx-auto mb-2" />
+            <p className="text-white font-medium">Drop files to upload</p>
+            <p className="text-sm text-gray-400 mt-1">
+              Files will be uploaded to {path ? `/${path}` : 'root'}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Header with breadcrumb */}
       <div className="flex items-center justify-between mb-4 gap-3">
         <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
@@ -606,6 +675,7 @@ export default function Browse() {
         <BatchSubtitleDialog
           mode={batchDialog.mode}
           files={batchDialog.files}
+          subtitleId={batchDialog.subtitleId}
           onClose={() => setBatchDialog(null)}
         />
       )}
@@ -616,9 +686,7 @@ export default function Browse() {
           file={subtitleManager}
           onClose={() => setSubtitleManager(null)}
           onTranslate={(subtitleId) => {
-            // Open translate batch dialog with the selected file
-            // The subtitle ID will be used by the translate dialog
-            setBatchDialog({ mode: 'translate', files: [subtitleManager] })
+            setBatchDialog({ mode: 'translate', files: [subtitleManager], subtitleId })
             setSubtitleManager(null)
           }}
         />

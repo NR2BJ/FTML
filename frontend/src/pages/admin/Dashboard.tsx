@@ -114,8 +114,9 @@ export default function Dashboard() {
   }
 
   const tz = stats.timezone || undefined
-  const vramUsed = stats.gpu.vram_total - stats.gpu.vram_free
-  const vramPct = stats.gpu.vram_total > 0 ? (vramUsed / stats.gpu.vram_total) * 100 : 0
+  const vramAvailable = stats.gpu.vram_free >= 0
+  const vramUsed = vramAvailable ? stats.gpu.vram_total - stats.gpu.vram_free : 0
+  const vramPct = vramAvailable && stats.gpu.vram_total > 0 ? (vramUsed / stats.gpu.vram_total) * 100 : 0
   const storagePct = stats.storage.total > 0 ? (stats.storage.used / stats.storage.total) * 100 : 0
   const memUsed = stats.system.total_memory - stats.system.avail_memory
   const memPct = stats.system.total_memory > 0 ? (memUsed / stats.system.total_memory) * 100 : 0
@@ -159,7 +160,7 @@ export default function Dashboard() {
           <span className="text-sm text-gray-300">{stats.gpu.device || 'No GPU detected'}</span>
           <span className="text-xs text-gray-500">Driver: {stats.gpu.driver || 'N/A'}</span>
         </div>
-        {stats.gpu.vram_total > 0 ? (
+        {stats.gpu.vram_total > 0 && vramAvailable ? (
           <>
             <ProgressBar
               value={vramUsed}
@@ -173,6 +174,15 @@ export default function Dashboard() {
               <span className="text-xs text-gray-500">{vramPct.toFixed(1)}%</span>
             </div>
           </>
+        ) : stats.gpu.vram_total > 0 ? (
+          <div className="mt-1">
+            <p className="text-xs text-gray-500">
+              VRAM: {formatBytes(stats.gpu.vram_total)} total
+            </p>
+            <p className="text-xs text-gray-600 mt-0.5">
+              Usage monitoring unavailable (no sysfs interface)
+            </p>
+          </div>
         ) : stats.gpu.device ? (
           <p className="text-xs text-gray-500">VRAM info unavailable</p>
         ) : null}
@@ -198,7 +208,8 @@ export default function Dashboard() {
               <span className="text-xs text-gray-500">{memPct.toFixed(1)}%</span>
             </div>
             <div className="mt-2 text-xs text-gray-600">
-              Go Heap: {formatBytes(stats.system.mem_alloc)} · System: {formatBytes(stats.system.mem_sys)}
+              App Heap: {formatBytes(stats.system.mem_alloc)} · App Reserved: {formatBytes(stats.system.mem_sys)}
+              <span className="ml-1 text-gray-700" title="Go runtime memory — the application's own heap and reserved memory, not total process RSS">(Go runtime)</span>
             </div>
           </>
         ) : (

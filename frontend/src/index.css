@@ -46,25 +46,31 @@ body {
   color: var(--color-text-primary);
 }
 
-/* Light mode text color overrides — dark enough for white backgrounds */
-:root:not(.dark) .text-white { color: var(--color-text-primary); }
-:root:not(.dark) .text-gray-300 { color: #334155; }
-:root:not(.dark) .text-gray-400 { color: #475569; }
-:root:not(.dark) .text-gray-500 { color: #64748b; }
-:root:not(.dark) .text-gray-600 { color: #475569; }
-:root:not(.dark) .text-gray-700 { color: #334155; }
-:root:not(.dark) .placeholder-gray-600::placeholder { color: #94a3b8; }
+/* Light mode text color overrides — !important to guarantee override of Tailwind utilities */
+:root:not(.dark) .text-white { color: var(--color-text-primary) !important; }
+:root:not(.dark) .text-gray-300 { color: #334155 !important; }
+:root:not(.dark) .text-gray-400 { color: #475569 !important; }
+:root:not(.dark) .text-gray-500 { color: #64748b !important; }
+:root:not(.dark) .text-gray-600 { color: #475569 !important; }
+:root:not(.dark) .text-gray-700 { color: #334155 !important; }
+:root:not(.dark) .placeholder-gray-600::placeholder { color: #94a3b8 !important; }
+
+/* Light mode hover text overrides */
+:root:not(.dark) .hover\:text-white:hover { color: var(--color-text-primary) !important; }
+:root:not(.dark) .hover\:text-gray-300:hover { color: #1e293b !important; }
+:root:not(.dark) .hover\:text-gray-200:hover { color: #1e293b !important; }
+:root:not(.dark) .group:hover .group-hover\:text-white { color: var(--color-text-primary) !important; }
 
 /* Light mode border overrides */
-:root:not(.dark) .border-dark-600 { border-color: #cbd5e1; }
-:root:not(.dark) .border-dark-700 { border-color: #e2e8f0; }
-:root:not(.dark) .border-dark-800 { border-color: #f1f5f9; }
-:root:not(.dark) .divide-dark-700 > :not([hidden]) ~ :not([hidden]) { border-color: #e2e8f0; }
+:root:not(.dark) .border-dark-600 { border-color: #cbd5e1 !important; }
+:root:not(.dark) .border-dark-700 { border-color: #e2e8f0 !important; }
+:root:not(.dark) .border-dark-800 { border-color: #f1f5f9 !important; }
+:root:not(.dark) .divide-dark-700 > :not([hidden]) ~ :not([hidden]) { border-color: #e2e8f0 !important; }
 
 /* Light mode background opacity overrides */
-:root:not(.dark) .bg-dark-900\/50 { background-color: rgb(241 245 249 / 0.5); }
-:root:not(.dark) .bg-dark-800\/50 { background-color: rgb(241 245 249 / 0.5); }
-:root:not(.dark) .bg-dark-700\/50 { background-color: rgb(226 232 240 / 0.5); }
+:root:not(.dark) .bg-dark-900\/50 { background-color: rgb(241 245 249 / 0.5) !important; }
+:root:not(.dark) .bg-dark-800\/50 { background-color: rgb(241 245 249 / 0.5) !important; }
+:root:not(.dark) .bg-dark-700\/50 { background-color: rgb(226 232 240 / 0.5) !important; }
 
 /* Player always dark (gradient overlay needs light text) */
 .player-container .text-white { color: #ffffff !important; }

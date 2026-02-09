@@ -13,13 +13,17 @@ import (
 type GPUInfo struct {
 	Device    string `json:"device"`     // e.g. "Intel Arc A380"
 	VRAMTotal int64  `json:"vram_total"` // bytes, 0 if unknown
-	VRAMFree  int64  `json:"vram_free"`  // bytes, 0 if unknown
+	VRAMFree  int64  `json:"vram_free"`  // bytes, -1 if unavailable
 	Driver    string `json:"driver"`     // e.g. "i915"
 }
 
+// cachedStatic holds device name, driver, and total VRAM (detected once).
+// Dynamic VRAM (free/used) is read on each call when sysfs supports it.
 var (
-	cachedGPU  *GPUInfo
-	detectOnce sync.Once
+	cachedStatic   *GPUInfo
+	staticOnce     sync.Once
+	vramUsedPath   string // sysfs path to VRAM used (empty if not available)
+	hasDynamicVRAM bool   // whether dynamic VRAM reading is possible
 )
 
 // Known VRAM sizes for Intel Arc GPUs (bytes)
@@ -32,21 +36,40 @@ var knownVRAM = map[string]int64{
 	"56c1": 10 * 1024 * 1024 * 1024, // Arc B570 — 10GB
 }
 
-// DetectGPU probes the system for discrete GPU info via sysfs.
-// Uses sync.Once — safe to call multiple times.
+// DetectGPU returns GPU info with dynamic VRAM usage.
+// Static info (device, driver, total VRAM) is cached on first call.
+// Dynamic VRAM usage is re-read from sysfs on every call when available.
 func DetectGPU() *GPUInfo {
-	detectOnce.Do(func() {
-		cachedGPU = detectGPU()
-		log.Printf("[gpu] detected: device=%q vram_total=%d MB driver=%s",
-			cachedGPU.Device,
-			cachedGPU.VRAMTotal/1024/1024,
-			cachedGPU.Driver)
+	staticOnce.Do(func() {
+		cachedStatic = detectGPUStatic()
+		log.Printf("[gpu] detected: device=%q vram_total=%d MB driver=%s dynamic_vram=%v",
+			cachedStatic.Device,
+			cachedStatic.VRAMTotal/1024/1024,
+			cachedStatic.Driver,
+			hasDynamicVRAM)
 	})
-	return cachedGPU
+
+	// Copy static info
+	info := &GPUInfo{
+		Device:    cachedStatic.Device,
+		VRAMTotal: cachedStatic.VRAMTotal,
+		VRAMFree:  cachedStatic.VRAMFree,
+		Driver:    cachedStatic.Driver,
+	}
+
+	// Read dynamic VRAM usage if sysfs path available
+	if hasDynamicVRAM && vramUsedPath != "" && info.VRAMTotal > 0 {
+		vramUsed, err := readSysfsInt(vramUsedPath)
+		if err == nil && vramUsed >= 0 {
+			info.VRAMFree = info.VRAMTotal - vramUsed
+		}
+	}
+
+	return info
 }
 
-func detectGPU() *GPUInfo {
-	info := &GPUInfo{}
+func detectGPUStatic() *GPUInfo {
+	info := &GPUInfo{VRAMFree: -1} // -1 = usage unavailable by default
 
 	cards, err := filepath.Glob("/sys/class/drm/card[0-9]*")
 	if err != nil {
@@ -62,18 +85,25 @@ func detectGPU() *GPUInfo {
 
 		deviceDir := filepath.Join(card, "device")
 
-		vramPath := filepath.Join(deviceDir, "mem_info_vram_total")
-		vramBytes, err := readSysfsInt(vramPath)
+		vramTotalPath := filepath.Join(deviceDir, "mem_info_vram_total")
+		vramBytes, err := readSysfsInt(vramTotalPath)
 		if err != nil || vramBytes == 0 {
 			continue
 		}
 
 		info.VRAMTotal = vramBytes
 
-		vramFreePath := filepath.Join(deviceDir, "mem_info_vram_used")
-		vramUsed, err := readSysfsInt(vramFreePath)
-		if err == nil && vramUsed > 0 {
-			info.VRAMFree = vramBytes - vramUsed
+		usedPath := filepath.Join(deviceDir, "mem_info_vram_used")
+		if _, err := os.Stat(usedPath); err == nil {
+			vramUsedPath = usedPath
+			hasDynamicVRAM = true
+			// Read initial value
+			vramUsed, err := readSysfsInt(usedPath)
+			if err == nil && vramUsed >= 0 {
+				info.VRAMFree = vramBytes - vramUsed
+			} else {
+				info.VRAMFree = vramBytes
+			}
 		}
 
 		info.Device = readDeviceName(deviceDir)
@@ -85,7 +115,7 @@ func detectGPU() *GPUInfo {
 	}
 
 	// Second pass (fallback): detect by PCI ID even without VRAM sysfs
-	// Intel Arc GPUs in VMs don't expose mem_info_vram_total
+	// Intel Arc GPUs don't expose mem_info_vram_total
 	for _, card := range cards {
 		base := filepath.Base(card)
 		if strings.Contains(base, "-") {
@@ -103,7 +133,7 @@ func detectGPU() *GPUInfo {
 
 			if vram, ok := knownVRAM[deviceID]; ok {
 				info.VRAMTotal = vram
-				info.VRAMFree = vram // approximate — can't read actual usage without sysfs
+				// VRAMFree stays -1 → frontend shows "usage unavailable"
 			}
 
 			driverLink, err := os.Readlink(filepath.Join(deviceDir, "driver"))

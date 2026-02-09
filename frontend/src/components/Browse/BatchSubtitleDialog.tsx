@@ -13,6 +13,7 @@ import { type FileEntry } from '@/api/files'
 import {
   batchGenerate,
   batchTranslate,
+  translateSubtitle,
   getJob,
   retryJob,
   listPresets,
@@ -50,6 +51,7 @@ type Mode = 'generate' | 'translate' | 'generate-translate'
 interface BatchSubtitleDialogProps {
   mode: Mode
   files: FileEntry[]
+  subtitleId?: string
   onClose: () => void
 }
 
@@ -61,7 +63,7 @@ interface JobStatus {
   error?: string
 }
 
-export default function BatchSubtitleDialog({ mode, files, onClose }: BatchSubtitleDialogProps) {
+export default function BatchSubtitleDialog({ mode, files, subtitleId, onClose }: BatchSubtitleDialogProps) {
   const videoFiles = files.filter(f => !f.is_dir && isVideoFile(f.name))
   const videoPaths = videoFiles.map(f => f.path)
 
@@ -190,20 +192,37 @@ export default function BatchSubtitleDialog({ mode, files, onClose }: BatchSubti
           actualPrompt = ''
         }
 
-        const { data } = await batchTranslate(videoPaths, {
-          target_lang: targetLang,
-          engine: transEngine,
-          preset: actualPreset,
-          custom_prompt: actualPrompt || undefined,
-        })
-        const jobStatuses: JobStatus[] = data.job_ids.map((id, i) => ({
-          id,
-          path: videoPaths[i] || '',
-          status: 'pending',
-          progress: 0,
-        }))
-        setJobs(jobStatuses)
-        setSkipped(data.skipped || [])
+        // Single file with specific subtitle_id → use translateSubtitle API
+        if (subtitleId && videoPaths.length === 1) {
+          const { data } = await translateSubtitle(videoPaths[0], {
+            subtitle_id: subtitleId,
+            target_lang: targetLang,
+            engine: transEngine,
+            preset: actualPreset,
+            custom_prompt: actualPrompt || undefined,
+          })
+          setJobs([{
+            id: data.job_id,
+            path: videoPaths[0],
+            status: 'pending',
+            progress: 0,
+          }])
+        } else {
+          const { data } = await batchTranslate(videoPaths, {
+            target_lang: targetLang,
+            engine: transEngine,
+            preset: actualPreset,
+            custom_prompt: actualPrompt || undefined,
+          })
+          const jobStatuses: JobStatus[] = data.job_ids.map((id, i) => ({
+            id,
+            path: videoPaths[i] || '',
+            status: 'pending',
+            progress: 0,
+          }))
+          setJobs(jobStatuses)
+          setSkipped(data.skipped || [])
+        }
       }
     } catch (err) {
       console.error('Batch operation failed:', err)
