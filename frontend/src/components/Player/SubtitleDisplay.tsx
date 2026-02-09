@@ -64,11 +64,12 @@ function parseVTT(vttText: string): SubtitleCue[] {
 }
 
 export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps) {
-  const { activeSubtitle, subtitleVisible, currentTime } = usePlayerStore()
+  const { activeSubtitle, secondarySubtitle, subtitleVisible, currentTime } = usePlayerStore()
   const { syncOffset, fontSize, fontFamily, textColor, bgOpacity } = useSubtitleSettings()
   const [cues, setCues] = useState<SubtitleCue[]>([])
+  const [secondaryCues, setSecondaryCues] = useState<SubtitleCue[]>([])
 
-  // Fetch and parse subtitle when active subtitle changes
+  // Fetch and parse primary subtitle
   useEffect(() => {
     if (!activeSubtitle) {
       setCues([])
@@ -84,21 +85,62 @@ export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps
       .catch(() => setCues([]))
   }, [activeSubtitle, path])
 
-  if (!activeSubtitle || !subtitleVisible || cues.length === 0) return null
+  // Fetch and parse secondary subtitle
+  useEffect(() => {
+    if (!secondarySubtitle) {
+      setSecondaryCues([])
+      return
+    }
+
+    const url = getSubtitleUrl(path, secondarySubtitle)
+    fetch(url)
+      .then((res) => res.text())
+      .then((text) => {
+        setSecondaryCues(parseVTT(text))
+      })
+      .catch(() => setSecondaryCues([]))
+  }, [secondarySubtitle, path])
+
+  if (!subtitleVisible) return null
+  if (!activeSubtitle && !secondarySubtitle) return null
 
   const adjustedTime = currentTime + syncOffset
-  const activeCues = cues.filter((c) => adjustedTime >= c.start && adjustedTime <= c.end)
+  const activePrimary = activeSubtitle
+    ? cues.filter((c) => adjustedTime >= c.start && adjustedTime <= c.end)
+    : []
+  const activeSecondary = secondarySubtitle
+    ? secondaryCues.filter((c) => adjustedTime >= c.start && adjustedTime <= c.end)
+    : []
 
-  if (activeCues.length === 0) return null
+  if (activePrimary.length === 0 && activeSecondary.length === 0) return null
 
   const baseFontSize = 1.4 // rem
   const computedFontSize = baseFontSize * (fontSize / 100)
+  const secondaryFontSize = computedFontSize * 0.85
 
   return (
     <div className="absolute bottom-16 left-0 right-0 flex flex-col items-center pointer-events-none z-40 px-8">
-      {activeCues.map((cue, i) => (
+      {/* Secondary subtitle (top, smaller, semi-transparent) */}
+      {activeSecondary.map((cue, i) => (
         <div
-          key={i}
+          key={`sec-${i}`}
+          className="px-2 py-0.5 rounded mb-1 text-center max-w-[80%]"
+          style={{
+            fontSize: `${secondaryFontSize}rem`,
+            fontFamily,
+            color: 'rgba(200,200,200,0.9)',
+            backgroundColor: `rgba(0, 0, 0, ${bgOpacity * 0.6})`,
+            whiteSpace: 'pre-wrap',
+            textShadow: '1px 1px 2px rgba(0,0,0,0.8)',
+          }}
+        >
+          {cue.text}
+        </div>
+      ))}
+      {/* Primary subtitle (bottom, normal) */}
+      {activePrimary.map((cue, i) => (
+        <div
+          key={`pri-${i}`}
           className="px-2 py-1 rounded mb-1 text-center max-w-[80%]"
           style={{
             fontSize: `${computedFontSize}rem`,

@@ -38,7 +38,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	presetsHandler := handlers.NewPresetsHandler(database)
 	whisperBackendsHandler := handlers.NewWhisperBackendsHandler(database)
 	geminiModelsHandler := handlers.NewGeminiModelsHandler(database)
-	adminHandler := handlers.NewAdminHandler(database, hlsManager)
+	adminHandler := handlers.NewAdminHandler(database, hlsManager, cfg.MediaPath)
 
 	// Internal routes (no auth — for container-to-container communication)
 	r.Route("/internal", func(r chi.Router) {
@@ -71,6 +71,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			r.Get("/files/thumbnail/*", filesHandler.GetThumbnail)
 			r.Get("/files/search", filesHandler.Search)
 			r.Post("/files/batch-info", filesHandler.BatchInfo)
+			r.Get("/files/siblings/*", filesHandler.GetSiblings)
 
 			// Streaming
 			r.Get("/stream/capabilities", streamHandler.CapabilitiesHandler)
@@ -110,6 +111,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				r.Post("/subtitle/upload/*", subtitleHandler.UploadSubtitle)
 				r.Post("/subtitle/batch-generate", subtitleHandler.BatchGenerate)
 				r.Post("/subtitle/batch-translate", subtitleHandler.BatchTranslate)
+				r.Post("/subtitle/convert/*", subtitleHandler.ConvertSubtitle)
 				r.Delete("/jobs/{id}", jobHandler.CancelJob)
 				r.Post("/jobs/{id}/retry", jobHandler.RetryJob)
 			})
@@ -165,6 +167,9 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 
 				// Admin — Active Sessions
 				r.Get("/admin/sessions", adminHandler.ListSessions)
+
+				// Admin — Dashboard Stats
+				r.Get("/admin/dashboard", adminHandler.DashboardStats)
 			})
 		})
 	})

@@ -7,9 +7,12 @@ import { listSubtitles } from '@/api/subtitle'
 import { detectBrowserCodecs } from '@/utils/codec'
 import { computeSessionID } from '@/utils/session'
 import { usePlayerStore } from '@/stores/playerStore'
+import { useToastStore } from '@/stores/toastStore'
+import { formatDuration } from '@/utils/format'
 import Controls from './Controls'
 import PlaybackStats from './PlaybackStats'
 import SubtitleDisplay from './SubtitleDisplay'
+import NextEpisodeOverlay from './NextEpisodeOverlay'
 
 interface PlayerProps {
   path: string
@@ -27,6 +30,8 @@ export default function Player({ path }: PlayerProps) {
   const sessionIDRef = useRef<string | null>(null)
   const [useHLS, setUseHLS] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [gestureText, setGestureText] = useState<string | null>(null)
+  const gestureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const {
     isPlaying,
@@ -217,6 +222,8 @@ export default function Player({ path }: PlayerProps) {
     setMediaInfo(null)
     setSubtitles([])
     setActiveSubtitle(null)
+    usePlayerStore.getState().clearABLoop()
+    usePlayerStore.getState().setChapters([])
     probeDurationRef.current = 0
     lastSavedTimeRef.current = 0
     hlsStartTimeRef.current = 0
@@ -229,6 +236,10 @@ export default function Player({ path }: PlayerProps) {
           const dur = parseFloat(data.duration)
           probeDurationRef.current = dur
           setDuration(dur)
+        }
+        // Set chapters if available
+        if (data.chapters && data.chapters.length > 0) {
+          usePlayerStore.getState().setChapters(data.chapters)
         }
       })
       .catch(() => {})
@@ -440,8 +451,14 @@ export default function Player({ path }: PlayerProps) {
       const abs = video.currentTime + hlsStartTimeRef.current
       absTimeRef.current = abs
       setCurrentTime(abs)
+
+      // A-B loop enforcement
+      const { abLoop } = usePlayerStore.getState()
+      if (abLoop.a !== null && abLoop.b !== null && abs >= abLoop.b) {
+        seek(abLoop.a)
+      }
     }
-  }, [setCurrentTime])
+  }, [setCurrentTime, seek])
 
   const handleLoadedMetadata = useCallback(() => {
     const video = videoRef.current
@@ -503,6 +520,91 @@ export default function Player({ path }: PlayerProps) {
     }
   }, [])
 
+  // Touch gesture controls (mobile)
+  useEffect(() => {
+    const container = containerRef.current
+    const video = videoRef.current
+    if (!container || !video || !('ontouchstart' in window)) return
+
+    let startX = 0
+    let startY = 0
+    let direction: 'none' | 'horizontal' | 'vertical' = 'none'
+    let startTime = 0
+    let startVolume = 0
+
+    const showGesture = (text: string) => {
+      setGestureText(text)
+      if (gestureTimerRef.current) clearTimeout(gestureTimerRef.current)
+      gestureTimerRef.current = setTimeout(() => setGestureText(null), 800)
+    }
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return
+      const touch = e.touches[0]
+      startX = touch.clientX
+      startY = touch.clientY
+      direction = 'none'
+      startTime = video.currentTime + hlsStartTimeRef.current
+      startVolume = video.volume
+    }
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return
+      const touch = e.touches[0]
+      const dx = touch.clientX - startX
+      const dy = touch.clientY - startY
+
+      // Determine direction after 30px minimum movement
+      if (direction === 'none') {
+        if (Math.abs(dx) < 30 && Math.abs(dy) < 30) return
+        if (Math.abs(dx) > Math.abs(dy) * 1.5) {
+          direction = 'horizontal'
+        } else if (Math.abs(dy) > Math.abs(dx) * 1.5) {
+          direction = 'vertical'
+        } else {
+          return
+        }
+      }
+
+      e.preventDefault()
+
+      if (direction === 'horizontal') {
+        // Horizontal swipe → seek
+        const rect = container.getBoundingClientRect()
+        const seekSeconds = (dx / rect.width) * 120 // max 120s for full width
+        const absTarget = startTime + seekSeconds
+        const sign = seekSeconds >= 0 ? '+' : ''
+        showGesture(`${sign}${Math.round(seekSeconds)}s`)
+        seek(absTarget)
+      } else if (direction === 'vertical') {
+        // Vertical swipe on right side → volume
+        const rect = container.getBoundingClientRect()
+        const isRightSide = startX > rect.left + rect.width / 2
+        if (isRightSide) {
+          const volDelta = -dy / rect.height
+          const newVol = Math.max(0, Math.min(1, startVolume + volDelta))
+          video.volume = newVol
+          usePlayerStore.getState().setVolume(newVol)
+          showGesture(`Vol ${Math.round(newVol * 100)}%`)
+        }
+      }
+    }
+
+    const handleTouchEnd = () => {
+      direction = 'none'
+    }
+
+    container.addEventListener('touchstart', handleTouchStart, { passive: true })
+    container.addEventListener('touchmove', handleTouchMove, { passive: false })
+    container.addEventListener('touchend', handleTouchEnd, { passive: true })
+
+    return () => {
+      container.removeEventListener('touchstart', handleTouchStart)
+      container.removeEventListener('touchmove', handleTouchMove)
+      container.removeEventListener('touchend', handleTouchEnd)
+    }
+  }, [seek])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -559,6 +661,56 @@ export default function Player({ path }: PlayerProps) {
         case 'C':
           setSubtitleVisible(!subtitleVisible)
           break
+        case 'p':
+        case 'P': {
+          // PiP
+          if (document.pictureInPictureEnabled) {
+            if (document.pictureInPictureElement) {
+              document.exitPictureInPicture().catch(() => {})
+            } else {
+              video.requestPictureInPicture().catch(() => {})
+            }
+          }
+          break
+        }
+        case 's':
+        case 'S': {
+          // Screenshot
+          try {
+            const canvas = document.createElement('canvas')
+            canvas.width = video.videoWidth
+            canvas.height = video.videoHeight
+            const ctx = canvas.getContext('2d')
+            if (ctx) {
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+              const dataUrl = canvas.toDataURL('image/png')
+              const a = document.createElement('a')
+              const fileName = path.split('/').pop()?.replace(/\.[^.]+$/, '') || 'screenshot'
+              a.href = dataUrl
+              a.download = `${fileName}_${formatDuration(absTime).replace(/:/g, '-')}.png`
+              a.click()
+              useToastStore.getState().addToast({ type: 'success', message: 'Screenshot saved' })
+            }
+          } catch {
+            // ignore
+          }
+          break
+        }
+        case 'b':
+        case 'B': {
+          // A-B Loop toggle
+          const store = usePlayerStore.getState()
+          store.toggleABLoop(absTime)
+          const { abLoop } = usePlayerStore.getState()
+          if (abLoop.a !== null && abLoop.b === null) {
+            useToastStore.getState().addToast({ type: 'info', message: `Loop A set at ${formatDuration(absTime)}` })
+          } else if (abLoop.a !== null && abLoop.b !== null) {
+            useToastStore.getState().addToast({ type: 'info', message: `Loop B set at ${formatDuration(abLoop.b)}` })
+          } else {
+            useToastStore.getState().addToast({ type: 'info', message: 'A-B loop cleared' })
+          }
+          break
+        }
         case '<': {
           // Decrease speed (Shift + ,)
           const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]
@@ -620,13 +772,23 @@ export default function Player({ path }: PlayerProps) {
         onPlay={handlePlay}
         onPause={handlePause}
       />
+      {/* Gesture feedback overlay */}
+      {gestureText && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
+          <div className="bg-black/70 text-white text-lg font-medium px-4 py-2 rounded-lg">
+            {gestureText}
+          </div>
+        </div>
+      )}
       <SubtitleDisplay videoRef={videoRef} path={path} />
+      <NextEpisodeOverlay path={path} />
       <PlaybackStats videoRef={videoRef} hlsRef={hlsRef} />
       <Controls
         videoRef={videoRef}
         onTogglePlay={togglePlay}
         onSeek={seek}
         onToggleFullscreen={toggleFullscreen}
+        filePath={path}
       />
     </div>
   )

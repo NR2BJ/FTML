@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { getTree, getThumbnailUrl, type FileEntry, uploadFile, deleteFile, moveFile, createFolder } from '@/api/files'
-import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid, CheckSquare, Upload, FolderPlus } from 'lucide-react'
+import { getTree, getThumbnailUrl, batchFileInfo, type FileEntry, type MediaInfo, uploadFile, deleteFile, moveFile, createFolder } from '@/api/files'
+import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid, CheckSquare, Upload, FolderPlus, Home, ChevronRight } from 'lucide-react'
 import { isVideoFile, formatBytes } from '@/utils/format'
 import { useBrowseStore } from '@/stores/browseStore'
 import { useAuthStore } from '@/stores/authStore'
@@ -9,6 +9,28 @@ import DetailsView from '@/components/Browse/DetailsView'
 import ContextMenu from '@/components/Browse/ContextMenu'
 import BatchSubtitleDialog from '@/components/Browse/BatchSubtitleDialog'
 import SubtitleManagerDialog from '@/components/Browse/SubtitleManagerDialog'
+
+// ── Badge helper ──
+
+function getBadges(info: MediaInfo): string[] {
+  const badges: string[] = []
+  // Resolution
+  if (info.height >= 2160) badges.push('4K')
+  else if (info.height >= 1080) badges.push('1080p')
+  else if (info.height >= 720) badges.push('720p')
+  else if (info.height >= 480) badges.push('480p')
+  // Video codec
+  const vc = (info.video_codec || '').toLowerCase()
+  if (vc.includes('hevc') || vc.includes('h265') || vc === 'h265') badges.push('HEVC')
+  else if (vc.includes('av1')) badges.push('AV1')
+  else if (vc.includes('vp9')) badges.push('VP9')
+  // HDR (10-bit or higher pixel format)
+  const pf = (info.pix_fmt || '').toLowerCase()
+  if (pf.includes('10le') || pf.includes('10be') || pf.includes('p010') || pf.includes('12le') || pf.includes('12be')) {
+    badges.push('HDR')
+  }
+  return badges
+}
 
 // ── Thumbnail component ──
 
@@ -61,13 +83,14 @@ function Thumbnail({ path, iconSize }: { path: string; iconSize: number }) {
 
 // ── Icons View (slider-controlled size) ──
 
-function IconsView({ entries, onClickEntry, iconSize, selectedPaths, onSelectionChange, onContextMenu }: {
+function IconsView({ entries, onClickEntry, iconSize, selectedPaths, onSelectionChange, onContextMenu, mediaInfoMap }: {
   entries: FileEntry[]
   onClickEntry: (e: FileEntry) => void
   iconSize: number
   selectedPaths: Set<string>
   onSelectionChange: (paths: Set<string>) => void
   onContextMenu: (e: React.MouseEvent, entries: FileEntry[]) => void
+  mediaInfoMap?: Map<string, MediaInfo>
 }) {
   // Scale font and padding based on icon size
   const fontSize = Math.max(11, Math.min(14, iconSize * 0.07))
@@ -137,6 +160,19 @@ function IconsView({ entries, onClickEntry, iconSize, selectedPaths, onSelection
             {isVideo ? (
               <div className="relative aspect-video bg-dark-800 overflow-hidden">
                 <Thumbnail path={entry.path} iconSize={iconSize} />
+                {/* Codec/Resolution badges */}
+                {mediaInfoMap?.get(entry.path) && (() => {
+                  const badges = getBadges(mediaInfoMap.get(entry.path)!)
+                  return badges.length > 0 ? (
+                    <div className="absolute bottom-1 left-1 flex gap-0.5 z-[5]">
+                      {badges.map((b) => (
+                        <span key={b} className="bg-black/70 text-[10px] text-gray-200 font-medium px-1 rounded leading-tight">
+                          {b}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null
+                })()}
               </div>
             ) : entry.is_dir ? (
               <div className="flex items-center justify-center aspect-video bg-dark-800">
@@ -201,6 +237,46 @@ export default function Browse() {
   const [actionError, setActionError] = useState('')
 
   const { viewMode, iconSize, setViewMode, setIconSize } = useBrowseStore()
+
+  // Media info for badges (icons view)
+  const [mediaInfoMap, setMediaInfoMap] = useState<Map<string, MediaInfo>>(new Map())
+  const badgeFetchedRef = useRef<Set<string>>(new Set())
+
+  // Batch fetch media info for video files (badges in icons view)
+  useEffect(() => {
+    if (viewMode !== 'icons') return
+
+    const videoPaths = entries
+      .filter((e) => !e.is_dir && isVideoFile(e.name))
+      .map((e) => e.path)
+      .filter((p) => !badgeFetchedRef.current.has(p))
+
+    if (videoPaths.length === 0) return
+
+    videoPaths.forEach((p) => badgeFetchedRef.current.add(p))
+
+    // Batch in groups of 20
+    for (let i = 0; i < videoPaths.length; i += 20) {
+      const batch = videoPaths.slice(i, i + 20)
+      batchFileInfo(batch)
+        .then(({ data }) => {
+          setMediaInfoMap((prev) => {
+            const next = new Map(prev)
+            data.forEach((r) => {
+              if (r.info) next.set(r.path, r.info)
+            })
+            return next
+          })
+        })
+        .catch(() => {})
+    }
+  }, [entries, viewMode])
+
+  // Reset media info when path changes
+  useEffect(() => {
+    setMediaInfoMap(new Map())
+    badgeFetchedRef.current = new Set()
+  }, [path])
 
   const refreshEntries = useCallback(() => {
     getTree(path)
@@ -318,19 +394,43 @@ export default function Browse() {
 
   return (
     <div>
-      {/* Header */}
+      {/* Header with breadcrumb */}
       <div className="flex items-center justify-between mb-4 gap-3">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
           {path && (
-            <>
-              <button onClick={goUp} className="text-gray-400 hover:text-white transition-colors">
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-              <h2 className="text-lg text-gray-300 font-medium truncate">
-                {path.split('/').pop()}
-              </h2>
-            </>
+            <button onClick={goUp} className="text-gray-400 hover:text-white transition-colors shrink-0 mr-1">
+              <ArrowLeft className="w-5 h-5" />
+            </button>
           )}
+          <button
+            onClick={() => navigate('/')}
+            className="text-gray-400 hover:text-white transition-colors shrink-0"
+            title="Home"
+          >
+            <Home className="w-4 h-4" />
+          </button>
+          {path && (() => {
+            const segments = path.split('/')
+            return segments.map((seg, i) => {
+              const isLast = i === segments.length - 1
+              const segPath = segments.slice(0, i + 1).join('/')
+              return (
+                <span key={i} className="flex items-center gap-1.5 min-w-0">
+                  <ChevronRight className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                  {isLast ? (
+                    <span className="text-sm font-medium text-white truncate">{seg}</span>
+                  ) : (
+                    <button
+                      onClick={() => navigate(`/browse/${segPath}`)}
+                      className="text-sm text-gray-400 hover:text-white transition-colors truncate"
+                    >
+                      {seg}
+                    </button>
+                  )}
+                </span>
+              )
+            })
+          })()}
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
@@ -453,6 +553,7 @@ export default function Browse() {
           selectedPaths={selectedPaths}
           onSelectionChange={setSelectedPaths}
           onContextMenu={handleContextMenu}
+          mediaInfoMap={mediaInfoMap}
         />
       )}
       {viewMode === 'details' && (

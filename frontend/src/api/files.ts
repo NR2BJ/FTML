@@ -25,6 +25,12 @@ export interface AudioStreamInfo {
   title?: string
 }
 
+export interface ChapterInfo {
+  title: string
+  start_time: number
+  end_time: number
+}
+
 export interface MediaInfo {
   duration: string
   size: string
@@ -34,8 +40,11 @@ export interface MediaInfo {
   width: number
   height: number
   frame_rate: string
+  pix_fmt?: string
+  container?: string
   streams: any[]
   audio_streams?: AudioStreamInfo[]
+  chapters?: ChapterInfo[]
 }
 
 export const getTree = (path = '') =>
@@ -80,3 +89,12 @@ export const moveFile = (source: string, destination: string) =>
 
 export const createFolder = (path: string) =>
   client.post(`/files/mkdir/${path}`)
+
+export interface SiblingsResponse {
+  current: string
+  dir: string
+  files: string[]
+}
+
+export const getSiblings = (path: string) =>
+  client.get<SiblingsResponse>(`/files/siblings/${path}`)

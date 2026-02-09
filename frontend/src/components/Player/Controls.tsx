@@ -1,19 +1,22 @@
 import { RefObject } from 'react'
 import { usePlayerStore } from '@/stores/playerStore'
-import { Play, Pause, Volume2, VolumeX, Maximize, SkipBack, SkipForward, BarChart2 } from 'lucide-react'
+import { useToastStore } from '@/stores/toastStore'
+import { Play, Pause, Volume2, VolumeX, Maximize, SkipBack, SkipForward, BarChart2, PictureInPicture2, Camera, Repeat } from 'lucide-react'
 import { formatDuration } from '@/utils/format'
 import SubtitleSelector from './SubtitleSelector'
 import AudioSelector from './AudioSelector'
 import QualitySelector from './QualitySelector'
+import ChapterList from './ChapterList'
 
 interface ControlsProps {
   videoRef: RefObject<HTMLVideoElement | null>
   onTogglePlay: () => void
   onSeek: (time: number) => void
   onToggleFullscreen: () => void
+  filePath: string
 }
 
-export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFullscreen }: ControlsProps) {
+export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFullscreen, filePath }: ControlsProps) {
   const {
     isPlaying,
     currentTime,
@@ -22,11 +25,16 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
     muted,
     playbackRate,
     showStats,
+    abLoop,
+    chapters,
     setVolume,
     setMuted,
     setPlaybackRate,
     setShowStats,
+    toggleABLoop,
+    clearABLoop,
   } = usePlayerStore()
+  const addToast = useToastStore((s) => s.addToast)
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0
 
@@ -61,11 +69,66 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
     if (videoRef.current) videoRef.current.playbackRate = next
   }
 
+  // PiP toggle
+  const togglePiP = async () => {
+    const video = videoRef.current
+    if (!video) return
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture()
+      } else if (document.pictureInPictureEnabled) {
+        await video.requestPictureInPicture()
+      }
+    } catch {
+      addToast({ type: 'error', message: 'PiP not supported' })
+    }
+  }
+
+  // Screenshot
+  const takeScreenshot = () => {
+    const video = videoRef.current
+    if (!video) return
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      const dataUrl = canvas.toDataURL('image/png')
+      const a = document.createElement('a')
+      const fileName = filePath.split('/').pop()?.replace(/\.[^.]+$/, '') || 'screenshot'
+      a.href = dataUrl
+      a.download = `${fileName}_${formatDuration(currentTime).replace(/:/g, '-')}.png`
+      a.click()
+      addToast({ type: 'success', message: 'Screenshot saved' })
+    } catch {
+      addToast({ type: 'error', message: 'Screenshot failed' })
+    }
+  }
+
+  // A-B Loop
+  const handleABLoop = () => {
+    toggleABLoop(currentTime)
+    const { abLoop: loop } = usePlayerStore.getState()
+    if (loop.a !== null && loop.b === null) {
+      addToast({ type: 'info', message: `Loop A set at ${formatDuration(currentTime)}` })
+    } else if (loop.a !== null && loop.b !== null) {
+      addToast({ type: 'info', message: `Loop B set at ${formatDuration(loop.b)}` })
+    } else {
+      addToast({ type: 'info', message: 'A-B loop cleared' })
+    }
+  }
+
+  // A-B loop progress positions
+  const loopAPos = abLoop.a !== null && duration > 0 ? (abLoop.a / duration) * 100 : null
+  const loopBPos = abLoop.b !== null && duration > 0 ? (abLoop.b / duration) * 100 : null
+
   return (
     <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
       {/* Progress bar */}
       <div
-        className="h-1 mx-4 mb-2 bg-gray-600 rounded-full cursor-pointer group/progress hover:h-2 transition-all"
+        className="h-1 mx-4 mb-2 bg-gray-600 rounded-full cursor-pointer group/progress hover:h-2 transition-all relative"
         onClick={handleProgressClick}
       >
         <div
@@ -74,6 +137,37 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
         >
           <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-primary-500 rounded-full opacity-0 group-hover/progress:opacity-100 transition-opacity" />
         </div>
+        {/* A-B Loop markers */}
+        {loopAPos !== null && (
+          <div
+            className="absolute top-1/2 -translate-y-1/2 w-1 h-3 bg-yellow-400 rounded-full z-10"
+            style={{ left: `${loopAPos}%` }}
+            title={`A: ${formatDuration(abLoop.a!)}`}
+          />
+        )}
+        {loopBPos !== null && (
+          <div
+            className="absolute top-1/2 -translate-y-1/2 w-1 h-3 bg-yellow-400 rounded-full z-10"
+            style={{ left: `${loopBPos}%` }}
+            title={`B: ${formatDuration(abLoop.b!)}`}
+          />
+        )}
+        {/* A-B Loop highlight region */}
+        {loopAPos !== null && loopBPos !== null && (
+          <div
+            className="absolute top-0 bottom-0 bg-yellow-400/20 pointer-events-none"
+            style={{ left: `${loopAPos}%`, width: `${loopBPos - loopAPos}%` }}
+          />
+        )}
+        {/* Chapter markers */}
+        {duration > 0 && chapters.map((ch, i) => (
+          <div
+            key={i}
+            className="absolute top-0 bottom-0 w-0.5 bg-yellow-500/60 z-10 pointer-events-none"
+            style={{ left: `${(ch.start_time / duration) * 100}%` }}
+            title={ch.title || `Chapter ${i + 1}`}
+          />
+        ))}
       </div>
 
       {/* Controls bar */}
@@ -107,11 +201,45 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
         {/* Audio Track */}
         <AudioSelector />
 
+        {/* Chapters */}
+        <ChapterList onSeek={onSeek} />
+
         {/* Subtitles */}
         <SubtitleSelector />
 
         {/* Quality */}
         <QualitySelector />
+
+        {/* A-B Loop */}
+        <button
+          onClick={handleABLoop}
+          className={`transition-colors px-1 ${
+            abLoop.a !== null ? 'text-yellow-400 hover:text-yellow-300' : 'text-gray-300 hover:text-white'
+          }`}
+          title={abLoop.a === null ? 'Set loop point A (B)' : abLoop.b === null ? 'Set loop point B (B)' : 'Clear A-B loop (B)'}
+        >
+          <Repeat className="w-4.5 h-4.5" />
+        </button>
+
+        {/* Screenshot */}
+        <button
+          onClick={takeScreenshot}
+          className="text-gray-300 hover:text-white transition-colors px-1"
+          title="Screenshot (S)"
+        >
+          <Camera className="w-4.5 h-4.5" />
+        </button>
+
+        {/* PiP */}
+        {document.pictureInPictureEnabled && (
+          <button
+            onClick={togglePiP}
+            className="text-gray-300 hover:text-white transition-colors px-1"
+            title="Picture-in-Picture (P)"
+          >
+            <PictureInPicture2 className="w-4.5 h-4.5" />
+          </button>
+        )}
 
         {/* Speed */}
         <button

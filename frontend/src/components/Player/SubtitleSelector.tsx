@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
-import { Subtitles, Settings, Wand2, Languages, Trash2, Upload } from 'lucide-react'
+import { Subtitles, Settings, Wand2, Languages, Trash2, Upload, Download } from 'lucide-react'
 import { usePlayerStore } from '@/stores/playerStore'
+import { useToastStore } from '@/stores/toastStore'
 import { useAuthStore } from '@/stores/authStore'
-import { deleteSubtitle, listSubtitles, uploadSubtitle } from '@/api/subtitle'
+import { deleteSubtitle, listSubtitles, uploadSubtitle, convertSubtitle } from '@/api/subtitle'
 import SubtitleSettings from './SubtitleSettings'
 import SubtitleGenerate from './SubtitleGenerate'
 import SubtitleTranslate from './SubtitleTranslate'
@@ -17,18 +18,23 @@ export default function SubtitleSelector() {
   const [translateSource, setTranslateSource] = useState<SubtitleEntry | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [converting, setConverting] = useState(false)
+  const addToast = useToastStore((s) => s.addToast)
   const menuRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const {
     subtitles,
     activeSubtitle,
+    secondarySubtitle,
     subtitleVisible,
     currentFile,
     setActiveSubtitle,
+    setSecondarySubtitle,
     setSubtitleVisible,
     setSubtitles,
   } = usePlayerStore()
+  const [subMode, setSubMode] = useState<'primary' | 'secondary'>('primary')
 
   // Close menu on outside click
   useEffect(() => {
@@ -67,6 +73,26 @@ export default function SubtitleSelector() {
     }
   }
 
+  const handleConvert = async (sub: SubtitleEntry, targetFormat: string) => {
+    if (!currentFile) return
+    setConverting(true)
+    try {
+      const { data } = await convertSubtitle(currentFile, sub.id, targetFormat)
+      const blob = new Blob([data as BlobPart])
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${sub.label}.${targetFormat}`
+      a.click()
+      URL.revokeObjectURL(url)
+      addToast({ type: 'success', message: `Converted to ${targetFormat.toUpperCase()}` })
+    } catch {
+      addToast({ type: 'error', message: 'Conversion failed' })
+    } finally {
+      setConverting(false)
+    }
+  }
+
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file || !currentFile) return
@@ -101,7 +127,29 @@ export default function SubtitleSelector() {
       </button>
 
       {panel === 'menu' && (
-        <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg py-1 min-w-[220px] z-50">
+        <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg py-1 min-w-[240px] z-50">
+          {/* Primary / Secondary tabs */}
+          {subtitles.length > 0 && (
+            <div className="flex border-b border-gray-700 mx-1 mb-1">
+              <button
+                onClick={() => setSubMode('primary')}
+                className={`flex-1 text-xs py-1.5 transition-colors ${
+                  subMode === 'primary' ? 'text-primary-400 border-b-2 border-primary-400' : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                Primary
+              </button>
+              <button
+                onClick={() => setSubMode('secondary')}
+                className={`flex-1 text-xs py-1.5 transition-colors ${
+                  subMode === 'secondary' ? 'text-primary-400 border-b-2 border-primary-400' : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                Secondary
+              </button>
+            </div>
+          )}
+
           {subtitles.length === 0 ? (
             <div className="px-3 py-1.5 text-sm text-gray-500">
               No subtitles available
@@ -111,11 +159,15 @@ export default function SubtitleSelector() {
               {/* Off option */}
               <button
                 onClick={() => {
-                  setActiveSubtitle(null)
+                  if (subMode === 'primary') {
+                    setActiveSubtitle(null)
+                  } else {
+                    setSecondarySubtitle(null)
+                  }
                   setPanel(null)
                 }}
                 className={`block w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 transition-colors ${
-                  activeSubtitle === null ? 'text-primary-400' : 'text-gray-300'
+                  (subMode === 'primary' ? activeSubtitle : secondarySubtitle) === null ? 'text-primary-400' : 'text-gray-300'
                 }`}
               >
                 Off
@@ -123,54 +175,86 @@ export default function SubtitleSelector() {
 
               <div className="border-t border-gray-700 my-1" />
 
-              {subtitles.map((sub) => (
-                <div
-                  key={sub.id}
-                  className="flex items-center hover:bg-gray-700 transition-colors group"
-                >
-                  <button
-                    onClick={() => {
-                      setActiveSubtitle(sub.id)
-                      setSubtitleVisible(true)
-                      setPanel(null)
-                    }}
-                    className={`flex-1 text-left px-3 py-1.5 text-sm ${
-                      activeSubtitle === sub.id ? 'text-primary-400' : 'text-gray-300'
-                    }`}
+              {subtitles.map((sub) => {
+                const isActive = subMode === 'primary' ? activeSubtitle === sub.id : secondarySubtitle === sub.id
+                return (
+                  <div
+                    key={sub.id}
+                    className="flex items-center hover:bg-gray-700 transition-colors group"
                   >
-                    <span>{sub.label}</span>
-                    <span className="text-xs text-gray-500 ml-2">
-                      {sub.type === 'embedded' ? 'Embedded' : sub.type === 'generated' ? 'AI' : sub.format.toUpperCase()}
-                    </span>
-                  </button>
-                  {/* Action buttons */}
-                  <div className={`flex items-center transition-opacity ${
-                    sub.type === 'generated'
-                      ? 'opacity-60 group-hover:opacity-100'
-                      : 'opacity-0 group-hover:opacity-100'
-                  }`}>
-                    {canEdit && (
-                      <button
-                        onClick={() => openTranslate(sub)}
-                        className="p-1 text-gray-500 hover:text-primary-400"
-                        title="Translate this subtitle"
-                      >
-                        <Languages className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                    {canEdit && sub.type === 'generated' && (
-                      <button
-                        onClick={() => handleDelete(sub)}
-                        disabled={deleting === sub.id}
-                        className="p-1 mr-1 text-gray-500 hover:text-red-400 disabled:opacity-50"
-                        title="Delete this subtitle"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                    <button
+                      onClick={() => {
+                        if (subMode === 'primary') {
+                          setActiveSubtitle(sub.id)
+                        } else {
+                          setSecondarySubtitle(sub.id)
+                        }
+                        setSubtitleVisible(true)
+                        setPanel(null)
+                      }}
+                      className={`flex-1 text-left px-3 py-1.5 text-sm ${
+                        isActive ? 'text-primary-400' : 'text-gray-300'
+                      }`}
+                    >
+                      <span>{sub.label}</span>
+                      <span className="text-xs text-gray-500 ml-2">
+                        {sub.type === 'embedded' ? 'Embedded' : sub.type === 'generated' ? 'AI' : sub.format.toUpperCase()}
+                      </span>
+                    </button>
+                    {/* Action buttons (only for primary mode) */}
+                    {subMode === 'primary' && (
+                      <div className={`flex items-center transition-opacity ${
+                        sub.type === 'generated'
+                          ? 'opacity-60 group-hover:opacity-100'
+                          : 'opacity-0 group-hover:opacity-100'
+                      }`}>
+                        {/* Download/convert dropdown */}
+                        {canEdit && sub.type !== 'embedded' && (
+                          <div className="relative group/dl">
+                            <button
+                              className="p-1 text-gray-500 hover:text-green-400"
+                              title="Download / Convert"
+                              disabled={converting}
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+                            <div className="hidden group-hover/dl:block absolute bottom-full right-0 mb-1 bg-dark-800 border border-dark-600 rounded-lg shadow-xl z-50 py-1 min-w-[80px]">
+                              {['srt', 'vtt', 'ass'].filter(f => f !== sub.format).map(fmt => (
+                                <button
+                                  key={fmt}
+                                  onClick={() => handleConvert(sub, fmt)}
+                                  className="block w-full text-left px-3 py-1 text-xs text-gray-300 hover:bg-dark-700 uppercase"
+                                >
+                                  {fmt}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {canEdit && (
+                          <button
+                            onClick={() => openTranslate(sub)}
+                            className="p-1 text-gray-500 hover:text-primary-400"
+                            title="Translate this subtitle"
+                          >
+                            <Languages className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {canEdit && sub.type === 'generated' && (
+                          <button
+                            onClick={() => handleDelete(sub)}
+                            disabled={deleting === sub.id}
+                            className="p-1 mr-1 text-gray-500 hover:text-red-400 disabled:opacity-50"
+                            title="Delete this subtitle"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </>
           )}
 

@@ -78,3 +78,30 @@ export interface StreamSession {
 
 export const listSessions = () =>
   client.get<StreamSession[]>('/admin/sessions')
+
+// Dashboard
+export interface DashboardStats {
+  gpu: {
+    device: string
+    vram_total: number
+    vram_free: number
+    driver: string
+  }
+  storage: {
+    total: number
+    used: number
+    free: number
+  }
+  system: {
+    go_version: string
+    goroutines: number
+    uptime_seconds: number
+    mem_alloc: number
+    mem_sys: number
+  }
+  active_sessions: number
+  user_count: number
+}
+
+export const getDashboardStats = () =>
+  client.get<DashboardStats>('/admin/dashboard')

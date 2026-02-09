@@ -3,12 +3,24 @@ package ffmpeg
 import (
 	"encoding/json"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
 type ProbeResult struct {
-	Format  ProbeFormat   `json:"format"`
-	Streams []ProbeStream `json:"streams"`
+	Format   ProbeFormat    `json:"format"`
+	Streams  []ProbeStream  `json:"streams"`
+	Chapters []ProbeChapter `json:"chapters,omitempty"`
+}
+
+type ProbeChapter struct {
+	ID        int               `json:"id"`
+	TimeBase  string            `json:"time_base"`
+	Start     int64             `json:"start"`
+	StartTime string            `json:"start_time"`
+	End       int64             `json:"end"`
+	EndTime   string            `json:"end_time"`
+	Tags      map[string]string `json:"tags,omitempty"`
 }
 
 type ProbeFormat struct {
@@ -47,6 +59,13 @@ type AudioStreamInfo struct {
 	Title         string `json:"title,omitempty"`
 }
 
+// ChapterInfo describes a single chapter marker.
+type ChapterInfo struct {
+	Title     string  `json:"title"`
+	StartTime float64 `json:"start_time"`
+	EndTime   float64 `json:"end_time"`
+}
+
 type MediaInfo struct {
 	Duration     string            `json:"duration"`
 	Size         string            `json:"size"`
@@ -60,6 +79,7 @@ type MediaInfo struct {
 	FrameRate    string            `json:"frame_rate"`
 	Streams      []ProbeStream     `json:"streams"`
 	AudioStreams []AudioStreamInfo  `json:"audio_streams,omitempty"`
+	Chapters    []ChapterInfo      `json:"chapters,omitempty"`
 }
 
 func Probe(filePath string) (*MediaInfo, error) {
@@ -68,6 +88,7 @@ func Probe(filePath string) (*MediaInfo, error) {
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",
+		"-show_chapters",
 		filePath,
 	)
 
@@ -123,7 +144,33 @@ func Probe(filePath string) (*MediaInfo, error) {
 		}
 	}
 
+	// Extract chapters
+	for _, ch := range result.Chapters {
+		title := ""
+		if ch.Tags != nil {
+			title = ch.Tags["title"]
+		}
+		startTime := parseFloat(ch.StartTime)
+		endTime := parseFloat(ch.EndTime)
+		if startTime >= 0 {
+			info.Chapters = append(info.Chapters, ChapterInfo{
+				Title:     title,
+				StartTime: startTime,
+				EndTime:   endTime,
+			})
+		}
+	}
+
 	return info, nil
+}
+
+// parseFloat safely converts a string to float64, returning 0 on error.
+func parseFloat(s string) float64 {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return f
 }
 
 // normalizeContainerName maps ffprobe format_name to a simple container name.

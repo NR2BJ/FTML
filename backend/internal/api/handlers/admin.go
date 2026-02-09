@@ -3,22 +3,33 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"runtime"
 	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/video-stream/backend/internal/api/middleware"
 	"github.com/video-stream/backend/internal/auth"
 	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/ffmpeg"
+	"github.com/video-stream/backend/internal/gpu"
 )
+
+var startTime = time.Now()
 
 type AdminHandler struct {
 	db         *db.Database
 	hlsManager *ffmpeg.HLSManager
+	mediaPath  string
 }
 
-func NewAdminHandler(db *db.Database, hlsManager *ffmpeg.HLSManager) *AdminHandler {
-	return &AdminHandler{db: db, hlsManager: hlsManager}
+func NewAdminHandler(db *db.Database, hlsManager *ffmpeg.HLSManager, mediaPath ...string) *AdminHandler {
+	mp := ""
+	if len(mediaPath) > 0 {
+		mp = mediaPath[0]
+	}
+	return &AdminHandler{db: db, hlsManager: hlsManager, mediaPath: mp}
 }
 
 // ListUsers returns all users
@@ -280,4 +291,49 @@ func (h *AdminHandler) PendingRegistrationCount(w http.ResponseWriter, r *http.R
 func (h *AdminHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 	sessions := h.hlsManager.ListSessions()
 	jsonResponse(w, sessions, http.StatusOK)
+}
+
+// DashboardStats returns system stats for the admin dashboard
+func (h *AdminHandler) DashboardStats(w http.ResponseWriter, r *http.Request) {
+	// GPU info (cached)
+	gpuInfo := gpu.DetectGPU()
+
+	// Disk usage for media path
+	var diskTotal, diskFree, diskUsed uint64
+	if h.mediaPath != "" {
+		var stat syscall.Statfs_t
+		if err := syscall.Statfs(h.mediaPath, &stat); err == nil {
+			diskTotal = stat.Blocks * uint64(stat.Bsize)
+			diskFree = stat.Bavail * uint64(stat.Bsize)
+			diskUsed = diskTotal - diskFree
+		}
+	}
+
+	// Memory usage
+	var memStat runtime.MemStats
+	runtime.ReadMemStats(&memStat)
+
+	// Active sessions
+	sessions := h.hlsManager.ListSessions()
+
+	// User count
+	users, _ := h.db.ListUsers()
+
+	jsonResponse(w, map[string]interface{}{
+		"gpu": gpuInfo,
+		"storage": map[string]uint64{
+			"total": diskTotal,
+			"used":  diskUsed,
+			"free":  diskFree,
+		},
+		"system": map[string]interface{}{
+			"go_version":    runtime.Version(),
+			"goroutines":    runtime.NumGoroutine(),
+			"uptime_seconds": int(time.Since(startTime).Seconds()),
+			"mem_alloc":     memStat.Alloc,
+			"mem_sys":       memStat.Sys,
+		},
+		"active_sessions": len(sessions),
+		"user_count":      len(users),
+	}, http.StatusOK)
 }

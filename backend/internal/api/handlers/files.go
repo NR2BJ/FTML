@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -154,6 +155,86 @@ func (h *FilesHandler) BatchInfo(w http.ResponseWriter, r *http.Request) {
 
 	wg.Wait()
 	jsonResponse(w, results, http.StatusOK)
+}
+
+// GetSiblings returns video files in the same directory as the given file, naturally sorted.
+// GET /files/siblings/* — returns { current: "name.mkv", files: ["a.mkv", "b.mkv", ...] }
+func (h *FilesHandler) GetSiblings(w http.ResponseWriter, r *http.Request) {
+	path := extractPath(r)
+	if path == "" {
+		jsonError(w, "path is required", http.StatusBadRequest)
+		return
+	}
+
+	dir := filepath.Dir(path)
+	if dir == "." {
+		dir = ""
+	}
+	baseName := filepath.Base(path)
+
+	entries, err := storage.ListDirectory(h.mediaPath, dir)
+	if err != nil {
+		jsonError(w, "failed to list directory", http.StatusInternalServerError)
+		return
+	}
+
+	// Filter to video files only and naturally sort
+	var videoFiles []string
+	for _, e := range entries {
+		if !e.IsDir && storage.IsVideoFile(e.Name) {
+			videoFiles = append(videoFiles, e.Name)
+		}
+	}
+	sort.Slice(videoFiles, func(i, j int) bool {
+		return naturalLess(videoFiles[i], videoFiles[j])
+	})
+
+	jsonResponse(w, map[string]interface{}{
+		"current": baseName,
+		"dir":     dir,
+		"files":   videoFiles,
+	}, http.StatusOK)
+}
+
+// naturalLess performs a natural sort comparison (e.g., "ep2" < "ep10")
+func naturalLess(a, b string) bool {
+	la, lb := strings.ToLower(a), strings.ToLower(b)
+	ia, ib := 0, 0
+	for ia < len(la) && ib < len(lb) {
+		ca, cb := la[ia], lb[ib]
+		if isDigit(ca) && isDigit(cb) {
+			// Compare numeric segments
+			na, ea := extractNumber(la, ia)
+			nb, eb := extractNumber(lb, ib)
+			if na != nb {
+				return na < nb
+			}
+			ia, ib = ea, eb
+		} else {
+			if ca != cb {
+				return ca < cb
+			}
+			ia++
+			ib++
+		}
+	}
+	return len(la) < len(lb)
+}
+
+func isDigit(c byte) bool {
+	return c >= '0' && c <= '9'
+}
+
+func extractNumber(s string, start int) (int, int) {
+	end := start
+	for end < len(s) && isDigit(s[end]) {
+		end++
+	}
+	n := 0
+	for i := start; i < end; i++ {
+		n = n*10 + int(s[i]-'0')
+	}
+	return n, end
 }
 
 // safePath validates that the resolved path is within the media directory.

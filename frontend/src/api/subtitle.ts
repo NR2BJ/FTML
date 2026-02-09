@@ -101,3 +101,14 @@ export const batchGenerate = (paths: string[], params: Omit<GenerateParams, 'pat
 
 export const batchTranslate = (paths: string[], params: { target_lang: string; engine: string; preset: string; custom_prompt?: string }) =>
   client.post<BatchResult>('/subtitle/batch-translate', { paths, ...params })
+
+// Subtitle format conversion — downloads as file
+export const convertSubtitle = async (videoPath: string, subtitleId: string, targetFormat: string) => {
+  const response = await client.post(`/subtitle/convert/${videoPath}`, {
+    subtitle_id: subtitleId,
+    target_format: targetFormat,
+  }, {
+    responseType: 'blob',
+  })
+  return response
+}

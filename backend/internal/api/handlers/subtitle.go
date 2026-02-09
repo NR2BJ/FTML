@@ -718,3 +718,157 @@ func (h *SubtitleHandler) DeleteSubtitle(w http.ResponseWriter, r *http.Request)
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// ConvertSubtitle converts a subtitle file between formats.
+// POST /subtitle/convert/*  body: { "subtitle_id": "...", "target_format": "srt|vtt|ass" }
+func (h *SubtitleHandler) ConvertSubtitle(w http.ResponseWriter, r *http.Request) {
+	videoPath := extractPath(r)
+	if videoPath == "" {
+		jsonError(w, "video path required", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		SubtitleID   string `json:"subtitle_id"`
+		TargetFormat string `json:"target_format"` // "srt", "vtt", "ass"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.SubtitleID == "" || req.TargetFormat == "" {
+		jsonError(w, "subtitle_id and target_format are required", http.StatusBadRequest)
+		return
+	}
+
+	targetFmt := strings.ToLower(req.TargetFormat)
+	if targetFmt != "srt" && targetFmt != "vtt" && targetFmt != "ass" {
+		jsonError(w, "unsupported target format (srt, vtt, ass)", http.StatusBadRequest)
+		return
+	}
+
+	// Find the subtitle file
+	subDir := filepath.Join(h.subtitlePath, videoPath)
+	entries, err := filepath.Glob(filepath.Join(subDir, req.SubtitleID+".*"))
+	if err != nil || len(entries) == 0 {
+		// Also check embedded subtitle references
+		jsonError(w, "subtitle not found", http.StatusNotFound)
+		return
+	}
+
+	srcPath := entries[0]
+	srcExt := strings.TrimPrefix(strings.ToLower(filepath.Ext(srcPath)), ".")
+
+	// If source format is the same as target, just serve the file
+	if srcExt == targetFmt {
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			jsonError(w, "failed to read subtitle", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		baseName := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.%s\"", baseName, targetFmt))
+		w.Write(data)
+		return
+	}
+
+	// SRT → VTT (Go conversion)
+	if srcExt == "srt" && targetFmt == "vtt" {
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			jsonError(w, "failed to read subtitle", http.StatusInternalServerError)
+			return
+		}
+		converted := srtToVTT(data)
+		baseName := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.vtt\"", baseName))
+		w.Write(converted)
+		return
+	}
+
+	// VTT → SRT (Go conversion)
+	if srcExt == "vtt" && targetFmt == "srt" {
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			jsonError(w, "failed to read subtitle", http.StatusInternalServerError)
+			return
+		}
+		converted := vttToSRT(data)
+		baseName := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.srt\"", baseName))
+		w.Write(converted)
+		return
+	}
+
+	// For ASS conversions, use FFmpeg
+	var outputData []byte
+	cmd := exec.Command("ffmpeg",
+		"-i", srcPath,
+		"-f", targetFmt,
+		"-",
+	)
+	outputData, err = cmd.Output()
+	if err != nil {
+		jsonError(w, "conversion failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	baseName := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.%s\"", baseName, targetFmt))
+	w.Write(outputData)
+}
+
+// vttToSRT converts WebVTT to SRT format
+func vttToSRT(vttData []byte) []byte {
+	var buf bytes.Buffer
+	content := strings.ReplaceAll(string(vttData), "\r\n", "\n")
+
+	// Skip WEBVTT header
+	lines := strings.Split(content, "\n")
+	cueIndex := 1
+	i := 0
+	// Skip header lines
+	for i < len(lines) {
+		if strings.TrimSpace(lines[i]) == "" {
+			i++
+			break
+		}
+		i++
+	}
+
+	timestampRe := regexp.MustCompile(`(\d{2}:\d{2}:\d{2})\.(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2})\.(\d{3})`)
+
+	for i < len(lines) {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			i++
+			continue
+		}
+
+		// Check if this is a timestamp line
+		if timestampRe.MatchString(line) {
+			buf.WriteString(fmt.Sprintf("%d\n", cueIndex))
+			cueIndex++
+			// Convert VTT dots to SRT commas
+			line = timestampRe.ReplaceAllString(line, "$1,$2 --> $3,$4")
+			buf.WriteString(line + "\n")
+			i++
+			// Read text lines until empty line
+			for i < len(lines) && strings.TrimSpace(lines[i]) != "" {
+				buf.WriteString(lines[i] + "\n")
+				i++
+			}
+			buf.WriteString("\n")
+		} else {
+			// Skip cue identifiers or other non-timestamp lines
+			i++
+		}
+	}
+
+	return buf.Bytes()
+}
