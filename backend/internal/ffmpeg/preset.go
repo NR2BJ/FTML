@@ -247,7 +247,7 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 			ptSegFmt = "mpegts"
 		}
 
-		ptLabel := "Original (Audio Convert)"
+		ptLabel := "Original (AAC)"
 		ptDesc := "Video direct, audio AAC"
 		if srcBitrate > 0 {
 			ptDesc = fmt.Sprintf("%s video + AAC audio", formatBitrateHuman(srcBitrate))
