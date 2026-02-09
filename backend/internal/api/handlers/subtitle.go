@@ -572,6 +572,44 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 			}
 		}
 
+		// Fallback: try embedded text subtitles
+		if subtitleID == "" {
+			fullPath := filepath.Join(h.mediaPath, path)
+			info, probeErr := ffmpeg.Probe(fullPath)
+			if probeErr == nil {
+				for _, s := range info.Streams {
+					if s.CodecType == "subtitle" && textSubtitleCodecs[s.CodecName] {
+						subtitleID = fmt.Sprintf("embedded:%d", s.Index)
+						break
+					}
+				}
+			}
+		}
+
+		// Fallback: try external subtitle files
+		if subtitleID == "" {
+			fullPath := filepath.Join(h.mediaPath, path)
+			videoDir := filepath.Dir(fullPath)
+			videoBase := strings.TrimSuffix(filepath.Base(fullPath), filepath.Ext(fullPath))
+			dirEntries, readErr := os.ReadDir(videoDir)
+			if readErr == nil {
+				for _, entry := range dirEntries {
+					if entry.IsDir() {
+						continue
+					}
+					name := entry.Name()
+					if !storage.IsSubtitleFile(name) {
+						continue
+					}
+					subBase := strings.TrimSuffix(name, filepath.Ext(name))
+					if strings.HasPrefix(subBase, videoBase) {
+						subtitleID = "external:" + name
+						break
+					}
+				}
+			}
+		}
+
 		if subtitleID == "" {
 			skipped = append(skipped, path)
 			continue

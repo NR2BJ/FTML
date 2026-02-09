@@ -430,10 +430,17 @@ export default function Browse() {
   }, [])
 
   const openBatchDialog = (mode: BatchMode) => {
-    const files = entries.filter(e => selectedPaths.has(e.path))
-    if (files.length > 0) {
-      setBatchDialog({ mode, files })
+    // Use context menu entries (set at right-click time) if available
+    const files = contextMenu?.entries ?? entries.filter(e => selectedPaths.has(e.path))
+    if (files.length === 0) return
+
+    // Single video + translate → open Subtitle Manager to pick which subtitle
+    if (mode === 'translate' && files.length === 1 && !files[0].is_dir && isVideoFile(files[0].name)) {
+      setSubtitleManager(files[0])
+      return
     }
+
+    setBatchDialog({ mode, files })
   }
 
   const selectedCount = selectedPaths.size

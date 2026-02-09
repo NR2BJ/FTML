@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/video-stream/backend/internal/job"
@@ -66,9 +67,14 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		return fmt.Errorf("load subtitle: %w", err)
 	}
 
+	log.Printf("[translate] loaded subtitle: id=%s len=%d first100=%q",
+		params.SubtitleID, len(vttContent), truncateStr(vttContent, 100))
+
 	// Parse VTT
 	cues := ParseVTT(vttContent)
 	if len(cues) == 0 {
+		log.Printf("[translate] VTT parse returned 0 cues, content preview (%d bytes): %q",
+			len(vttContent), truncateStr(vttContent, 500))
 		return fmt.Errorf("no subtitle cues found in source")
 	}
 
@@ -144,17 +150,21 @@ func (s *Service) loadSubtitle(videoPath, subtitleID string) (string, error) {
 			return srtToVTTString(string(data)), nil
 		case ".ass", ".ssa":
 			// Convert ASS/SSA to VTT via FFmpeg
-			cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
+			cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "warning",
 				"-i", subPath, "-f", "webvtt", "pipe:1")
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			output, err := cmd.Output()
+			if stderrStr := stderr.String(); stderrStr != "" {
+				log.Printf("[translate] ffmpeg stderr for %s conversion: %s", ext, stderrStr)
+			}
 			if err != nil {
 				return "", fmt.Errorf("convert %s to VTT: %w, stderr: %s", ext, err, stderr.String())
 			}
 			if len(strings.TrimSpace(string(output))) == 0 {
 				return "", fmt.Errorf("empty VTT output from %s conversion", ext)
 			}
+			log.Printf("[translate] converted %s to VTT: %d bytes", ext, len(output))
 			return string(output), nil
 		default:
 			data, err := os.ReadFile(subPath)
@@ -173,7 +183,7 @@ func (s *Service) loadSubtitle(videoPath, subtitleID string) (string, error) {
 		fullPath := filepath.Join(s.mediaPath, videoPath)
 		cmd := exec.Command("ffmpeg",
 			"-hide_banner",
-			"-loglevel", "error",
+			"-loglevel", "warning",
 			"-i", fullPath,
 			"-map", fmt.Sprintf("0:%d", streamIndex),
 			"-f", "webvtt",
@@ -183,12 +193,16 @@ func (s *Service) loadSubtitle(videoPath, subtitleID string) (string, error) {
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		output, err := cmd.Output()
+		if stderrStr := stderr.String(); stderrStr != "" {
+			log.Printf("[translate] ffmpeg stderr for %s: %s", subtitleID, stderrStr)
+		}
 		if err != nil {
 			return "", fmt.Errorf("extract embedded subtitle (stream %d): %w, stderr: %s", streamIndex, err, stderr.String())
 		}
 		if len(strings.TrimSpace(string(output))) == 0 {
 			return "", fmt.Errorf("empty VTT output for embedded stream %d", streamIndex)
 		}
+		log.Printf("[translate] extracted embedded stream %d: %d bytes", streamIndex, len(output))
 		return string(output), nil
 	}
 
@@ -227,16 +241,31 @@ func detectSourceLang(subtitleID string) string {
 	return "auto"
 }
 
+var srtTimestampRe = regexp.MustCompile(`(\d{2}:\d{2}:\d{2}),(\d{3})`)
+
 func srtToVTTString(srt string) string {
-	vtt := "WEBVTT\n\n"
 	srt = strings.ReplaceAll(srt, "\r\n", "\n")
-	// Replace timestamp commas with dots
-	srt = strings.ReplaceAll(srt, ",", ".")
-	vtt += srt
-	return vtt
+	// Strip UTF-8 BOM if present
+	srt = strings.TrimPrefix(srt, "\xEF\xBB\xBF")
+
+	var sb strings.Builder
+	sb.WriteString("WEBVTT\n\n")
+	// Only replace commas in timestamp patterns, not in subtitle text
+	for _, line := range strings.Split(srt, "\n") {
+		sb.WriteString(srtTimestampRe.ReplaceAllString(line, "${1}.${2}"))
+		sb.WriteByte('\n')
+	}
+	return sb.String()
 }
 
 func videoHash(videoPath string) string {
 	h := sha256.Sum256([]byte(videoPath))
 	return fmt.Sprintf("%x", h[:8])
+}
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

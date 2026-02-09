@@ -11,20 +11,46 @@ var timestampRe = regexp.MustCompile(`(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2
 
 // ParseVTT parses WebVTT content into subtitle cues
 func ParseVTT(content string) []SubtitleCue {
+	// Strip UTF-8 BOM if present
+	content = strings.TrimPrefix(content, "\xEF\xBB\xBF")
+
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 	var cues []SubtitleCue
 	var currentCue *SubtitleCue
 	index := 0
+	skipBlock := false // for NOTE/STYLE blocks
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 
-		// Skip WEBVTT header and empty lines
-		if line == "WEBVTT" || line == "" {
+		// Empty line: finalize current cue, end skip block
+		if line == "" {
 			if currentCue != nil && currentCue.Text != "" {
 				cues = append(cues, *currentCue)
 				currentCue = nil
 			}
+			skipBlock = false
+			continue
+		}
+
+		// Skip lines inside NOTE/STYLE blocks
+		if skipBlock {
+			continue
+		}
+
+		// Skip WEBVTT header line (may include description: "WEBVTT - Some title")
+		if strings.HasPrefix(line, "WEBVTT") {
+			continue
+		}
+
+		// Skip NOTE and STYLE blocks (block continues until next empty line)
+		if strings.HasPrefix(line, "NOTE") || line == "STYLE" {
+			skipBlock = true
+			continue
+		}
+
+		// Skip VTT metadata header lines (Kind:, Language:, etc.)
+		if currentCue == nil && strings.Contains(line, ":") && !timestampRe.MatchString(line) {
 			continue
 		}
 
