@@ -51,6 +51,8 @@ var vaapiEncoders = []struct {
 }
 
 // Software encoder fallbacks.
+// VP9 is intentionally excluded — libvpx-vp9 is too slow for real-time
+// transcoding and Intel Arc cannot hardware-encode VP9.
 var softwareEncoders = []struct {
 	Codec   Codec
 	Encoder string
@@ -58,7 +60,6 @@ var softwareEncoders = []struct {
 	{CodecH264, "libx264"},
 	{CodecHEVC, "libx265"},
 	{CodecAV1, "libsvtav1"},
-	{CodecVP9, "libvpx-vp9"},
 }
 
 // DetectHardware probes the system for available VAAPI encoders and
@@ -274,20 +275,19 @@ func NormalizeAudioCodecName(ffprobeCodec string) string {
 
 // NegotiateCodec picks the best codec from the intersection of
 // server encoders and browser support.
-// Priority: av1 > hevc > vp9 > h264.
+// Priority: av1 > hevc > h264. VP9 excluded (no HW encode, SW too slow).
 func NegotiateCodec(caps *HWCapabilities, browser BrowserCodecs) *EncoderInfo {
 	if caps == nil {
 		return &EncoderInfo{Codec: CodecH264, Encoder: "libx264"}
 	}
 
-	// Priority order: av1 > hevc > vp9 > h264
+	// Priority order: av1 > hevc > h264 (VP9 excluded from transcoding)
 	priority := []struct {
 		codec   Codec
 		browser bool
 	}{
 		{CodecAV1, browser.AV1},
 		{CodecHEVC, browser.HEVC},
-		{CodecVP9, browser.VP9},
 		{CodecH264, browser.H264},
 	}
 

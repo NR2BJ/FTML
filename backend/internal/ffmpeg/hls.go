@@ -395,10 +395,11 @@ func appendSoftwareArgs(args []string, params *TranscodeParams) []string {
 			"-pix_fmt", "yuv420p",
 		)
 	case "libvpx-vp9":
+		// Constrained quality: CRF sets quality floor, -b:v sets bitrate ceiling
 		args = append(args,
 			"-cpu-used", "4",
 			"-crf", fmt.Sprintf("%d", params.CRF),
-			"-b:v", "0",
+			"-b:v", params.MaxBitrate,
 			"-maxrate", params.MaxBitrate,
 			"-bufsize", params.BufSize,
 			"-pix_fmt", "yuv420p",

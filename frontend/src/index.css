@@ -48,6 +48,8 @@ body {
 
 /* Light mode text color overrides — !important to guarantee override of Tailwind utilities */
 :root:not(.dark) .text-white { color: var(--color-text-primary) !important; }
+:root:not(.dark) .text-gray-100 { color: #1e293b !important; }
+:root:not(.dark) .text-gray-200 { color: #1e293b !important; }
 :root:not(.dark) .text-gray-300 { color: #334155 !important; }
 :root:not(.dark) .text-gray-400 { color: #475569 !important; }
 :root:not(.dark) .text-gray-500 { color: #64748b !important; }
@@ -74,6 +76,7 @@ body {
 
 /* Player always dark (gradient overlay needs light text) */
 .player-container .text-white { color: #ffffff !important; }
+.player-container .text-gray-200 { color: #e5e7eb !important; }
 .player-container .text-gray-300 { color: #d1d5db !important; }
 .player-container .text-gray-500 { color: #6b7280 !important; }
 
