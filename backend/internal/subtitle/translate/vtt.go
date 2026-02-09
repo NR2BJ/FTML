@@ -7,7 +7,8 @@ import (
 	"strings"
 )
 
-var timestampRe = regexp.MustCompile(`(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[.,]\d{3})`)
+// Matches both HH:MM:SS.mmm and MM:SS.mmm timestamp formats
+var timestampRe = regexp.MustCompile(`(\d{1,2}:\d{2}:\d{2}[.,]\d{3}|\d{1,2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{3}|\d{1,2}:\d{2}[.,]\d{3})`)
 
 // ParseVTT parses WebVTT content into subtitle cues
 func ParseVTT(content string) []SubtitleCue {
@@ -112,10 +113,23 @@ func CuesToVTT(cues []SubtitleCue) string {
 
 func parseTimestamp(ts string) float64 {
 	ts = strings.Replace(ts, ",", ".", 1)
-	var h, m, s int
-	var ms int
-	fmt.Sscanf(ts, "%d:%d:%d.%d", &h, &m, &s, &ms)
-	return float64(h*3600+m*60+s) + float64(ms)/1000.0
+	parts := strings.Split(ts, ":")
+	switch len(parts) {
+	case 3:
+		// HH:MM:SS.mmm
+		var h, m, s int
+		var ms int
+		fmt.Sscanf(ts, "%d:%d:%d.%d", &h, &m, &s, &ms)
+		return float64(h*3600+m*60+s) + float64(ms)/1000.0
+	case 2:
+		// MM:SS.mmm (FFmpeg short format)
+		var m, s int
+		var ms int
+		fmt.Sscanf(ts, "%d:%d.%d", &m, &s, &ms)
+		return float64(m*60+s) + float64(ms)/1000.0
+	default:
+		return 0
+	}
 }
 
 func formatTimestamp(seconds float64) string {

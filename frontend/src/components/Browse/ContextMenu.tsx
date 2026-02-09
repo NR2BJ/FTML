@@ -79,13 +79,16 @@ export default function ContextMenu({
             Generate Subtitles
           </button>
 
-          <button
-            onClick={() => { onTranslateSubtitles(); onClose() }}
-            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 hover:text-white transition-colors"
-          >
-            <Languages className="w-4 h-4 text-emerald-400" />
-            Translate Subtitles
-          </button>
+          {/* Batch translate: only when multiple videos (single video uses Manage Subtitles) */}
+          {videoCount > 1 && (
+            <button
+              onClick={() => { onTranslateSubtitles(); onClose() }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 hover:text-white transition-colors"
+            >
+              <Languages className="w-4 h-4 text-emerald-400" />
+              Translate Subtitles
+            </button>
+          )}
 
           <div className="border-t border-dark-700 my-0.5" />
 
@@ -99,7 +102,7 @@ export default function ContextMenu({
         </>
       )}
 
-      {/* Single video file: manage subtitles */}
+      {/* Single video file: manage subtitles (also used for individual translate) */}
       {videoCount === 1 && onManageSubtitles && (
         <>
           <div className="border-t border-dark-700 my-0.5" />
