@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -57,7 +58,11 @@ func (h *StreamHandler) CapabilitiesHandler(w http.ResponseWriter, r *http.Reque
 // Query params: ?codec=av1&h264=true&hevc=false&av1=true&vp9=true
 func (h *StreamHandler) PresetsHandler(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
-	fullPath := filepath.Join(h.mediaPath, path)
+	fullPath, ok := h.safePath(path)
+	if !ok {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		jsonError(w, "file not found", http.StatusNotFound)
@@ -104,7 +109,11 @@ func (h *StreamHandler) HLSHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, videoPath string) {
-	fullPath := filepath.Join(h.mediaPath, videoPath)
+	fullPath, ok := h.safePath(videoPath)
+	if !ok {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		jsonError(w, "file not found", http.StatusNotFound)
@@ -184,7 +193,8 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 
 	session, err := h.hlsManager.GetOrCreateSession(sessionID, fullPath, startTime, quality, string(codec), params)
 	if err != nil {
-		jsonError(w, "failed to start transcoding: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[stream] failed to start transcoding: %v", err)
+		jsonError(w, "failed to start transcoding", http.StatusInternalServerError)
 		return
 	}
 
@@ -278,6 +288,11 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 	}
 
 	segmentName := parts[len(parts)-1]
+	// Validate segment name — must be a simple filename (no path separators or traversal)
+	if strings.ContainsAny(segmentName, "/\\") || segmentName == ".." || segmentName == "." {
+		jsonError(w, "invalid segment name", http.StatusBadRequest)
+		return
+	}
 	videoPath := strings.Join(parts[:len(parts)-1], "/")
 	quality := r.URL.Query().Get("quality")
 	if quality == "" {
@@ -293,7 +308,15 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 	}
 	sessionID := generateSessionID(videoPath, quality, startTime, codecStr)
 
-	segmentPath := filepath.Join(h.hlsManager.GetSessionDir(sessionID), segmentName)
+	sessionDir := h.hlsManager.GetSessionDir(sessionID)
+	segmentPath := filepath.Join(sessionDir, segmentName)
+	// Verify resolved path stays within session directory
+	absSession, _ := filepath.Abs(sessionDir)
+	absSeg, _ := filepath.Abs(segmentPath)
+	if !strings.HasPrefix(absSeg, absSession) {
+		jsonError(w, "invalid segment path", http.StatusForbidden)
+		return
+	}
 
 	// Wait for segment to be ready
 	for i := 0; i < 150; i++ {
@@ -318,9 +341,24 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 	http.ServeFile(w, r, segmentPath)
 }
 
+// safePath validates that the resolved path stays within the media directory.
+func (h *StreamHandler) safePath(relPath string) (string, bool) {
+	absMedia, _ := filepath.Abs(h.mediaPath)
+	full := filepath.Join(h.mediaPath, relPath)
+	absFull, _ := filepath.Abs(full)
+	if !strings.HasPrefix(absFull, absMedia) {
+		return "", false
+	}
+	return absFull, true
+}
+
 func (h *StreamHandler) DirectPlay(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
-	fullPath := filepath.Join(h.mediaPath, path)
+	fullPath, ok := h.safePath(path)
+	if !ok {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		jsonError(w, "file not found", http.StatusNotFound)

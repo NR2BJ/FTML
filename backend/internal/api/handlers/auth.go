@@ -3,11 +3,19 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 
-	"github.com/video-stream/backend/internal/auth"
 	"github.com/video-stream/backend/internal/api/middleware"
+	"github.com/video-stream/backend/internal/auth"
 	"github.com/video-stream/backend/internal/db"
 )
+
+// isValidUsername checks that username is 1-32 chars, only alphanumeric, underscore, hyphen.
+var validUsernameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,32}$`)
+
+func isValidUsername(username string) bool {
+	return validUsernameRe.MatchString(username)
+}
 
 type AuthHandler struct {
 	db  *db.Database
@@ -97,6 +105,11 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	if req.Username == "" || req.Password == "" {
 		jsonError(w, "username and password are required", http.StatusBadRequest)
+		return
+	}
+
+	if !isValidUsername(req.Username) {
+		jsonError(w, "username must be 1-32 characters, only letters, numbers, underscores, and hyphens", http.StatusBadRequest)
 		return
 	}
 

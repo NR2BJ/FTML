@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"log"
+	"net"
 	"net/http"
 	"time"
 
@@ -30,6 +32,9 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	r.Use(middleware.Logger)
 	r.Use(cors.Handler(middleware.CORSHandler(cfg.CORSOrigins)))
 
+	// JSON body size limit (1MB) for all non-upload routes
+	r.Use(middleware.MaxBodySize(1 << 20))
+
 	// Handlers
 	authHandler := handlers.NewAuthHandler(database, jwtService)
 	filesHandler := handlers.NewFilesHandler(cfg.MediaPath, cfg.DataPath)
@@ -45,9 +50,34 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	geminiModelsHandler := handlers.NewGeminiModelsHandler(database)
 	adminHandler := handlers.NewAdminHandler(database, hlsManager, cfg.MediaPath)
 
-	// Internal routes (no auth — for container-to-container communication)
+	// Internal routes — localhost only, no auth (container-to-container / Docker CLI)
 	r.Route("/internal", func(r chi.Router) {
+		r.Use(localhostOnly)
 		r.Get("/whisper/active-model", whisperModelsHandler.GetActiveModel)
+
+		// Rate limit management — accessible only from localhost (Docker exec, SSH, Portainer console)
+		r.Get("/ratelimit", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(authLimiter.Status())
+		})
+		r.Delete("/ratelimit", func(w http.ResponseWriter, r *http.Request) {
+			authLimiter.Clear()
+			log.Println("[ratelimit] All rate limits cleared via internal API")
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"message":"all rate limits cleared"}`))
+		})
+		r.Delete("/ratelimit/{ip}", func(w http.ResponseWriter, r *http.Request) {
+			ip := chi.URLParam(r, "ip")
+			if authLimiter.ClearIP(ip) {
+				log.Printf("[ratelimit] Rate limit cleared for IP %s via internal API", ip)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"message":"rate limit cleared for ` + ip + `"}`))
+			} else {
+				w.WriteHeader(http.StatusNotFound)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"error":"IP not found in rate limit table"}`))
+			}
+		})
 	})
 
 	// Public routes
@@ -167,7 +197,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				r.Post("/admin/registrations/{id}/approve", adminHandler.ApproveRegistration)
 				r.Post("/admin/registrations/{id}/reject", adminHandler.RejectRegistration)
 
-				// Admin — File Management
+				// Admin — File Management (upload uses its own body limit)
 				r.Post("/files/upload/*", filesHandler.Upload)
 				r.Delete("/files/delete/*", filesHandler.Delete)
 				r.Put("/files/move", filesHandler.Move)
@@ -189,9 +219,38 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 					w.Header().Set("Content-Type", "application/json")
 					w.Write([]byte(`{"message":"rate limit cleared"}`))
 				})
+				r.Delete("/admin/ratelimit/{ip}", func(w http.ResponseWriter, r *http.Request) {
+					ip := chi.URLParam(r, "ip")
+					if authLimiter.ClearIP(ip) {
+						w.Header().Set("Content-Type", "application/json")
+						w.Write([]byte(`{"message":"rate limit cleared for ` + ip + `"}`))
+					} else {
+						w.WriteHeader(http.StatusNotFound)
+						w.Header().Set("Content-Type", "application/json")
+						w.Write([]byte(`{"error":"IP not found in rate limit table"}`))
+					}
+				})
 			})
 		})
 	})
 
 	return r
+}
+
+// localhostOnly is a middleware that rejects requests not from localhost.
+// Used for internal management endpoints accessible only from Docker exec, SSH, etc.
+func localhostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || (!ip.IsLoopback() && host != "::1") {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":"internal endpoints are only accessible from localhost"}`))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

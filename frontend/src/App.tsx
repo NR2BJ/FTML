@@ -11,6 +11,7 @@ import UserManagement from '@/pages/admin/UserManagement'
 import Registrations from '@/pages/admin/Registrations'
 import Sessions from '@/pages/admin/Sessions'
 import Dashboard from '@/pages/admin/Dashboard'
+import RateLimits from '@/pages/admin/RateLimits'
 import Layout from '@/components/layout/Layout'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -68,6 +69,7 @@ export default function App() {
           <Route path="admin/registrations" element={<AdminRoute><Registrations /></AdminRoute>} />
           <Route path="admin/sessions" element={<AdminRoute><Sessions /></AdminRoute>} />
           <Route path="admin/dashboard" element={<AdminRoute><Dashboard /></AdminRoute>} />
+          <Route path="admin/ratelimits" element={<AdminRoute><RateLimits /></AdminRoute>} />
         </Route>
       </Routes>
     </BrowserRouter>

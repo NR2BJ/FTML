@@ -105,3 +105,25 @@ export interface DashboardStats {
 
 export const getDashboardStats = () =>
   client.get<DashboardStats>('/admin/dashboard')
+
+// Rate limit management
+export interface RateLimitEntry {
+  ip: string
+  count: number
+  reset_at: string
+}
+
+export interface RateLimitStatus {
+  limit: number
+  window: string
+  entries: RateLimitEntry[]
+}
+
+export const getRateLimitStatus = () =>
+  client.get<RateLimitStatus>('/admin/ratelimit')
+
+export const clearAllRateLimits = () =>
+  client.delete('/admin/ratelimit')
+
+export const clearRateLimitForIP = (ip: string) =>
+  client.delete(`/admin/ratelimit/${encodeURIComponent(ip)}`)

@@ -93,6 +93,17 @@ func (rl *RateLimiter) Clear() {
 	rl.buckets = make(map[string]*rateBucket)
 }
 
+// ClearIP removes a specific IP from rate limit tracking.
+func (rl *RateLimiter) ClearIP(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if _, exists := rl.buckets[ip]; exists {
+		delete(rl.buckets, ip)
+		return true
+	}
+	return false
+}
+
 // Handler returns an http.Handler middleware that enforces the rate limit.
 func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

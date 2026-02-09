@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -36,7 +37,8 @@ func NewAdminHandler(db *db.Database, hlsManager *ffmpeg.HLSManager, mediaPath .
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := h.db.ListUsers()
 	if err != nil {
-		jsonError(w, "failed to list users: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[admin] failed to list users: %v", err)
+		jsonError(w, "failed to list users", http.StatusInternalServerError)
 		return
 	}
 	jsonResponse(w, users, http.StatusOK)
@@ -56,6 +58,16 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	if req.Username == "" || req.Password == "" {
 		jsonError(w, "username and password are required", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Password) < 8 {
+		jsonError(w, "password must be at least 8 characters", http.StatusBadRequest)
+		return
+	}
+
+	if !isValidUsername(req.Username) {
+		jsonError(w, "username must be 1-32 characters, only letters, numbers, underscores, and hyphens", http.StatusBadRequest)
 		return
 	}
 
@@ -123,6 +135,10 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	username := existing.Username
 	role := existing.Role
 	if req.Username != "" {
+		if !isValidUsername(req.Username) {
+			jsonError(w, "username must be 1-32 characters, only letters, numbers, underscores, and hyphens", http.StatusBadRequest)
+			return
+		}
 		username = req.Username
 	}
 	if req.Role != "" {
@@ -135,12 +151,17 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.db.UpdateUser(id, username, role); err != nil {
-		jsonError(w, "failed to update user: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[admin] failed to update user %d: %v", id, err)
+		jsonError(w, "failed to update user", http.StatusInternalServerError)
 		return
 	}
 
 	// Update password if provided
 	if req.Password != "" {
+		if len(req.Password) < 8 {
+			jsonError(w, "password must be at least 8 characters", http.StatusBadRequest)
+			return
+		}
 		hashed, err := auth.HashPassword(req.Password)
 		if err != nil {
 			jsonError(w, "failed to hash password", http.StatusInternalServerError)
@@ -190,7 +211,8 @@ func (h *AdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.db.DeleteUser(id); err != nil {
-		jsonError(w, "failed to delete user: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[admin] failed to delete user %d: %v", id, err)
+		jsonError(w, "failed to delete user", http.StatusInternalServerError)
 		return
 	}
 
@@ -247,7 +269,8 @@ func (h *AdminHandler) ApproveRegistration(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := h.db.ApproveRegistration(id, claims.UserID); err != nil {
-		jsonError(w, "failed to approve registration: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[admin] failed to approve registration %d: %v", id, err)
+		jsonError(w, "failed to approve registration", http.StatusInternalServerError)
 		return
 	}
 
@@ -270,7 +293,8 @@ func (h *AdminHandler) RejectRegistration(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.db.RejectRegistration(id, claims.UserID); err != nil {
-		jsonError(w, "failed to reject registration: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[admin] failed to reject registration %d: %v", id, err)
+		jsonError(w, "failed to reject registration", http.StatusInternalServerError)
 		return
 	}
 

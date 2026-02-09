@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,7 +25,8 @@ func NewWhisperBackendsHandler(database *db.Database) *WhisperBackendsHandler {
 func (h *WhisperBackendsHandler) ListBackends(w http.ResponseWriter, r *http.Request) {
 	backends, err := h.database.ListWhisperBackends()
 	if err != nil {
-		jsonError(w, "failed to list backends: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[whisper-backends] failed to list: %v", err)
+		jsonError(w, "failed to list backends", http.StatusInternalServerError)
 		return
 	}
 
@@ -43,7 +45,8 @@ type AvailableEngine struct {
 func (h *WhisperBackendsHandler) ListAvailable(w http.ResponseWriter, r *http.Request) {
 	backends, err := h.database.ListWhisperBackends()
 	if err != nil {
-		jsonError(w, "failed to list backends: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[whisper-backends] failed to list: %v", err)
+		jsonError(w, "failed to list backends", http.StatusInternalServerError)
 		return
 	}
 
@@ -100,7 +103,8 @@ func (h *WhisperBackendsHandler) CreateBackend(w http.ResponseWriter, r *http.Re
 
 	id, err := h.database.CreateWhisperBackend(req.Name, req.BackendType, req.URL, req.Priority)
 	if err != nil {
-		jsonError(w, "failed to create backend: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[whisper-backends] failed to create: %v", err)
+		jsonError(w, "failed to create backend", http.StatusInternalServerError)
 		return
 	}
 
@@ -158,7 +162,8 @@ func (h *WhisperBackendsHandler) UpdateBackend(w http.ResponseWriter, r *http.Re
 	}
 
 	if err := h.database.UpdateWhisperBackend(id, existing.Name, existing.BackendType, existing.URL, existing.Enabled, existing.Priority); err != nil {
-		jsonError(w, "failed to update backend: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[whisper-backends] failed to update %d: %v", id, err)
+		jsonError(w, "failed to update backend", http.StatusInternalServerError)
 		return
 	}
 
@@ -175,7 +180,8 @@ func (h *WhisperBackendsHandler) DeleteBackend(w http.ResponseWriter, r *http.Re
 	}
 
 	if err := h.database.DeleteWhisperBackend(id); err != nil {
-		jsonError(w, "failed to delete backend: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[whisper-backends] failed to delete %d: %v", id, err)
+		jsonError(w, "failed to delete backend", http.StatusInternalServerError)
 		return
 	}
 

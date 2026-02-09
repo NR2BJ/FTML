@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
-import { Film, Search, LogOut, User, Settings, Clock, UserCog, Users, UserPlus, Shield, ChevronDown, Monitor, BarChart3 } from 'lucide-react'
+import { Film, Search, LogOut, User, Settings, Clock, UserCog, Users, UserPlus, Shield, ChevronDown, Monitor, BarChart3, ShieldAlert } from 'lucide-react'
 import { searchFiles, type FileEntry } from '@/api/files'
 import { getPendingRegistrationCount } from '@/api/admin'
 
@@ -196,6 +196,13 @@ export default function Header() {
                   >
                     <BarChart3 className="w-4 h-4" />
                     Dashboard
+                  </button>
+                  <button
+                    onClick={() => navigate('/admin/ratelimits')}
+                    className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 flex items-center gap-2"
+                  >
+                    <ShieldAlert className="w-4 h-4" />
+                    Rate Limits
                   </button>
                   <div className="border-b border-dark-700 my-1" />
                 </>

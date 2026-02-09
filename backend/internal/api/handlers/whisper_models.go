@@ -50,7 +50,8 @@ const defaultModelID = "OpenVINO/distil-whisper-large-v3-int8-ov"
 func (h *WhisperModelsHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 	models, err := h.getModels()
 	if err != nil {
-		jsonError(w, "failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[whisper-models] failed to fetch models: %v", err)
+		jsonError(w, "failed to fetch models", http.StatusInternalServerError)
 		return
 	}
 
@@ -220,10 +221,10 @@ func (h *WhisperModelsHandler) SetActiveModel(w http.ResponseWriter, r *http.Req
 
 func (h *WhisperModelsHandler) notifyModelChange(backendURL, modelID string) error {
 	url := strings.TrimRight(backendURL, "/") + "/v1/model/load"
-	body := fmt.Sprintf(`{"model_id":"%s"}`, modelID)
+	payload, _ := json.Marshal(map[string]string{"model_id": modelID})
 
 	client := &http.Client{Timeout: 10 * time.Minute} // model download can be slow
-	resp, err := client.Post(url, "application/json", strings.NewReader(body))
+	resp, err := client.Post(url, "application/json", strings.NewReader(string(payload)))
 	if err != nil {
 		log.Printf("[whisper-models] failed to notify model change: %v", err)
 		return fmt.Errorf("whisper server unreachable: %w", err)

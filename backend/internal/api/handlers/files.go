@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -264,7 +263,7 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<30)
 
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		jsonError(w, "failed to parse upload: "+err.Error(), http.StatusBadRequest)
+		jsonError(w, "failed to parse upload", http.StatusBadRequest)
 		return
 	}
 
@@ -293,7 +292,8 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	// Create destination file
 	dst, err := os.Create(destPath)
 	if err != nil {
-		jsonError(w, "failed to create file: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[files] failed to create file %s: %v", destPath, err)
+		jsonError(w, "failed to create file", http.StatusInternalServerError)
 		return
 	}
 	defer dst.Close()
@@ -301,7 +301,8 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	written, err := io.Copy(dst, file)
 	if err != nil {
 		os.Remove(destPath) // cleanup on failure
-		jsonError(w, "failed to write file: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[files] failed to write file %s: %v", destPath, err)
+		jsonError(w, "failed to write file", http.StatusInternalServerError)
 		return
 	}
 
@@ -341,12 +342,14 @@ func (h *FilesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	if info.IsDir() {
 		if err := os.RemoveAll(absPath); err != nil {
-			jsonError(w, "failed to delete directory: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("[files] failed to delete directory %s: %v", absPath, err)
+			jsonError(w, "failed to delete directory", http.StatusInternalServerError)
 			return
 		}
 	} else {
 		if err := os.Remove(absPath); err != nil {
-			jsonError(w, "failed to delete file: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("[files] failed to delete file %s: %v", absPath, err)
+			jsonError(w, "failed to delete file", http.StatusInternalServerError)
 			return
 		}
 	}
@@ -397,7 +400,8 @@ func (h *FilesHandler) Move(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := os.Rename(absSrc, absDst); err != nil {
-		jsonError(w, fmt.Sprintf("failed to move: %v", err), http.StatusInternalServerError)
+		log.Printf("[files] failed to move %s → %s: %v", absSrc, absDst, err)
+		jsonError(w, "failed to move", http.StatusInternalServerError)
 		return
 	}
 
@@ -426,7 +430,8 @@ func (h *FilesHandler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := os.MkdirAll(absPath, 0755); err != nil {
-		jsonError(w, "failed to create directory: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[files] failed to create directory %s: %v", absPath, err)
+		jsonError(w, "failed to create directory", http.StatusInternalServerError)
 		return
 	}
 
