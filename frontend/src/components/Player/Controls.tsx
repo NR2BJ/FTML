@@ -128,9 +128,10 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
     <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
       {/* Progress bar */}
       <div
-        className="h-1 mx-4 mb-2 bg-gray-600 rounded-full cursor-pointer group/progress hover:h-2 transition-all relative"
+        className="mx-4 mb-2 cursor-pointer group/progress py-2 relative"
         onClick={handleProgressClick}
       >
+      <div className="h-1 bg-gray-600 rounded-full group-hover/progress:h-2 transition-all relative">
         <div
           className="h-full bg-primary-500 rounded-full relative"
           style={{ width: `${progress}%` }}
@@ -168,6 +169,7 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
             title={ch.title || `Chapter ${i + 1}`}
           />
         ))}
+      </div>
       </div>
 
       {/* Controls bar */}
