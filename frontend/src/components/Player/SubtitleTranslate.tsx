@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Languages, Loader2, X, Check, AlertCircle, Save, Trash2 } from 'lucide-react'
+import { Languages, Loader2, X, Check, AlertCircle, Save, Trash2, Pencil } from 'lucide-react'
 import { usePlayerStore } from '@/stores/playerStore'
 import {
   translateSubtitle,
@@ -7,6 +7,7 @@ import {
   listSubtitles,
   listPresets,
   createPreset,
+  updatePreset,
   deletePreset,
   type Job,
   type SubtitleEntry,
@@ -50,6 +51,8 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
   const [savedPresets, setSavedPresets] = useState<TranslationPreset[]>([])
   const [saveName, setSaveName] = useState('')
   const [showSaveInput, setShowSaveInput] = useState(false)
+  const [editingPreset, setEditingPreset] = useState(false)
+  const [editName, setEditName] = useState('')
   const [jobId, setJobId] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -110,6 +113,20 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
       setSaveName('')
     } catch {
       setError('Failed to save preset')
+    }
+  }
+
+  const handleUpdatePreset = async () => {
+    const id = parseInt(preset.replace('saved:', ''))
+    if (isNaN(id) || !editName.trim() || !customPrompt.trim()) return
+    try {
+      await updatePreset(id, editName.trim(), customPrompt.trim())
+      const { data } = await listPresets()
+      setSavedPresets(data || [])
+      setEditingPreset(false)
+      setEditName('')
+    } catch {
+      setError('Failed to update preset')
     }
   }
 
@@ -241,18 +258,37 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
                 placeholder="E.g., Use casual speech. Keep honorifics like -san. Localize food names..."
                 className="w-full bg-gray-800 text-xs text-white rounded px-2 py-1.5 border border-gray-600 resize-none h-16"
               />
-              {/* Save preset button */}
+              {/* Save / Edit / Delete preset buttons */}
               <div className="flex items-center gap-1 mt-1">
-                {!showSaveInput ? (
-                  <button
-                    onClick={() => setShowSaveInput(true)}
-                    disabled={!customPrompt.trim()}
-                    className="text-xs text-gray-400 hover:text-primary-400 flex items-center gap-1 disabled:opacity-50"
-                  >
-                    <Save className="w-3 h-3" />
-                    Save as Preset
-                  </button>
-                ) : (
+                {editingPreset ? (
+                  /* Editing preset name inline */
+                  <div className="flex items-center gap-1 flex-1">
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      placeholder="Preset name"
+                      className="flex-1 bg-gray-800 text-xs text-white rounded px-2 py-1 border border-gray-600"
+                      onKeyDown={(e) => e.key === 'Enter' && handleUpdatePreset()}
+                      autoFocus
+                    />
+                    <button
+                      onClick={handleUpdatePreset}
+                      disabled={!editName.trim() || !customPrompt.trim()}
+                      className="text-xs text-primary-400 hover:text-primary-300 disabled:opacity-50"
+                      title="Save changes"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => { setEditingPreset(false); setEditName('') }}
+                      className="text-xs text-gray-400 hover:text-gray-300"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : showSaveInput ? (
+                  /* Saving as new preset */
                   <div className="flex items-center gap-1 flex-1">
                     <input
                       type="text"
@@ -277,19 +313,44 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                )}
-                {/* Delete saved preset */}
-                {preset.startsWith('saved:') && (
+                ) : (
+                  /* Default: Save as Preset button */
                   <button
-                    onClick={() => {
-                      const id = parseInt(preset.replace('saved:', ''))
-                      if (!isNaN(id)) handleDeletePreset(id)
-                    }}
-                    className="text-xs text-gray-500 hover:text-red-400 ml-auto"
-                    title="Delete this preset"
+                    onClick={() => setShowSaveInput(true)}
+                    disabled={!customPrompt.trim()}
+                    className="text-xs text-gray-400 hover:text-primary-400 flex items-center gap-1 disabled:opacity-50"
                   >
-                    <Trash2 className="w-3 h-3" />
+                    <Save className="w-3 h-3" />
+                    Save as Preset
                   </button>
+                )}
+                {/* Edit & Delete buttons for saved presets */}
+                {preset.startsWith('saved:') && !editingPreset && !showSaveInput && (
+                  <div className="flex items-center gap-1 ml-auto">
+                    <button
+                      onClick={() => {
+                        const saved = savedPresets.find(p => `saved:${p.id}` === preset)
+                        if (saved) {
+                          setEditingPreset(true)
+                          setEditName(saved.name)
+                        }
+                      }}
+                      className="text-xs text-gray-500 hover:text-primary-400"
+                      title="Edit this preset"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        const id = parseInt(preset.replace('saved:', ''))
+                        if (!isNaN(id)) handleDeletePreset(id)
+                      }}
+                      className="text-xs text-gray-500 hover:text-red-400"
+                      title="Delete this preset"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
                 )}
               </div>
             </div>

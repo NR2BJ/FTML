@@ -288,6 +288,12 @@ func (d *Database) CreateTranslationPreset(name, prompt string) (int64, error) {
 	return result.LastInsertId()
 }
 
+// UpdateTranslationPreset updates a saved preset's name and prompt
+func (d *Database) UpdateTranslationPreset(id int64, name, prompt string) error {
+	_, err := d.db.Exec("UPDATE translation_presets SET name = ?, prompt = ? WHERE id = ?", name, prompt, id)
+	return err
+}
+
 // DeleteTranslationPreset removes a saved preset by ID
 func (d *Database) DeleteTranslationPreset(id int64) error {
 	_, err := d.db.Exec("DELETE FROM translation_presets WHERE id = ?", id)

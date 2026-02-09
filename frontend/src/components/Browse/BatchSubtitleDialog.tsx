@@ -8,6 +8,9 @@ import {
   Languages,
   Sparkles,
   RotateCcw,
+  Save,
+  Trash2,
+  Pencil,
 } from 'lucide-react'
 import { type FileEntry } from '@/api/files'
 import {
@@ -17,6 +20,9 @@ import {
   getJob,
   retryJob,
   listPresets,
+  createPreset,
+  updatePreset,
+  deletePreset,
   type Job,
   type TranslationPreset,
 } from '@/api/subtitle'
@@ -80,6 +86,11 @@ export default function BatchSubtitleDialog({ mode, files, subtitleId, onClose }
   const [preset, setPreset] = useState('anime')
   const [customPrompt, setCustomPrompt] = useState('')
   const [savedPresets, setSavedPresets] = useState<TranslationPreset[]>([])
+  const [saveName, setSaveName] = useState('')
+  const [showSaveInput, setShowSaveInput] = useState(false)
+  const [editingPreset, setEditingPreset] = useState(false)
+  const [editName, setEditName] = useState('')
+  const [presetError, setPresetError] = useState<string | null>(null)
 
   // Job tracking
   const [jobs, setJobs] = useState<JobStatus[]>([])
@@ -105,6 +116,47 @@ export default function BatchSubtitleDialog({ mode, files, subtitleId, onClose }
       listPresets().then(({ data }) => setSavedPresets(data || [])).catch(() => {})
     }
   }, [mode])
+
+  const handleSavePreset = async () => {
+    if (!saveName.trim() || !customPrompt.trim()) return
+    try {
+      await createPreset(saveName.trim(), customPrompt.trim())
+      const { data } = await listPresets()
+      setSavedPresets(data || [])
+      setShowSaveInput(false)
+      setSaveName('')
+    } catch {
+      setPresetError('Failed to save preset')
+    }
+  }
+
+  const handleUpdatePreset = async () => {
+    const id = parseInt(preset.replace('saved:', ''))
+    if (isNaN(id) || !editName.trim() || !customPrompt.trim()) return
+    try {
+      await updatePreset(id, editName.trim(), customPrompt.trim())
+      const { data } = await listPresets()
+      setSavedPresets(data || [])
+      setEditingPreset(false)
+      setEditName('')
+    } catch {
+      setPresetError('Failed to update preset')
+    }
+  }
+
+  const handleDeletePreset = async (id: number) => {
+    try {
+      await deletePreset(id)
+      const { data } = await listPresets()
+      setSavedPresets(data || [])
+      if (preset === `saved:${id}`) {
+        setPreset('anime')
+        setCustomPrompt('')
+      }
+    } catch {
+      setPresetError('Failed to delete preset')
+    }
+  }
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -373,6 +425,103 @@ export default function BatchSubtitleDialog({ mode, files, subtitleId, onClose }
                         placeholder="E.g., Use casual speech..."
                         className="w-full bg-dark-800 text-xs text-white rounded px-2 py-1.5 border border-dark-600 resize-none h-16"
                       />
+                      {/* Save / Edit / Delete preset buttons */}
+                      <div className="flex items-center gap-1 mt-1">
+                        {editingPreset ? (
+                          <div className="flex items-center gap-1 flex-1">
+                            <input
+                              type="text"
+                              value={editName}
+                              onChange={(e) => setEditName(e.target.value)}
+                              placeholder="Preset name"
+                              className="flex-1 bg-dark-800 text-xs text-white rounded px-2 py-1 border border-dark-600"
+                              onKeyDown={(e) => e.key === 'Enter' && handleUpdatePreset()}
+                              autoFocus
+                            />
+                            <button
+                              onClick={handleUpdatePreset}
+                              disabled={!editName.trim() || !customPrompt.trim()}
+                              className="text-xs text-primary-400 hover:text-primary-300 disabled:opacity-50"
+                              title="Save changes"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => { setEditingPreset(false); setEditName('') }}
+                              className="text-xs text-gray-400 hover:text-gray-300"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : showSaveInput ? (
+                          <div className="flex items-center gap-1 flex-1">
+                            <input
+                              type="text"
+                              value={saveName}
+                              onChange={(e) => setSaveName(e.target.value)}
+                              placeholder="Preset name"
+                              className="flex-1 bg-dark-800 text-xs text-white rounded px-2 py-1 border border-dark-600"
+                              onKeyDown={(e) => e.key === 'Enter' && handleSavePreset()}
+                              autoFocus
+                            />
+                            <button
+                              onClick={handleSavePreset}
+                              disabled={!saveName.trim()}
+                              className="text-xs text-primary-400 hover:text-primary-300 disabled:opacity-50"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => { setShowSaveInput(false); setSaveName('') }}
+                              className="text-xs text-gray-400 hover:text-gray-300"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setShowSaveInput(true)}
+                            disabled={!customPrompt.trim()}
+                            className="text-xs text-gray-400 hover:text-primary-400 flex items-center gap-1 disabled:opacity-50"
+                          >
+                            <Save className="w-3 h-3" />
+                            Save as Preset
+                          </button>
+                        )}
+                        {preset.startsWith('saved:') && !editingPreset && !showSaveInput && (
+                          <div className="flex items-center gap-1 ml-auto">
+                            <button
+                              onClick={() => {
+                                const saved = savedPresets.find(p => `saved:${p.id}` === preset)
+                                if (saved) {
+                                  setEditingPreset(true)
+                                  setEditName(saved.name)
+                                }
+                              }}
+                              className="text-xs text-gray-500 hover:text-primary-400"
+                              title="Edit this preset"
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                const id = parseInt(preset.replace('saved:', ''))
+                                if (!isNaN(id)) handleDeletePreset(id)
+                              }}
+                              className="text-xs text-gray-500 hover:text-red-400"
+                              title="Delete this preset"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {presetError && (
+                        <div className="text-xs text-red-400 mt-1 flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3" />
+                          {presetError}
+                        </div>
+                      )}
                     </div>
                   )}
                 </>

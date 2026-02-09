@@ -176,6 +176,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				// Translation Presets
 				r.Get("/presets", presetsHandler.ListPresets)
 				r.Post("/presets", presetsHandler.CreatePreset)
+				r.Put("/presets/{id}", presetsHandler.UpdatePreset)
 				r.Delete("/presets/{id}", presetsHandler.DeletePreset)
 
 				// Gemini Models

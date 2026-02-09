@@ -59,6 +59,41 @@ func (h *PresetsHandler) CreatePreset(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// UpdatePreset updates an existing translation preset
+func (h *PresetsHandler) UpdatePreset(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		jsonError(w, "invalid preset ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Name   string `json:"name"`
+		Prompt string `json:"prompt"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" || req.Prompt == "" {
+		jsonError(w, "name and prompt are required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.database.UpdateTranslationPreset(id, req.Name, req.Prompt); err != nil {
+		jsonError(w, "failed to update preset: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":   id,
+		"name": req.Name,
+	})
+}
+
 // DeletePreset removes a saved translation preset
 func (h *PresetsHandler) DeletePreset(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")

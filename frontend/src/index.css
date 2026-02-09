@@ -74,11 +74,32 @@ body {
 :root:not(.dark) .bg-dark-800\/50 { background-color: rgb(241 245 249 / 0.5) !important; }
 :root:not(.dark) .bg-dark-700\/50 { background-color: rgb(226 232 240 / 0.5) !important; }
 
-/* Player always dark (gradient overlay needs light text) */
+/* Player always dark — must beat :root:not(.dark) specificity */
+:root:not(.dark) .player-container .text-white,
 .player-container .text-white { color: #ffffff !important; }
+
+:root:not(.dark) .player-container .text-gray-200,
 .player-container .text-gray-200 { color: #e5e7eb !important; }
+
+:root:not(.dark) .player-container .text-gray-300,
 .player-container .text-gray-300 { color: #d1d5db !important; }
+
+:root:not(.dark) .player-container .text-gray-400,
+.player-container .text-gray-400 { color: #9ca3af !important; }
+
+:root:not(.dark) .player-container .text-gray-500,
 .player-container .text-gray-500 { color: #6b7280 !important; }
+
+/* Player hover states — keep white on hover in light mode */
+:root:not(.dark) .player-container .hover\:text-white:hover,
+.player-container .hover\:text-white:hover { color: #ffffff !important; }
+:root:not(.dark) .player-container .hover\:text-gray-300:hover { color: #d1d5db !important; }
+
+/* Player dropdown backgrounds — keep dark in light mode */
+:root:not(.dark) .player-container .bg-gray-800 { background-color: #1f2937 !important; }
+:root:not(.dark) .player-container .bg-gray-900\/95 { background-color: rgb(17 24 39 / 0.95) !important; }
+:root:not(.dark) .player-container .border-gray-600 { border-color: #4b5563 !important; }
+:root:not(.dark) .player-container .border-gray-700 { border-color: #374151 !important; }
 
 ::-webkit-scrollbar {
   width: 8px;

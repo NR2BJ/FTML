@@ -87,6 +87,9 @@ export const listPresets = () =>
 export const createPreset = (name: string, prompt: string) =>
   client.post<{ id: number; name: string }>('/presets', { name, prompt })
 
+export const updatePreset = (id: number, name: string, prompt: string) =>
+  client.put(`/presets/${id}`, { name, prompt })
+
 export const deletePreset = (id: number) =>
   client.delete(`/presets/${id}`)
 
