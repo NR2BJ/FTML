@@ -31,7 +31,7 @@ func (d *Database) migrate() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username TEXT UNIQUE NOT NULL,
 		password TEXT NOT NULL,
-		role TEXT NOT NULL DEFAULT 'viewer',
+		role TEXT NOT NULL DEFAULT 'user',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
@@ -109,6 +109,8 @@ func (d *Database) migrate() error {
 		return err
 	}
 	d.migrateWhisperBackends()
+	// Migrate legacy roles: viewer/editor → user
+	d.db.Exec("UPDATE users SET role = 'user' WHERE role IN ('viewer', 'editor')")
 	return nil
 }
 

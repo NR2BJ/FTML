@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/video-stream/backend/internal/api/middleware"
 	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/ffmpeg"
 	"github.com/video-stream/backend/internal/job"
@@ -35,6 +36,14 @@ func NewSubtitleHandler(mediaPath, subtitlePath string, jobQueue *job.JobQueue, 
 		subtitlePath: subtitlePath,
 		jobQueue:     jobQueue,
 		database:     database,
+	}
+}
+
+// logSubtitleOp logs subtitle operations to the file_logs table
+func (h *SubtitleHandler) logSubtitleOp(r *http.Request, action, path, detail string) {
+	claims := middleware.GetClaims(r)
+	if claims != nil && h.database != nil {
+		h.database.CreateFileLog(claims.UserID, claims.Username, action, path, detail)
 	}
 }
 
@@ -382,18 +391,9 @@ func (h *SubtitleHandler) GenerateSubtitle(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Defaults — read from admin settings if not specified by the request
-	if params.Engine == "" {
-		params.Engine = "whisper.cpp"
-	}
-	if params.Model == "" {
-		params.Model = h.database.GetSetting("whisper_model", "large-v3")
-		// Strip ggml- prefix and .bin suffix if user entered full filename
-		params.Model = strings.TrimPrefix(params.Model, "ggml-")
-		params.Model = strings.TrimSuffix(params.Model, ".bin")
-	}
+	// Defaults
 	if params.Language == "" {
-		params.Language = h.database.GetSetting("whisper_language", "auto")
+		params.Language = "auto"
 	}
 
 	j, err := h.jobQueue.Enqueue(job.JobTranscribe, path, params)
@@ -401,6 +401,8 @@ func (h *SubtitleHandler) GenerateSubtitle(w http.ResponseWriter, r *http.Reques
 		jsonError(w, "failed to create job: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	h.logSubtitleOp(r, "subtitle_generate", path, params.Language)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -446,6 +448,8 @@ func (h *SubtitleHandler) TranslateSubtitle(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	h.logSubtitleOp(r, "subtitle_translate", path, params.TargetLang)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{
@@ -472,16 +476,8 @@ func (h *SubtitleHandler) BatchGenerate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Defaults
-	if req.Engine == "" {
-		req.Engine = "whisper.cpp"
-	}
-	if req.Model == "" {
-		req.Model = h.database.GetSetting("whisper_model", "large-v3")
-		req.Model = strings.TrimPrefix(req.Model, "ggml-")
-		req.Model = strings.TrimSuffix(req.Model, ".bin")
-	}
 	if req.Language == "" {
-		req.Language = h.database.GetSetting("whisper_language", "auto")
+		req.Language = "auto"
 	}
 
 	var jobIDs []string
@@ -506,6 +502,7 @@ func (h *SubtitleHandler) BatchGenerate(w http.ResponseWriter, r *http.Request) 
 			continue
 		}
 		jobIDs = append(jobIDs, j.ID)
+		h.logSubtitleOp(r, "subtitle_generate", path, req.Language)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -594,6 +591,7 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 		jobIDs = append(jobIDs, j.ID)
+		h.logSubtitleOp(r, "subtitle_translate", path, req.TargetLang)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -604,7 +602,7 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// UploadSubtitle allows uploading an external subtitle file (Editor+ only)
+// UploadSubtitle allows uploading an external subtitle file (User+ only)
 // POST /subtitle/upload/* — multipart/form-data with "file" field
 func (h *SubtitleHandler) UploadSubtitle(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
@@ -665,6 +663,8 @@ func (h *SubtitleHandler) UploadSubtitle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	h.logSubtitleOp(r, "subtitle_upload", path, filename)
+
 	jsonResponse(w, map[string]string{
 		"id":       "generated:" + filename,
 		"filename": filename,
@@ -715,6 +715,8 @@ func (h *SubtitleHandler) DeleteSubtitle(w http.ResponseWriter, r *http.Request)
 		jsonError(w, "failed to delete subtitle: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	h.logSubtitleOp(r, "subtitle_delete", path, subtitleID)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -816,6 +818,8 @@ func (h *SubtitleHandler) ConvertSubtitle(w http.ResponseWriter, r *http.Request
 		jsonError(w, "conversion failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	h.logSubtitleOp(r, "subtitle_convert", videoPath, targetFmt)
 
 	baseName := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
 	w.Header().Set("Content-Type", "application/octet-stream")

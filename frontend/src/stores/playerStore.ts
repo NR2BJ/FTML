@@ -39,6 +39,9 @@ interface PlayerState {
   negotiatedEncoder: string | null  // 'h264_vaapi', 'libx264', etc.
   hwaccel: string | null            // 'vaapi' or 'none'
   browserCodecs: BrowserCodecSupport | null
+  // Subtitle preferences
+  subtitleEnabled: boolean
+  preferredSubLang: string
   // A-B Loop
   abLoop: ABLoop
   // Chapters
@@ -63,6 +66,8 @@ interface PlayerState {
   setAudioTrack: (idx: number) => void
   setNegotiatedCodec: (codec: string, encoder: string, hwaccel: string) => void
   setBrowserCodecs: (caps: BrowserCodecSupport) => void
+  setSubtitleEnabled: (v: boolean) => void
+  setPreferredSubLang: (lang: string) => void
   setChapters: (chapters: ChapterInfo[]) => void
   toggleABLoop: (currentTime: number) => void
   clearABLoop: () => void
@@ -91,6 +96,8 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   negotiatedEncoder: null,
   hwaccel: null,
   browserCodecs: null,
+  subtitleEnabled: localStorage.getItem('ftml-subtitle-enabled') === 'true',
+  preferredSubLang: localStorage.getItem('ftml-subtitle-lang') || '',
   abLoop: { a: null, b: null },
   chapters: [],
   setCurrentFile: (path) => set({ currentFile: path }),
@@ -120,6 +127,14 @@ export const usePlayerStore = create<PlayerState>((set) => ({
     hwaccel,
   }),
   setBrowserCodecs: (caps) => set({ browserCodecs: caps }),
+  setSubtitleEnabled: (v) => {
+    localStorage.setItem('ftml-subtitle-enabled', String(v))
+    set({ subtitleEnabled: v })
+  },
+  setPreferredSubLang: (lang) => {
+    localStorage.setItem('ftml-subtitle-lang', lang)
+    set({ preferredSubLang: lang })
+  },
   setChapters: (chapters) => set({ chapters }),
   toggleABLoop: (currentTime) => set((state) => {
     const { a, b } = state.abLoop

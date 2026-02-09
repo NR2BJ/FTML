@@ -31,7 +31,7 @@ export default function ContextMenu({
 }: ContextMenuProps) {
   const { user } = useAuthStore()
   const isAdmin = user?.role === 'admin'
-  const canEdit = isAdmin || user?.role === 'editor'
+  const canEdit = isAdmin || user?.role === 'user'
   const videoFiles = selectedEntries.filter(e => !e.is_dir && isVideoFile(e.name))
   const videoCount = videoFiles.length
   const totalCount = selectedEntries.length

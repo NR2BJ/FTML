@@ -61,6 +61,11 @@ const actionLabels: Record<string, { label: string; color: string }> = {
   restore: { label: 'Restore', color: 'text-emerald-400' },
   permanent_delete: { label: 'Perm. Delete', color: 'text-red-500' },
   empty_trash: { label: 'Empty Trash', color: 'text-red-500' },
+  subtitle_generate: { label: 'STT Generate', color: 'text-cyan-400' },
+  subtitle_translate: { label: 'Sub Translate', color: 'text-emerald-400' },
+  subtitle_delete: { label: 'Sub Delete', color: 'text-red-400' },
+  subtitle_upload: { label: 'Sub Upload', color: 'text-teal-400' },
+  subtitle_convert: { label: 'Sub Convert', color: 'text-indigo-400' },
 }
 
 export default function Dashboard() {

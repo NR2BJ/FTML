@@ -25,13 +25,13 @@ export default {
           700: '#1d4ed8',
         },
         dark: {
-          50: '#f8fafc',
-          100: '#f1f5f9',
-          600: '#475569',
-          700: '#334155',
-          800: '#1e293b',
-          900: '#0f172a',
-          950: '#020617',
+          50: 'var(--color-dark-50)',
+          100: 'var(--color-dark-100)',
+          600: 'var(--color-dark-600)',
+          700: 'var(--color-dark-700)',
+          800: 'var(--color-dark-800)',
+          900: 'var(--color-dark-900)',
+          950: 'var(--color-dark-950)',
         }
       }
     },

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Users, Plus, Pencil, Trash2, X, Check } from 'lucide-react'
+import { Users, Plus, Pencil, Trash2, X, Check, Eye, EyeOff } from 'lucide-react'
 import {
   listUsers,
   createUser,
@@ -12,11 +12,10 @@ import {
 const roleBadge = (role: string) => {
   const colors: Record<string, string> = {
     admin: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-    editor: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-    viewer: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+    user: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
   }
   return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${colors[role] || colors.viewer}`}>
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${colors[role] || colors.user}`}>
       {role}
     </span>
   )
@@ -29,7 +28,9 @@ export default function UserManagement() {
 
   // Add form
   const [showAdd, setShowAdd] = useState(false)
-  const [newUser, setNewUser] = useState<CreateUserRequest>({ username: '', password: '', role: 'viewer' })
+  const [newUser, setNewUser] = useState<CreateUserRequest>({ username: '', password: '', role: 'user' })
+  const [showNewUserPw, setShowNewUserPw] = useState(false)
+  const [showEditPw, setShowEditPw] = useState(false)
   const [addError, setAddError] = useState('')
 
   // Edit state
@@ -60,7 +61,7 @@ export default function UserManagement() {
     }
     try {
       await createUser(newUser)
-      setNewUser({ username: '', password: '', role: 'viewer' })
+      setNewUser({ username: '', password: '', role: 'user' })
       setShowAdd(false)
       setAddError('')
       fetchUsers()
@@ -147,21 +148,30 @@ export default function UserManagement() {
               placeholder="Username"
               className="bg-dark-900 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-primary-500"
             />
-            <input
-              type="password"
-              value={newUser.password}
-              onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
-              placeholder="Password"
-              className="bg-dark-900 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-primary-500"
-            />
+            <div className="relative">
+              <input
+                type={showNewUserPw ? 'text' : 'password'}
+                value={newUser.password}
+                onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                placeholder="Password"
+                className="w-full bg-dark-900 border border-dark-600 rounded-lg px-3 py-2 pr-10 text-sm text-white focus:outline-none focus:border-primary-500"
+              />
+              <button
+                type="button"
+                tabIndex={-1}
+                onClick={() => setShowNewUserPw(!showNewUserPw)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                {showNewUserPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
             <div className="flex gap-2">
               <select
                 value={newUser.role}
                 onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
                 className="flex-1 bg-dark-900 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-primary-500"
               >
-                <option value="viewer">Viewer</option>
-                <option value="editor">Editor</option>
+                <option value="user">User</option>
                 <option value="admin">Admin</option>
               </select>
               <button
@@ -211,19 +221,28 @@ export default function UserManagement() {
                         onChange={(e) => setEditData({ ...editData, role: e.target.value })}
                         className="bg-dark-800 border border-dark-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-primary-500"
                       >
-                        <option value="viewer">Viewer</option>
-                        <option value="editor">Editor</option>
+                        <option value="user">User</option>
                         <option value="admin">Admin</option>
                       </select>
                     </td>
                     <td className="px-4 py-3 hidden sm:table-cell">
-                      <input
-                        type="password"
-                        value={editData.password}
-                        onChange={(e) => setEditData({ ...editData, password: e.target.value })}
-                        placeholder="New password (optional)"
-                        className="bg-dark-800 border border-dark-600 rounded px-2 py-1 text-sm text-white w-full focus:outline-none focus:border-primary-500"
-                      />
+                      <div className="relative">
+                        <input
+                          type={showEditPw ? 'text' : 'password'}
+                          value={editData.password}
+                          onChange={(e) => setEditData({ ...editData, password: e.target.value })}
+                          placeholder="New password (optional)"
+                          className="bg-dark-800 border border-dark-600 rounded px-2 py-1 pr-8 text-sm text-white w-full focus:outline-none focus:border-primary-500"
+                        />
+                        <button
+                          type="button"
+                          tabIndex={-1}
+                          onClick={() => setShowEditPw(!showEditPw)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+                        >
+                          {showEditPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1">

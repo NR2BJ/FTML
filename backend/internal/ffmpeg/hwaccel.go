@@ -233,7 +233,10 @@ func CanBrowserPlayAudio(audioCodec string, browser BrowserCodecs) bool {
 	case "opus":
 		return browser.Opus
 	case "flac":
-		return browser.FLAC
+		// FLAC cannot be reliably streamed via HLS (fMP4/mpegts segments).
+		// Even if the browser reports FLAC support, MSE/HLS.js may not handle
+		// FLAC inside fragmented MP4. Always transcode to AAC for streaming.
+		return false
 	case "ac3":
 		return browser.AC3
 	case "mp3":

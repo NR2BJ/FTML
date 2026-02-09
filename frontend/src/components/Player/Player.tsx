@@ -222,6 +222,7 @@ export default function Player({ path }: PlayerProps) {
     setMediaInfo(null)
     setSubtitles([])
     setActiveSubtitle(null)
+    usePlayerStore.getState().setSecondarySubtitle(null)
     usePlayerStore.getState().clearABLoop()
     usePlayerStore.getState().setChapters([])
     probeDurationRef.current = 0
@@ -253,11 +254,24 @@ export default function Player({ path }: PlayerProps) {
       })
       .catch(() => {})
 
-    // Fetch available subtitles
+    // Fetch available subtitles and auto-select based on preferences
     listSubtitles(path)
       .then(({ data }) => {
         if (data && data.length > 0) {
           setSubtitles(data)
+          // Auto-select subtitle based on saved preferences
+          const { subtitleEnabled, preferredSubLang } = usePlayerStore.getState()
+          if (subtitleEnabled) {
+            let target = data[0] // fallback to first
+            if (preferredSubLang) {
+              const langMatch = data.find((s: { language: string }) => s.language === preferredSubLang)
+              if (langMatch) target = langMatch
+            }
+            if (target) {
+              setActiveSubtitle(target.id)
+              usePlayerStore.getState().setSubtitleVisible(true)
+            }
+          }
         }
       })
       .catch(() => {})
@@ -761,7 +775,7 @@ export default function Player({ path }: PlayerProps) {
   return (
     <div
       ref={containerRef}
-      className="relative bg-black rounded-lg overflow-hidden h-full group"
+      className="player-container relative bg-black rounded-lg overflow-hidden h-full group"
     >
       <video
         ref={videoRef}

@@ -139,13 +139,12 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			// Whisper backends — available list for dropdown (read-only)
 			r.Get("/whisper/backends/available", whisperBackendsHandler.ListAvailable)
 
-			// Editor+ routes (admin, editor)
+			// User+ routes (admin, user) — subtitle operations except delete
 			r.Group(func(r chi.Router) {
-				r.Use(middleware.RequireRole("admin", "editor"))
+				r.Use(middleware.RequireRole("admin", "user"))
 
 				r.Post("/subtitle/generate/*", subtitleHandler.GenerateSubtitle)
 				r.Post("/subtitle/translate/*", subtitleHandler.TranslateSubtitle)
-				r.Delete("/subtitle/delete/*", subtitleHandler.DeleteSubtitle)
 				r.Post("/subtitle/upload/*", subtitleHandler.UploadSubtitle)
 				r.Post("/subtitle/batch-generate", subtitleHandler.BatchGenerate)
 				r.Post("/subtitle/batch-translate", subtitleHandler.BatchTranslate)
@@ -157,6 +156,9 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			// Admin-only routes
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireRole("admin"))
+
+				// Subtitle delete — admin only
+				r.Delete("/subtitle/delete/*", subtitleHandler.DeleteSubtitle)
 
 				// Settings
 				r.Get("/settings", settingsHandler.GetSettings)

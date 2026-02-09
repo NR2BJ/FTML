@@ -100,14 +100,11 @@ export default function Settings() {
   }, {})
 
   const groupLabels: Record<string, string> = {
-    whisper: 'Whisper STT (Speech-to-Text)',
     translation: 'Translation API Keys',
     subtitle: 'Subtitle & Translation',
   }
 
   const settingHelp: Record<string, string> = {
-    whisper_model: 'Active model is managed via the model manager below. This field shows the current setting stored in the database.',
-    whisper_language: 'Default language for transcription. Use "auto" for automatic detection, or ISO 639-1 codes (ko, en, ja, zh, etc.)',
     gemini_api_key: 'Google Gemini API key for subtitle translation. Get one at aistudio.google.com',
     gemini_model: 'Select a Gemini model for translation. Models are fetched from Google API automatically.',
     openai_api_key: 'OpenAI API key for Whisper API and GPT translation. Used for both transcription and translation.',
@@ -226,25 +223,29 @@ export default function Settings() {
             ))}
           </div>
 
-          {/* Show Backend Manager + Model Manager after whisper settings group */}
-          {group === 'whisper' && (
-            <>
-              <div className="mt-4">
-                <h3 className="text-sm font-medium text-gray-400 mb-3">
-                  Whisper Backends
-                </h3>
-                <WhisperBackendManager />
-              </div>
-              <div className="mt-4">
-                <h3 className="text-sm font-medium text-gray-400 mb-3">
-                  Whisper Models
-                </h3>
-                <WhisperModelManager />
-              </div>
-            </>
-          )}
         </div>
       ))}
+
+      {/* Whisper Backend & Model Manager — always shown */}
+      <div className="mb-6">
+        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-3">
+          Whisper STT (Speech-to-Text)
+        </h2>
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-sm font-medium text-gray-400 mb-3">
+              Whisper Backends
+            </h3>
+            <WhisperBackendManager />
+          </div>
+          <div>
+            <h3 className="text-sm font-medium text-gray-400 mb-3">
+              Whisper Models
+            </h3>
+            <WhisperModelManager />
+          </div>
+        </div>
+      </div>
 
       {error && (
         <div className="text-sm text-red-400 mb-3">{error}</div>

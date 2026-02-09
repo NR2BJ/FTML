@@ -1,4 +1,4 @@
-import { RefObject } from 'react'
+import { RefObject, useState, useEffect, useRef } from 'react'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useToastStore } from '@/stores/toastStore'
 import { Play, Pause, Volume2, VolumeX, Maximize, SkipBack, SkipForward, BarChart2, PictureInPicture2, Camera, Repeat } from 'lucide-react'
@@ -35,14 +35,54 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
     clearABLoop,
   } = usePlayerStore()
   const addToast = useToastStore((s) => s.addToast)
+  const [dragging, setDragging] = useState(false)
+  const progressBarRef = useRef<HTMLDivElement>(null)
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0
 
-  const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleProgressDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    setDragging(true)
     const rect = e.currentTarget.getBoundingClientRect()
-    const percent = (e.clientX - rect.left) / rect.width
+    const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
     onSeek(percent * duration)
   }
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    setDragging(true)
+    const rect = e.currentTarget.getBoundingClientRect()
+    const percent = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width))
+    onSeek(percent * duration)
+  }
+
+  // Drag-to-seek: window-level listeners
+  useEffect(() => {
+    if (!dragging) return
+    const bar = progressBarRef.current
+    const handleMove = (e: MouseEvent) => {
+      if (!bar) return
+      const rect = bar.getBoundingClientRect()
+      const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+      onSeek(percent * duration)
+    }
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!bar) return
+      const rect = bar.getBoundingClientRect()
+      const percent = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width))
+      onSeek(percent * duration)
+    }
+    const handleUp = () => setDragging(false)
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    window.addEventListener('touchmove', handleTouchMove)
+    window.addEventListener('touchend', handleUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      window.removeEventListener('touchmove', handleTouchMove)
+      window.removeEventListener('touchend', handleUp)
+    }
+  }, [dragging, duration, onSeek])
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = parseFloat(e.target.value)
@@ -128,8 +168,10 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
     <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
       {/* Progress bar */}
       <div
-        className="mx-4 mb-2 cursor-pointer group/progress py-2 relative"
-        onClick={handleProgressClick}
+        ref={progressBarRef}
+        className="mx-4 mb-2 cursor-pointer group/progress py-2 relative select-none"
+        onMouseDown={handleProgressDown}
+        onTouchStart={handleTouchStart}
       >
       <div className="h-1 bg-gray-600 rounded-full group-hover/progress:h-2 transition-all relative">
         <div

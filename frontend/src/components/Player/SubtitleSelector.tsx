@@ -13,7 +13,8 @@ type Panel = 'menu' | 'settings' | 'generate' | 'translate'
 
 export default function SubtitleSelector() {
   const { user } = useAuthStore()
-  const canEdit = user?.role === 'admin' || user?.role === 'editor'
+  const isAdmin = user?.role === 'admin'
+  const canEdit = isAdmin || user?.role === 'user'
   const [panel, setPanel] = useState<Panel | null>(null)
   const [translateSource, setTranslateSource] = useState<SubtitleEntry | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -161,6 +162,7 @@ export default function SubtitleSelector() {
                 onClick={() => {
                   if (subMode === 'primary') {
                     setActiveSubtitle(null)
+                    usePlayerStore.getState().setSubtitleEnabled(false)
                   } else {
                     setSecondarySubtitle(null)
                   }
@@ -186,6 +188,10 @@ export default function SubtitleSelector() {
                       onClick={() => {
                         if (subMode === 'primary') {
                           setActiveSubtitle(sub.id)
+                          usePlayerStore.getState().setSubtitleEnabled(true)
+                          if (sub.language) {
+                            usePlayerStore.getState().setPreferredSubLang(sub.language)
+                          }
                         } else {
                           setSecondarySubtitle(sub.id)
                         }
@@ -240,7 +246,7 @@ export default function SubtitleSelector() {
                             <Languages className="w-3.5 h-3.5" />
                           </button>
                         )}
-                        {canEdit && sub.type === 'generated' && (
+                        {isAdmin && sub.type === 'generated' && (
                           <button
                             onClick={() => handleDelete(sub)}
                             disabled={deleting === sub.id}

@@ -74,9 +74,9 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validRoles := map[string]bool{"admin": true, "editor": true, "viewer": true}
+	validRoles := map[string]bool{"admin": true, "user": true}
 	if !validRoles[req.Role] {
-		jsonError(w, "role must be one of: admin, editor, viewer", http.StatusBadRequest)
+		jsonError(w, "role must be one of: admin, user", http.StatusBadRequest)
 		return
 	}
 
@@ -145,9 +145,9 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		username = req.Username
 	}
 	if req.Role != "" {
-		validRoles := map[string]bool{"admin": true, "editor": true, "viewer": true}
+		validRoles := map[string]bool{"admin": true, "user": true}
 		if !validRoles[req.Role] {
-			jsonError(w, "role must be one of: admin, editor, viewer", http.StatusBadRequest)
+			jsonError(w, "role must be one of: admin, user", http.StatusBadRequest)
 			return
 		}
 		role = req.Role

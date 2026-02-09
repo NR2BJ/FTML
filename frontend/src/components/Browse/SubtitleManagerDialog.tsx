@@ -15,7 +15,8 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
   const { user } = useAuthStore()
-  const canEdit = user?.role === 'admin' || user?.role === 'editor'
+  const isAdmin = user?.role === 'admin'
+  const canEdit = isAdmin || user?.role === 'user'
 
   const fetchSubtitles = () => {
     setLoading(true)
@@ -116,8 +117,8 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
                           <Languages className="w-3.5 h-3.5" />
                         </button>
 
-                        {/* Delete button (generated only) */}
-                        {isGenerated && (
+                        {/* Delete button (generated only, admin only) */}
+                        {isAdmin && isGenerated && (
                           <button
                             onClick={() => handleDelete(sub)}
                             disabled={deleting === sub.id}
@@ -143,7 +144,7 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
         {/* Footer */}
         <div className="px-5 py-3 border-t border-dark-700 text-xs text-gray-600">
           {subtitles.length} subtitle{subtitles.length !== 1 ? 's' : ''}
-          {canEdit && ' · Only generated subtitles can be deleted'}
+          {isAdmin && ' · Only generated subtitles can be deleted'}
         </div>
       </div>
     </div>
