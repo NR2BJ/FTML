@@ -238,6 +238,8 @@ func (g *GeminiTranslator) callGeminiAPI(ctx context.Context, cues []SubtitleCue
 
 	// Parse the JSON array of translated strings
 	translatedText := geminiResp.Candidates[0].Content.Parts[0].Text
+	// Gemini sometimes returns ASS-style \N (line break) which is invalid JSON escape
+	translatedText = strings.ReplaceAll(translatedText, `\N`, `\n`)
 	var translations []string
 	if err := json.Unmarshal([]byte(translatedText), &translations); err != nil {
 		// Try to extract JSON from response text

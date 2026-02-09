@@ -78,14 +78,32 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		return fmt.Errorf("no subtitle cues found in source")
 	}
 
+	// Filter out non-text cues (ASS drawing commands, empty cues)
+	var textCues []SubtitleCue
+	skippedMap := make(map[int]bool) // cue index → skipped
+	for _, cue := range cues {
+		if isNonTextCue(strings.TrimSpace(cue.Text)) {
+			skippedMap[cue.Index] = true
+		} else {
+			textCues = append(textCues, cue)
+		}
+	}
+	if len(skippedMap) > 0 {
+		log.Printf("[translate] filtered %d non-text cues (ASS drawing/empty), %d remain", len(skippedMap), len(textCues))
+	}
+
+	if len(textCues) == 0 {
+		return fmt.Errorf("no translatable subtitle cues found after filtering")
+	}
+
 	log.Printf("[translate] translating %d cues: engine=%s target=%s preset=%s",
-		len(cues), params.Engine, params.TargetLang, params.Preset)
+		len(textCues), params.Engine, params.TargetLang, params.Preset)
 
 	// Detect source language from subtitle ID (e.g., "generated:whisper_ja.vtt" → "ja")
 	sourceLang := detectSourceLang(params.SubtitleID)
 
 	// Translate
-	translated, err := engine.Translate(ctx, cues, TranslateOptions{
+	translatedText, err := engine.Translate(ctx, textCues, TranslateOptions{
 		SourceLang:   sourceLang,
 		TargetLang:   params.TargetLang,
 		Preset:       params.Preset,
@@ -93,6 +111,18 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 	}, updateProgress)
 	if err != nil {
 		return fmt.Errorf("translate: %w", err)
+	}
+
+	// Merge skipped cues back with translated results
+	var translated []SubtitleCue
+	ti := 0
+	for _, origCue := range cues {
+		if skippedMap[origCue.Index] {
+			translated = append(translated, origCue) // keep original
+		} else if ti < len(translatedText) {
+			translated = append(translated, translatedText[ti])
+			ti++
+		}
 	}
 
 	// Save translated VTT
@@ -268,4 +298,19 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// assDrawingRe matches ASS drawing commands like {=17}m -484.5 -210 l ...
+var assDrawingRe = regexp.MustCompile(`^\{[=\\][^}]*\}m\s+[-\d]`)
+
+// isNonTextCue returns true if a cue contains non-translatable content
+func isNonTextCue(text string) bool {
+	if text == "" {
+		return true
+	}
+	// ASS drawing command: {=17}m -484.5 -210 l ...
+	if assDrawingRe.MatchString(text) {
+		return true
+	}
+	return false
 }

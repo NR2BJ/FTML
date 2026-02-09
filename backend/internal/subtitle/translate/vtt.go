@@ -10,6 +10,9 @@ import (
 // Matches both HH:MM:SS.mmm and MM:SS.mmm timestamp formats
 var timestampRe = regexp.MustCompile(`(\d{1,2}:\d{2}:\d{2}[.,]\d{3}|\d{1,2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{3}|\d{1,2}:\d{2}[.,]\d{3})`)
 
+// htmlTagRe strips VTT/HTML formatting tags like <i>, </b>, <v Name>, <c.class>, etc.
+var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
+
 // ParseVTT parses WebVTT content into subtitle cues
 func ParseVTT(content string) []SubtitleCue {
 	// Strip UTF-8 BOM if present
@@ -74,12 +77,16 @@ func ParseVTT(content string) []SubtitleCue {
 			continue
 		}
 
-		// Text line
+		// Text line — strip HTML/VTT formatting tags (<i>, </b>, <v Name>, etc.)
 		if currentCue != nil {
+			cleaned := htmlTagRe.ReplaceAllString(line, "")
+			if cleaned == "" {
+				continue
+			}
 			if currentCue.Text != "" {
 				currentCue.Text += "\n"
 			}
-			currentCue.Text += line
+			currentCue.Text += cleaned
 		}
 	}
 

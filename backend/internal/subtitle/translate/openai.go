@@ -137,6 +137,8 @@ func (o *OpenAITranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 	}
 
 	content := chatResp.Choices[0].Message.Content
+	// LLMs sometimes return ASS-style \N (line break) which is invalid JSON escape
+	content = strings.ReplaceAll(content, `\N`, `\n`)
 
 	// Parse JSON response - could be {"translations": [...]} or just [...]
 	var translations []string
