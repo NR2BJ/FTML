@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { X, Trash2, Languages, Loader2, Subtitles } from 'lucide-react'
+import { X, Trash2, Languages, Loader2, Subtitles, Clock } from 'lucide-react'
 import { type FileEntry } from '@/api/files'
-import { listSubtitles, deleteSubtitle, type SubtitleEntry } from '@/api/subtitle'
+import { listSubtitles, deleteSubtitle, requestSubtitleDelete, listMyDeleteRequests, type SubtitleEntry } from '@/api/subtitle'
+import { useToastStore } from '@/stores/toastStore'
 import { useAuthStore } from '@/stores/authStore'
 
 interface SubtitleManagerDialogProps {
@@ -14,6 +15,8 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
   const [subtitles, setSubtitles] = useState<SubtitleEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set())
+  const addToast = useToastStore((s) => s.addToast)
   const { user } = useAuthStore()
   const isAdmin = user?.role === 'admin'
   const canEdit = isAdmin || user?.role === 'user'
@@ -29,6 +32,37 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
   useEffect(() => {
     fetchSubtitles()
   }, [file.path])
+
+  // Fetch pending delete requests for non-admin users
+  useEffect(() => {
+    if (isAdmin || !canEdit) return
+    listMyDeleteRequests()
+      .then(({ data }) => {
+        const pending = new Set(
+          (data || []).filter((r) => r.status === 'pending').map((r) => r.subtitle_id)
+        )
+        setPendingDeletes(pending)
+      })
+      .catch(() => {})
+  }, [isAdmin, canEdit])
+
+  const handleRequestDelete = async (sub: SubtitleEntry) => {
+    if (deleting) return
+    setDeleting(sub.id)
+    try {
+      await requestSubtitleDelete(file.path, {
+        subtitle_id: sub.id,
+        subtitle_label: sub.label,
+        reason: '',
+      })
+      setPendingDeletes((prev) => new Set(prev).add(sub.id))
+      addToast({ type: 'success', message: 'Delete request sent' })
+    } catch {
+      addToast({ type: 'error', message: 'Failed to send delete request' })
+    } finally {
+      setDeleting(null)
+    }
+  }
 
   const handleDelete = async (sub: SubtitleEntry) => {
     if (deleting) return
@@ -117,7 +151,7 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
                           <Languages className="w-3.5 h-3.5" />
                         </button>
 
-                        {/* Delete button (generated only, admin only) */}
+                        {/* Delete button (admin: direct delete, user: request) */}
                         {isAdmin && isGenerated && (
                           <button
                             onClick={() => handleDelete(sub)}
@@ -132,6 +166,26 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
                             )}
                           </button>
                         )}
+                        {!isAdmin && canEdit && isGenerated && (
+                          pendingDeletes.has(sub.id) ? (
+                            <span className="p-1.5 text-yellow-500" title="Delete requested (pending)">
+                              <Clock className="w-3.5 h-3.5" />
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleRequestDelete(sub)}
+                              disabled={deleting === sub.id}
+                              title="Request delete"
+                              className="p-1.5 rounded text-gray-600 hover:text-orange-400 hover:bg-dark-600 transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50"
+                            >
+                              {deleting === sub.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          )
+                        )}
                       </div>
                     )}
                   </div>
@@ -144,7 +198,7 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
         {/* Footer */}
         <div className="px-5 py-3 border-t border-dark-700 text-xs text-gray-600">
           {subtitles.length} subtitle{subtitles.length !== 1 ? 's' : ''}
-          {isAdmin && ' · Only generated subtitles can be deleted'}
+          {isAdmin ? ' · Only generated subtitles can be deleted' : canEdit ? ' · Request deletion for generated subtitles' : ''}
         </div>
       </div>
     </div>

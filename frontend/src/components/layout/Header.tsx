@@ -6,10 +6,10 @@ import { useThemeStore } from '@/stores/themeStore'
 import {
   Film, Search, LogOut, User, Settings, Clock, UserCog, Users, UserPlus,
   Shield, ChevronDown, Monitor, BarChart3, ShieldAlert, Menu,
-  Folder, FileVideo, Trash2, Sun, Moon, Laptop
+  Folder, FileVideo, Trash2, Sun, Moon, Laptop, FileX
 } from 'lucide-react'
 import { searchFiles, type FileEntry } from '@/api/files'
-import { getPendingRegistrationCount } from '@/api/admin'
+import { getPendingRegistrationCount, getPendingDeleteRequestCount } from '@/api/admin'
 
 export default function Header() {
   const { user, logout } = useAuthStore()
@@ -21,19 +21,24 @@ export default function Header() {
   const [results, setResults] = useState<FileEntry[]>([])
   const [showResults, setShowResults] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
-  const [pendingCount, setPendingCount] = useState(0)
+  const [pendingRegCount, setPendingRegCount] = useState(0)
+  const [pendingDelReqCount, setPendingDelReqCount] = useState(0)
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const userMenuRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   const isAdmin = user?.role === 'admin'
 
-  // Fetch pending registration count for admin
+  // Fetch pending counts for admin
   const fetchPendingCount = useCallback(async () => {
     if (!isAdmin) return
     try {
-      const { data } = await getPendingRegistrationCount()
-      setPendingCount(data.count)
+      const [regRes, delRes] = await Promise.all([
+        getPendingRegistrationCount(),
+        getPendingDeleteRequestCount(),
+      ])
+      setPendingRegCount(regRes.data.count)
+      setPendingDelReqCount(delRes.data.count)
     } catch {
       // ignore
     }
@@ -45,11 +50,15 @@ export default function Header() {
     return () => clearInterval(interval)
   }, [fetchPendingCount])
 
-  // Listen for registration updates (instant badge refresh)
+  // Listen for registration/delete-request updates (instant badge refresh)
   useEffect(() => {
     const handler = () => fetchPendingCount()
     window.addEventListener('registration-updated', handler)
-    return () => window.removeEventListener('registration-updated', handler)
+    window.addEventListener('delete-request-updated', handler)
+    return () => {
+      window.removeEventListener('registration-updated', handler)
+      window.removeEventListener('delete-request-updated', handler)
+    }
   }, [fetchPendingCount])
 
   // Close user menu on outside click
@@ -232,9 +241,9 @@ export default function Header() {
           >
             <User className="w-4 h-4" />
             <span className="text-sm hidden sm:block">{user?.username}</span>
-            {isAdmin && pendingCount > 0 && (
+            {isAdmin && (pendingRegCount + pendingDelReqCount) > 0 && (
               <span className="bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
-                {pendingCount}
+                {pendingRegCount + pendingDelReqCount}
               </span>
             )}
             <ChevronDown className="w-3 h-3" />
@@ -266,9 +275,21 @@ export default function Header() {
                   >
                     <UserPlus className="w-4 h-4" />
                     Registrations
-                    {pendingCount > 0 && (
+                    {pendingRegCount > 0 && (
                       <span className="bg-red-500/20 text-red-400 text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-auto">
-                        {pendingCount}
+                        {pendingRegCount}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => navigate('/admin/delete-requests')}
+                    className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 flex items-center gap-2"
+                  >
+                    <FileX className="w-4 h-4" />
+                    Delete Requests
+                    {pendingDelReqCount > 0 && (
+                      <span className="bg-orange-500/20 text-orange-400 text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-auto">
+                        {pendingDelReqCount}
                       </span>
                     )}
                   </button>

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -142,8 +143,29 @@ func (s *Service) loadSubtitle(videoPath, subtitleID string) (string, error) {
 		return string(data), nil
 	}
 
-	// Embedded subtitles would need FFmpeg extraction
-	return "", fmt.Errorf("embedded subtitle translation not yet supported, extract first")
+	if strings.HasPrefix(subtitleID, "embedded:") {
+		// Extract embedded subtitle via FFmpeg as VTT
+		var streamIndex int
+		fmt.Sscanf(strings.TrimPrefix(subtitleID, "embedded:"), "%d", &streamIndex)
+
+		fullPath := filepath.Join(s.mediaPath, videoPath)
+		cmd := exec.Command("ffmpeg",
+			"-hide_banner",
+			"-loglevel", "error",
+			"-i", fullPath,
+			"-map", fmt.Sprintf("0:%d", streamIndex),
+			"-f", "webvtt",
+			"pipe:1",
+		)
+
+		output, err := cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("extract embedded subtitle (stream %d): %w", streamIndex, err)
+		}
+		return string(output), nil
+	}
+
+	return "", fmt.Errorf("unknown subtitle type: %s", subtitleID)
 }
 
 func detectSourceLang(subtitleID string) string {

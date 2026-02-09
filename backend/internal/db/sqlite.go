@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -92,6 +93,22 @@ func (d *Database) migrate() error {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		reviewed_at DATETIME,
 		reviewed_by INTEGER,
+		FOREIGN KEY (reviewed_by) REFERENCES users(id)
+	);
+
+	CREATE TABLE IF NOT EXISTS delete_requests (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		username TEXT NOT NULL,
+		video_path TEXT NOT NULL,
+		subtitle_id TEXT NOT NULL,
+		subtitle_label TEXT NOT NULL DEFAULT '',
+		reason TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'pending',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		reviewed_at DATETIME,
+		reviewed_by INTEGER,
+		FOREIGN KEY (user_id) REFERENCES users(id),
 		FOREIGN KEY (reviewed_by) REFERENCES users(id)
 	);
 
@@ -654,4 +671,147 @@ func (d *Database) migrateWhisperBackends() {
 	if openAIKey != "" {
 		d.CreateWhisperBackend("OpenAI Whisper", "openai", "", 10)
 	}
+}
+
+// --- Delete Requests ---
+
+// CreateDeleteRequest inserts a new subtitle delete request (checks for duplicate pending)
+func (d *Database) CreateDeleteRequest(userID int64, username, videoPath, subtitleID, subtitleLabel, reason string) (int64, error) {
+	var count int
+	d.db.QueryRow(
+		"SELECT COUNT(*) FROM delete_requests WHERE video_path = ? AND subtitle_id = ? AND status = 'pending'",
+		videoPath, subtitleID,
+	).Scan(&count)
+	if count > 0 {
+		return 0, fmt.Errorf("a pending delete request already exists for this subtitle")
+	}
+	result, err := d.db.Exec(
+		"INSERT INTO delete_requests (user_id, username, video_path, subtitle_id, subtitle_label, reason) VALUES (?, ?, ?, ?, ?, ?)",
+		userID, username, videoPath, subtitleID, subtitleLabel, reason,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// ListDeleteRequests returns delete requests filtered by status
+func (d *Database) ListDeleteRequests(status string) ([]models.DeleteRequest, error) {
+	var query string
+	var args []interface{}
+	if status != "" {
+		query = "SELECT id, user_id, username, video_path, subtitle_id, subtitle_label, COALESCE(reason,''), status, created_at, reviewed_at, reviewed_by FROM delete_requests WHERE status = ? ORDER BY created_at DESC"
+		args = append(args, status)
+	} else {
+		query = "SELECT id, user_id, username, video_path, subtitle_id, subtitle_label, COALESCE(reason,''), status, created_at, reviewed_at, reviewed_by FROM delete_requests ORDER BY created_at DESC"
+	}
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reqs []models.DeleteRequest
+	for rows.Next() {
+		var r models.DeleteRequest
+		if err := rows.Scan(&r.ID, &r.UserID, &r.Username, &r.VideoPath, &r.SubtitleID, &r.SubtitleLabel, &r.Reason, &r.Status, &r.CreatedAt, &r.ReviewedAt, &r.ReviewedBy); err != nil {
+			return nil, err
+		}
+		reqs = append(reqs, r)
+	}
+	if reqs == nil {
+		reqs = []models.DeleteRequest{}
+	}
+	return reqs, nil
+}
+
+// ListUserDeleteRequests returns delete requests for a specific user
+func (d *Database) ListUserDeleteRequests(userID int64) ([]models.DeleteRequest, error) {
+	rows, err := d.db.Query(
+		"SELECT id, user_id, username, video_path, subtitle_id, subtitle_label, COALESCE(reason,''), status, created_at, reviewed_at, reviewed_by FROM delete_requests WHERE user_id = ? ORDER BY created_at DESC",
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reqs []models.DeleteRequest
+	for rows.Next() {
+		var r models.DeleteRequest
+		if err := rows.Scan(&r.ID, &r.UserID, &r.Username, &r.VideoPath, &r.SubtitleID, &r.SubtitleLabel, &r.Reason, &r.Status, &r.CreatedAt, &r.ReviewedAt, &r.ReviewedBy); err != nil {
+			return nil, err
+		}
+		reqs = append(reqs, r)
+	}
+	if reqs == nil {
+		reqs = []models.DeleteRequest{}
+	}
+	return reqs, nil
+}
+
+// GetDeleteRequest returns a single delete request by ID
+func (d *Database) GetDeleteRequest(id int64) (*models.DeleteRequest, error) {
+	var r models.DeleteRequest
+	err := d.db.QueryRow(
+		"SELECT id, user_id, username, video_path, subtitle_id, subtitle_label, COALESCE(reason,''), status, created_at, reviewed_at, reviewed_by FROM delete_requests WHERE id = ?", id,
+	).Scan(&r.ID, &r.UserID, &r.Username, &r.VideoPath, &r.SubtitleID, &r.SubtitleLabel, &r.Reason, &r.Status, &r.CreatedAt, &r.ReviewedAt, &r.ReviewedBy)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// ApproveDeleteRequest marks a delete request as approved
+func (d *Database) ApproveDeleteRequest(id int64, reviewerID int64) error {
+	now := time.Now()
+	result, err := d.db.Exec(
+		"UPDATE delete_requests SET status = 'approved', reviewed_at = ?, reviewed_by = ? WHERE id = ? AND status = 'pending'",
+		now, reviewerID, id,
+	)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// RejectDeleteRequest marks a delete request as rejected
+func (d *Database) RejectDeleteRequest(id int64, reviewerID int64) error {
+	now := time.Now()
+	result, err := d.db.Exec(
+		"UPDATE delete_requests SET status = 'rejected', reviewed_at = ?, reviewed_by = ? WHERE id = ? AND status = 'pending'",
+		now, reviewerID, id,
+	)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// DeleteDeleteRequest removes a non-pending delete request record
+func (d *Database) DeleteDeleteRequest(id int64) error {
+	result, err := d.db.Exec("DELETE FROM delete_requests WHERE id = ? AND status != 'pending'", id)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// CountPendingDeleteRequests returns the count of pending delete requests
+func (d *Database) CountPendingDeleteRequests() (int, error) {
+	var count int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM delete_requests WHERE status = 'pending'").Scan(&count)
+	return count, err
 }

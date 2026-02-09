@@ -2,10 +2,13 @@ package handlers
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -23,17 +26,14 @@ import (
 var startTime = time.Now()
 
 type AdminHandler struct {
-	db         *db.Database
-	hlsManager *ffmpeg.HLSManager
-	mediaPath  string
+	db           *db.Database
+	hlsManager   *ffmpeg.HLSManager
+	mediaPath    string
+	subtitlePath string
 }
 
-func NewAdminHandler(db *db.Database, hlsManager *ffmpeg.HLSManager, mediaPath ...string) *AdminHandler {
-	mp := ""
-	if len(mediaPath) > 0 {
-		mp = mediaPath[0]
-	}
-	return &AdminHandler{db: db, hlsManager: hlsManager, mediaPath: mp}
+func NewAdminHandler(db *db.Database, hlsManager *ffmpeg.HLSManager, mediaPath, subtitlePath string) *AdminHandler {
+	return &AdminHandler{db: db, hlsManager: hlsManager, mediaPath: mediaPath, subtitlePath: subtitlePath}
 }
 
 // ListUsers returns all users
@@ -410,6 +410,125 @@ func (h *AdminHandler) ListFileLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, logs, http.StatusOK)
+}
+
+// ListDeleteRequests returns subtitle delete requests filtered by status
+func (h *AdminHandler) ListDeleteRequests(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	if status == "" {
+		status = "pending"
+	}
+
+	reqs, err := h.db.ListDeleteRequests(status)
+	if err != nil {
+		jsonError(w, "failed to list delete requests", http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, reqs, http.StatusOK)
+}
+
+// PendingDeleteRequestCount returns the count of pending delete requests
+func (h *AdminHandler) PendingDeleteRequestCount(w http.ResponseWriter, r *http.Request) {
+	count, err := h.db.CountPendingDeleteRequests()
+	if err != nil {
+		jsonError(w, "failed to count delete requests", http.StatusInternalServerError)
+		return
+	}
+	jsonResponse(w, map[string]int{"count": count}, http.StatusOK)
+}
+
+// ApproveDeleteRequest approves a pending delete request and removes the subtitle file
+func (h *AdminHandler) ApproveDeleteRequest(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		jsonError(w, "invalid request ID", http.StatusBadRequest)
+		return
+	}
+
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		jsonError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get the request details
+	req, err := h.db.GetDeleteRequest(id)
+	if err != nil {
+		jsonError(w, "delete request not found", http.StatusNotFound)
+		return
+	}
+
+	if req.Status != "pending" {
+		jsonError(w, "request is not pending", http.StatusBadRequest)
+		return
+	}
+
+	// Delete the actual subtitle file
+	if strings.HasPrefix(req.SubtitleID, "generated:") {
+		filename := strings.TrimPrefix(req.SubtitleID, "generated:")
+		sum := sha256.Sum256([]byte(req.VideoPath))
+		hash := fmt.Sprintf("%x", sum[:8])
+		subPath := filepath.Join(h.subtitlePath, hash, filename)
+		if err := os.Remove(subPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[admin] failed to delete subtitle file %s: %v", subPath, err)
+			jsonError(w, "failed to delete subtitle file", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Update status
+	if err := h.db.ApproveDeleteRequest(id, claims.UserID); err != nil {
+		jsonError(w, "failed to approve delete request", http.StatusInternalServerError)
+		return
+	}
+
+	// Log the operation
+	h.db.CreateFileLog(claims.UserID, claims.Username, "subtitle_delete", req.VideoPath, req.SubtitleLabel)
+
+	jsonResponse(w, map[string]string{"status": "approved"}, http.StatusOK)
+}
+
+// RejectDeleteRequest rejects a pending delete request
+func (h *AdminHandler) RejectDeleteRequest(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		jsonError(w, "invalid request ID", http.StatusBadRequest)
+		return
+	}
+
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		jsonError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if err := h.db.RejectDeleteRequest(id, claims.UserID); err != nil {
+		log.Printf("[admin] failed to reject delete request %d: %v", id, err)
+		jsonError(w, "failed to reject delete request", http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]string{"status": "rejected"}, http.StatusOK)
+}
+
+// DeleteDeleteRequest removes a non-pending delete request record
+func (h *AdminHandler) DeleteDeleteRequest(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		jsonError(w, "invalid request ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeleteDeleteRequest(id); err != nil {
+		jsonError(w, "request not found or is still pending", http.StatusNotFound)
+		return
+	}
+
+	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
 // readMemInfo reads system memory from /proc/meminfo

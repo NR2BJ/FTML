@@ -827,6 +827,60 @@ func (h *SubtitleHandler) ConvertSubtitle(w http.ResponseWriter, r *http.Request
 	w.Write(outputData)
 }
 
+// RequestDelete creates a delete request for a generated subtitle (user-facing)
+func (h *SubtitleHandler) RequestDelete(w http.ResponseWriter, r *http.Request) {
+	path := extractPath(r)
+	if path == "" {
+		jsonError(w, "missing video path", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		SubtitleID    string `json:"subtitle_id"`
+		SubtitleLabel string `json:"subtitle_label"`
+		Reason        string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(req.SubtitleID, "generated:") {
+		jsonError(w, "only generated subtitles can be requested for deletion", http.StatusBadRequest)
+		return
+	}
+
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		jsonError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	id, err := h.database.CreateDeleteRequest(claims.UserID, claims.Username, path, req.SubtitleID, req.SubtitleLabel, req.Reason)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	h.logSubtitleOp(r, "subtitle_delete_request", path, req.SubtitleID)
+	jsonResponse(w, map[string]interface{}{"id": id, "status": "pending"}, http.StatusCreated)
+}
+
+// ListMyDeleteRequests returns the current user's delete requests
+func (h *SubtitleHandler) ListMyDeleteRequests(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		jsonError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	requests, err := h.database.ListUserDeleteRequests(claims.UserID)
+	if err != nil {
+		jsonError(w, "failed to list delete requests", http.StatusInternalServerError)
+		return
+	}
+	jsonResponse(w, requests, http.StatusOK)
+}
+
 // vttToSRT converts WebVTT to SRT format
 func vttToSRT(vttData []byte) []byte {
 	var buf bytes.Buffer

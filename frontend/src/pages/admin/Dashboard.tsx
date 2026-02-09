@@ -66,6 +66,7 @@ const actionLabels: Record<string, { label: string; color: string }> = {
   subtitle_delete: { label: 'Sub Delete', color: 'text-red-400' },
   subtitle_upload: { label: 'Sub Upload', color: 'text-teal-400' },
   subtitle_convert: { label: 'Sub Convert', color: 'text-indigo-400' },
+  subtitle_delete_request: { label: 'Del. Request', color: 'text-orange-400' },
 }
 
 export default function Dashboard() {

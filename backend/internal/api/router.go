@@ -48,7 +48,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	presetsHandler := handlers.NewPresetsHandler(database)
 	whisperBackendsHandler := handlers.NewWhisperBackendsHandler(database)
 	geminiModelsHandler := handlers.NewGeminiModelsHandler(database)
-	adminHandler := handlers.NewAdminHandler(database, hlsManager, cfg.MediaPath)
+	adminHandler := handlers.NewAdminHandler(database, hlsManager, cfg.MediaPath, cfg.SubtitlePath)
 
 	// Internal routes — localhost only, no auth (container-to-container / Docker CLI)
 	r.Route("/internal", func(r chi.Router) {
@@ -149,6 +149,8 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				r.Post("/subtitle/batch-generate", subtitleHandler.BatchGenerate)
 				r.Post("/subtitle/batch-translate", subtitleHandler.BatchTranslate)
 				r.Post("/subtitle/convert/*", subtitleHandler.ConvertSubtitle)
+				r.Post("/subtitle/delete-request/*", subtitleHandler.RequestDelete)
+				r.Get("/subtitle/my-delete-requests", subtitleHandler.ListMyDeleteRequests)
 				r.Delete("/jobs/{id}", jobHandler.CancelJob)
 				r.Post("/jobs/{id}/retry", jobHandler.RetryJob)
 			})
@@ -199,6 +201,13 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				r.Post("/admin/registrations/{id}/approve", adminHandler.ApproveRegistration)
 				r.Post("/admin/registrations/{id}/reject", adminHandler.RejectRegistration)
 				r.Delete("/admin/registrations/{id}", adminHandler.DeleteRegistration)
+
+				// Admin — Delete Request Management
+				r.Get("/admin/delete-requests", adminHandler.ListDeleteRequests)
+				r.Get("/admin/delete-requests/count", adminHandler.PendingDeleteRequestCount)
+				r.Post("/admin/delete-requests/{id}/approve", adminHandler.ApproveDeleteRequest)
+				r.Post("/admin/delete-requests/{id}/reject", adminHandler.RejectDeleteRequest)
+				r.Delete("/admin/delete-requests/{id}", adminHandler.DeleteDeleteRequest)
 
 				// Admin — File Management (upload uses its own body limit)
 				r.Post("/files/upload/*", filesHandler.Upload)

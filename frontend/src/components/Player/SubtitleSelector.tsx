@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
-import { Subtitles, Settings, Wand2, Languages, Trash2, Upload, Download } from 'lucide-react'
+import { Subtitles, Settings, Wand2, Languages, Trash2, Upload, Download, Clock } from 'lucide-react'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useToastStore } from '@/stores/toastStore'
 import { useAuthStore } from '@/stores/authStore'
-import { deleteSubtitle, listSubtitles, uploadSubtitle, convertSubtitle } from '@/api/subtitle'
+import { deleteSubtitle, listSubtitles, uploadSubtitle, convertSubtitle, requestSubtitleDelete, listMyDeleteRequests } from '@/api/subtitle'
 import SubtitleSettings from './SubtitleSettings'
 import SubtitleGenerate from './SubtitleGenerate'
 import SubtitleTranslate from './SubtitleTranslate'
@@ -20,6 +20,7 @@ export default function SubtitleSelector() {
   const [deleting, setDeleting] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [converting, setConverting] = useState(false)
+  const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set())
   const addToast = useToastStore((s) => s.addToast)
   const menuRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -49,6 +50,37 @@ export default function SubtitleSelector() {
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [panel])
+
+  // Fetch pending delete requests for non-admin users
+  useEffect(() => {
+    if (isAdmin || !canEdit) return
+    listMyDeleteRequests()
+      .then(({ data }) => {
+        const pending = new Set(
+          (data || []).filter((r) => r.status === 'pending').map((r) => r.subtitle_id)
+        )
+        setPendingDeletes(pending)
+      })
+      .catch(() => {})
+  }, [isAdmin, canEdit])
+
+  const handleRequestDelete = async (sub: SubtitleEntry) => {
+    if (!currentFile) return
+    setDeleting(sub.id)
+    try {
+      await requestSubtitleDelete(currentFile, {
+        subtitle_id: sub.id,
+        subtitle_label: sub.label,
+        reason: '',
+      })
+      setPendingDeletes((prev) => new Set(prev).add(sub.id))
+      addToast({ type: 'success', message: 'Delete request sent' })
+    } catch {
+      addToast({ type: 'error', message: 'Failed to send delete request' })
+    } finally {
+      setDeleting(null)
+    }
+  }
 
   const openTranslate = (sub: SubtitleEntry) => {
     setTranslateSource(sub)
@@ -246,7 +278,7 @@ export default function SubtitleSelector() {
                             <Languages className="w-3.5 h-3.5" />
                           </button>
                         )}
-                        {isAdmin && sub.type === 'generated' && (
+                        {sub.type === 'generated' && isAdmin && (
                           <button
                             onClick={() => handleDelete(sub)}
                             disabled={deleting === sub.id}
@@ -255,6 +287,22 @@ export default function SubtitleSelector() {
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
+                        )}
+                        {sub.type === 'generated' && !isAdmin && canEdit && (
+                          pendingDeletes.has(sub.id) ? (
+                            <span className="p-1 mr-1 text-yellow-500" title="Delete requested (pending)">
+                              <Clock className="w-3.5 h-3.5" />
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleRequestDelete(sub)}
+                              disabled={deleting === sub.id}
+                              className="p-1 mr-1 text-gray-500 hover:text-orange-400 disabled:opacity-50"
+                              title="Request delete"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )
                         )}
                       </div>
                     )}

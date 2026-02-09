@@ -28,3 +28,18 @@ type Registration struct {
 	ReviewedAt *time.Time `json:"reviewed_at,omitempty"`
 	ReviewedBy *int64     `json:"reviewed_by,omitempty"`
 }
+
+// DeleteRequest represents a user's request to delete a generated subtitle
+type DeleteRequest struct {
+	ID            int64   `json:"id"`
+	UserID        int64   `json:"user_id"`
+	Username      string  `json:"username"`
+	VideoPath     string  `json:"video_path"`
+	SubtitleID    string  `json:"subtitle_id"`
+	SubtitleLabel string  `json:"subtitle_label"`
+	Reason        string  `json:"reason"`
+	Status        string  `json:"status"` // pending, approved, rejected
+	CreatedAt     string  `json:"created_at"`
+	ReviewedAt    *string `json:"reviewed_at,omitempty"`
+	ReviewedBy    *int64  `json:"reviewed_by,omitempty"`
+}

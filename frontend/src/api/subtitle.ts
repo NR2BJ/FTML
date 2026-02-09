@@ -102,6 +102,27 @@ export const batchGenerate = (paths: string[], params: Omit<GenerateParams, 'pat
 export const batchTranslate = (paths: string[], params: { target_lang: string; engine: string; preset: string; custom_prompt?: string }) =>
   client.post<BatchResult>('/subtitle/batch-translate', { paths, ...params })
 
+// Delete requests
+export interface DeleteRequest {
+  id: number
+  user_id: number
+  username: string
+  video_path: string
+  subtitle_id: string
+  subtitle_label: string
+  reason: string
+  status: string
+  created_at: string
+  reviewed_at?: string
+  reviewed_by?: number
+}
+
+export const requestSubtitleDelete = (videoPath: string, data: { subtitle_id: string; subtitle_label: string; reason: string }) =>
+  client.post(`/subtitle/delete-request/${videoPath}`, data)
+
+export const listMyDeleteRequests = () =>
+  client.get<DeleteRequest[]>('/subtitle/my-delete-requests')
+
 // Subtitle format conversion — downloads as file
 export const convertSubtitle = async (videoPath: string, subtitleId: string, targetFormat: string) => {
   const response = await client.post(`/subtitle/convert/${videoPath}`, {

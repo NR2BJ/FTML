@@ -68,6 +68,36 @@ export const rejectRegistration = (id: number) =>
 export const deleteRegistration = (id: number) =>
   client.delete(`/admin/registrations/${id}`)
 
+// Delete requests
+export interface DeleteRequestAdmin {
+  id: number
+  user_id: number
+  username: string
+  video_path: string
+  subtitle_id: string
+  subtitle_label: string
+  reason: string
+  status: string
+  created_at: string
+  reviewed_at?: string
+  reviewed_by?: number
+}
+
+export const listDeleteRequests = (status?: string) =>
+  client.get<DeleteRequestAdmin[]>('/admin/delete-requests', { params: { status } })
+
+export const getPendingDeleteRequestCount = () =>
+  client.get<{ count: number }>('/admin/delete-requests/count')
+
+export const approveDeleteRequest = (id: number) =>
+  client.post(`/admin/delete-requests/${id}/approve`)
+
+export const rejectDeleteRequest = (id: number) =>
+  client.post(`/admin/delete-requests/${id}/reject`)
+
+export const removeDeleteRequest = (id: number) =>
+  client.delete(`/admin/delete-requests/${id}`)
+
 // Active sessions
 export interface StreamSession {
   id: string
