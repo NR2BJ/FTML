@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,30 +45,73 @@ func (o *OpenAITranslator) Translate(ctx context.Context, cues []SubtitleCue, op
 		systemPrompt += "\n\nUser instructions: " + opts.CustomPrompt
 	}
 
-	var result []SubtitleCue
 	totalBatches := (len(cues) + batchSize - 1) / batchSize
+	log.Printf("[openai-translate] translating %d cues in %d batches (%d per batch, %d concurrent)",
+		len(cues), totalBatches, batchSize, concurrency)
+
+	type openAIBatchResult struct {
+		cues []SubtitleCue
+		err  error
+	}
+
+	results := make([]openAIBatchResult, totalBatches)
+	var completedBatches atomic.Int32
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
 
 	for i := 0; i < len(cues); i += batchSize {
 		end := i + batchSize
 		if end > len(cues) {
 			end = len(cues)
 		}
+		batchIdx := i / batchSize
 		batch := cues[i:end]
-		batchNum := i/batchSize + 1
 
-		progress := float64(i) / float64(len(cues))
-		updateProgress(progress)
+		wg.Add(1)
+		sem <- struct{}{}
 
-		log.Printf("[openai-translate] translating batch %d/%d (%d cues)", batchNum, totalBatches, len(batch))
+		go func(idx int, batch []SubtitleCue) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		translated, err := o.translateBatch(ctx, batch, systemPrompt)
-		if err != nil {
-			return nil, fmt.Errorf("batch %d: %w", batchNum, err)
-		}
+			batchNum := idx + 1
+			log.Printf("[openai-translate] batch %d/%d (%d cues) started", batchNum, totalBatches, len(batch))
 
-		result = append(result, translated...)
+			translated, err := o.translateBatch(ctx, batch, systemPrompt)
+			if err != nil {
+				// Retry once on transient errors
+				if isTransientError(err) {
+					log.Printf("[openai-translate] batch %d failed (%v), retrying after 5s...", batchNum, err)
+					time.Sleep(5 * time.Second)
+					translated, err = o.translateBatch(ctx, batch, systemPrompt)
+				}
+			}
+
+			if err != nil {
+				results[idx] = openAIBatchResult{err: fmt.Errorf("batch %d: %w", batchNum, err)}
+			} else {
+				results[idx] = openAIBatchResult{cues: translated}
+			}
+
+			done := completedBatches.Add(1)
+			updateProgress(float64(done) / float64(totalBatches))
+			log.Printf("[openai-translate] batch %d/%d completed", batchNum, totalBatches)
+		}(batchIdx, batch)
 	}
 
+	wg.Wait()
+
+	// Merge results in order
+	var result []SubtitleCue
+	for _, r := range results {
+		if r.err != nil {
+			return nil, r.err
+		}
+		result = append(result, r.cues...)
+	}
+
+	log.Printf("[openai-translate] translation complete: %d cues (%d batches, %d concurrent)",
+		len(result), totalBatches, concurrency)
 	return result, nil
 }
 

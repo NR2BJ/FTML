@@ -9,8 +9,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
+
+const deeplBatchSize = 50 // DeepL API limit: max 50 texts per request
 
 const deeplAPIURL = "https://api-free.deepl.com/v2/translate"
 
@@ -38,31 +42,70 @@ func (d *DeepLTranslator) Translate(ctx context.Context, cues []SubtitleCue, opt
 		return nil, fmt.Errorf("DeepL API key not configured")
 	}
 
-	// DeepL can handle multiple texts in one request (up to 50)
-	var result []SubtitleCue
-	totalBatches := (len(cues) + batchSize - 1) / batchSize
+	totalBatches := (len(cues) + deeplBatchSize - 1) / deeplBatchSize
+	log.Printf("[deepl] translating %d cues in %d batches (%d per batch, %d concurrent)",
+		len(cues), totalBatches, deeplBatchSize, concurrency)
 
-	for i := 0; i < len(cues); i += batchSize {
-		end := i + batchSize
+	type deeplResult struct {
+		cues []SubtitleCue
+		err  error
+	}
+
+	results := make([]deeplResult, totalBatches)
+	var completedBatches atomic.Int32
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for i := 0; i < len(cues); i += deeplBatchSize {
+		end := i + deeplBatchSize
 		if end > len(cues) {
 			end = len(cues)
 		}
+		batchIdx := i / deeplBatchSize
 		batch := cues[i:end]
-		batchNum := i/batchSize + 1
 
-		progress := float64(i) / float64(len(cues))
-		updateProgress(progress)
+		wg.Add(1)
+		sem <- struct{}{}
 
-		log.Printf("[deepl] translating batch %d/%d (%d cues)", batchNum, totalBatches, len(batch))
+		go func(idx int, batch []SubtitleCue) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		translated, err := d.translateBatch(ctx, batch, opts)
-		if err != nil {
-			return nil, fmt.Errorf("batch %d: %w", batchNum, err)
-		}
+			batchNum := idx + 1
+			log.Printf("[deepl] batch %d/%d (%d cues) started", batchNum, totalBatches, len(batch))
 
-		result = append(result, translated...)
+			translated, err := d.translateBatch(ctx, batch, opts)
+			if err != nil {
+				if isTransientError(err) {
+					log.Printf("[deepl] batch %d failed (%v), retrying after 5s...", batchNum, err)
+					time.Sleep(5 * time.Second)
+					translated, err = d.translateBatch(ctx, batch, opts)
+				}
+			}
+
+			if err != nil {
+				results[idx] = deeplResult{err: fmt.Errorf("batch %d: %w", batchNum, err)}
+			} else {
+				results[idx] = deeplResult{cues: translated}
+			}
+
+			done := completedBatches.Add(1)
+			updateProgress(float64(done) / float64(totalBatches))
+			log.Printf("[deepl] batch %d/%d completed", batchNum, totalBatches)
+		}(batchIdx, batch)
 	}
 
+	wg.Wait()
+
+	var result []SubtitleCue
+	for _, r := range results {
+		if r.err != nil {
+			return nil, r.err
+		}
+		result = append(result, r.cues...)
+	}
+
+	log.Printf("[deepl] translation complete: %d cues (%d batches)", len(result), totalBatches)
 	return result, nil
 }
 

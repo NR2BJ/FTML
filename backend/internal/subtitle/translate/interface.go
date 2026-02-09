@@ -3,7 +3,8 @@ package translate
 import "context"
 
 const (
-	batchSize = 50 // number of cues per API call (used by DeepL, OpenAI)
+	batchSize   = 200 // number of cues per API call (used by DeepL, OpenAI)
+	concurrency = 4   // max concurrent API requests
 )
 
 // SubtitleCue represents a single subtitle entry with timing
