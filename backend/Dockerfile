@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libva-drm2 \
     libva2 \
     ca-certificates \
+    curl \
     tzdata \
   && rm -rf /var/lib/apt/lists/*
 
