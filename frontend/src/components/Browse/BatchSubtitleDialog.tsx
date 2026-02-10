@@ -16,6 +16,7 @@ import { type FileEntry } from '@/api/files'
 import {
   batchGenerate,
   batchTranslate,
+  batchGenerateTranslate,
   translateSubtitle,
   getJob,
   retryJob,
@@ -219,7 +220,34 @@ export default function BatchSubtitleDialog({ mode, files, subtitleId, onClose }
     setPhase('running')
 
     try {
-      if (mode === 'generate' || mode === 'generate-translate') {
+      if (mode === 'generate-translate') {
+        let actualPreset = preset
+        let actualPrompt = customPrompt
+        if (preset.startsWith('saved:')) {
+          actualPreset = 'custom'
+        } else if (preset !== 'custom') {
+          actualPrompt = ''
+        }
+
+        const { data } = await batchGenerateTranslate(
+          videoPaths,
+          { engine: genEngine, model: '', language: genLanguage },
+          {
+            target_lang: targetLang,
+            engine: transEngine,
+            preset: actualPreset,
+            custom_prompt: actualPrompt || undefined,
+          }
+        )
+        const jobStatuses: JobStatus[] = data.job_ids.map((id, i) => ({
+          id,
+          path: videoPaths[i] || '',
+          status: 'pending',
+          progress: 0,
+        }))
+        setJobs(jobStatuses)
+        setSkipped(data.skipped || [])
+      } else if (mode === 'generate') {
         const { data } = await batchGenerate(videoPaths, {
           engine: genEngine,
           model: '',

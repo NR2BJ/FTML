@@ -16,6 +16,20 @@ func NewJobHandler(queue *job.JobQueue) *JobHandler {
 	return &JobHandler{queue: queue}
 }
 
+// ListActiveJobs returns pending/running jobs + recently completed/failed
+func (h *JobHandler) ListActiveJobs(w http.ResponseWriter, r *http.Request) {
+	jobs, err := h.queue.ListActiveJobs()
+	if err != nil {
+		jsonError(w, "failed to list active jobs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if jobs == nil {
+		jobs = []*job.Job{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(jobs)
+}
+
 // ListJobs returns all jobs
 func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 	jobs, err := h.queue.ListJobs()

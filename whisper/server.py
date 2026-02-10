@@ -24,6 +24,7 @@ Endpoints:
   GET  /health
 """
 
+import asyncio
 import gc
 import io
 import os
@@ -929,7 +930,10 @@ async def transcribe_openai(
     log.info(f"Audio: {len(audio)/16000:.1f}s, {len(audio)} samples")
 
     try:
-        chunks, full_text, elapsed = run_inference(audio, language)
+        loop = asyncio.get_event_loop()
+        chunks, full_text, elapsed = await loop.run_in_executor(
+            None, run_inference, audio, language
+        )
     except Exception as e:
         log.error(f"Inference failed: {e}")
         raise HTTPException(500, f"Inference failed: {e}")
@@ -980,7 +984,10 @@ async def transcribe_legacy(
     log.info(f"[legacy] Audio: {len(audio)/16000:.1f}s")
 
     try:
-        chunks, full_text, elapsed = run_inference(audio, language)
+        loop = asyncio.get_event_loop()
+        chunks, full_text, elapsed = await loop.run_in_executor(
+            None, run_inference, audio, language
+        )
     except Exception as e:
         raise HTTPException(500, f"Inference failed: {e}")
 

@@ -640,6 +640,84 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// BatchGenerateTranslate creates transcription jobs with chained translation for multiple files
+func (h *SubtitleHandler) BatchGenerateTranslate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paths      []string `json:"paths"`
+		Engine     string   `json:"engine"`
+		Model      string   `json:"model"`
+		Language   string   `json:"language"`
+		Translate  struct {
+			TargetLang   string `json:"target_lang"`
+			Engine       string `json:"engine"`
+			Preset       string `json:"preset"`
+			CustomPrompt string `json:"custom_prompt,omitempty"`
+		} `json:"translate"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Paths) == 0 {
+		jsonError(w, "paths required", http.StatusBadRequest)
+		return
+	}
+	if req.Translate.TargetLang == "" {
+		jsonError(w, "translate.target_lang required", http.StatusBadRequest)
+		return
+	}
+
+	// Defaults
+	if req.Language == "" {
+		req.Language = "auto"
+	}
+	if req.Translate.Engine == "" {
+		req.Translate.Engine = "gemini"
+	}
+	if req.Translate.Preset == "" {
+		req.Translate.Preset = "movie"
+	}
+
+	var jobIDs []string
+	var skipped []string
+
+	for _, path := range req.Paths {
+		fullPath := filepath.Join(h.mediaPath, path)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			skipped = append(skipped, path)
+			continue
+		}
+
+		params := job.TranscribeParams{
+			Engine:   req.Engine,
+			Model:    req.Model,
+			Language: req.Language,
+			ChainTranslate: &job.TranslateParams{
+				TargetLang:   req.Translate.TargetLang,
+				Engine:       req.Translate.Engine,
+				Preset:       req.Translate.Preset,
+				CustomPrompt: req.Translate.CustomPrompt,
+			},
+		}
+
+		j, err := h.jobQueue.Enqueue(job.JobTranscribe, path, params)
+		if err != nil {
+			skipped = append(skipped, path)
+			continue
+		}
+		jobIDs = append(jobIDs, j.ID)
+		h.logSubtitleOp(r, "subtitle_generate_translate", path, req.Language)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"job_ids": jobIDs,
+		"skipped": skipped,
+	})
+}
+
 // UploadSubtitle allows uploading an external subtitle file (User+ only)
 // POST /subtitle/upload/* — multipart/form-data with "file" field
 func (h *SubtitleHandler) UploadSubtitle(w http.ResponseWriter, r *http.Request) {

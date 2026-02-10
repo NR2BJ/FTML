@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { searchFiles, type FileEntry } from '@/api/files'
 import { getPendingRegistrationCount, getPendingDeleteRequestCount } from '@/api/admin'
+import JobIndicator from './JobIndicator'
 
 export default function Header() {
   const { user, logout } = useAuthStore()
@@ -46,7 +47,7 @@ export default function Header() {
 
   useEffect(() => {
     fetchPendingCount()
-    const interval = setInterval(fetchPendingCount, 15000)
+    const interval = setInterval(fetchPendingCount, 60000)
     return () => clearInterval(interval)
   }, [fetchPendingCount])
 
@@ -232,6 +233,9 @@ export default function Header() {
             <Settings className="w-5 h-5" />
           </button>
         )}
+
+        {/* Job progress indicator */}
+        <JobIndicator />
 
         {/* User menu dropdown */}
         <div className="relative" ref={userMenuRef}>

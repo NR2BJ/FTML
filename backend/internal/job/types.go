@@ -42,9 +42,10 @@ type Job struct {
 
 // TranscribeParams are parameters for a transcription job
 type TranscribeParams struct {
-	Engine   string `json:"engine"`   // "whisper.cpp", "faster-whisper", "openai"
-	Model    string `json:"model"`    // "tiny", "base", "small", "medium", "large-v3"
-	Language string `json:"language"` // "auto", "ko", "en", "ja", etc.
+	Engine         string          `json:"engine"`                    // "whisper.cpp", "faster-whisper", "openai"
+	Model          string          `json:"model"`                    // "tiny", "base", "small", "medium", "large-v3"
+	Language       string          `json:"language"`                 // "auto", "ko", "en", "ja", etc.
+	ChainTranslate *TranslateParams `json:"chain_translate,omitempty"` // auto-translate after transcribe completes
 }
 
 // TranslateParams are parameters for a translation job

@@ -105,6 +105,17 @@ export const batchGenerate = (paths: string[], params: Omit<GenerateParams, 'pat
 export const batchTranslate = (paths: string[], params: { target_lang: string; engine: string; preset: string; custom_prompt?: string }) =>
   client.post<BatchResult>('/subtitle/batch-translate', { paths, ...params })
 
+export const batchGenerateTranslate = (
+  paths: string[],
+  generate: Omit<GenerateParams, 'path'>,
+  translate: { target_lang: string; engine: string; preset: string; custom_prompt?: string }
+) =>
+  client.post<BatchResult>('/subtitle/batch-generate-translate', {
+    paths,
+    ...generate,
+    translate,
+  })
+
 // Delete requests
 export interface DeleteRequest {
   id: number

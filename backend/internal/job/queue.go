@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -14,32 +15,35 @@ import (
 
 // JobQueue manages job persistence and dispatching
 type JobQueue struct {
-	db       *sql.DB
-	mu       sync.RWMutex
-	pending  chan string // job IDs to process
-	cancels  map[string]context.CancelFunc
-	handlers map[JobType]JobHandler
-	ctx      context.Context
-	cancel   context.CancelFunc
+	db                *sql.DB
+	mu                sync.RWMutex
+	pendingTranscribe chan string // transcribe jobs (GPU-bound, processed one at a time)
+	pendingTranslate  chan string // translate jobs (web API, runs concurrently with transcribe)
+	cancels           map[string]context.CancelFunc
+	handlers          map[JobType]JobHandler
+	ctx               context.Context
+	cancel            context.CancelFunc
 }
 
 // NewJobQueue creates and starts a new job queue
 func NewJobQueue(db *sql.DB) *JobQueue {
 	ctx, cancel := context.WithCancel(context.Background())
 	q := &JobQueue{
-		db:       db,
-		pending:  make(chan string, 100),
-		cancels:  make(map[string]context.CancelFunc),
-		handlers: make(map[JobType]JobHandler),
-		ctx:      ctx,
-		cancel:   cancel,
+		db:                db,
+		pendingTranscribe: make(chan string, 100),
+		pendingTranslate:  make(chan string, 100),
+		cancels:           make(map[string]context.CancelFunc),
+		handlers:          make(map[JobType]JobHandler),
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 
 	// Resume any pending/running jobs from DB on startup
 	go q.resumeJobs()
 
-	// Start worker
-	go q.worker()
+	// Start dual workers — transcribe and translate run independently
+	go q.transcribeWorker()
+	go q.translateWorker()
 
 	return q
 }
@@ -77,14 +81,30 @@ func (q *JobQueue) Enqueue(jobType JobType, filePath string, params interface{})
 		return nil, fmt.Errorf("insert job: %w", err)
 	}
 
-	// Push to worker channel
-	select {
-	case q.pending <- job.ID:
-	default:
-		log.Printf("[job] queue full, job %s will be picked up on next poll", job.ID)
-	}
+	// Push to appropriate worker channel
+	q.enqueueToChannel(jobType, job.ID)
 
 	return job, nil
+}
+
+// enqueueToChannel pushes a job ID to the appropriate channel based on type
+func (q *JobQueue) enqueueToChannel(jobType JobType, jobID string) {
+	switch jobType {
+	case JobTranscribe:
+		select {
+		case q.pendingTranscribe <- jobID:
+		default:
+			log.Printf("[job] transcribe queue full, job %s will be picked up on next poll", jobID)
+		}
+	case JobTranslate:
+		select {
+		case q.pendingTranslate <- jobID:
+		default:
+			log.Printf("[job] translate queue full, job %s will be picked up on next poll", jobID)
+		}
+	default:
+		log.Printf("[job] unknown job type %s for job %s", jobType, jobID)
+	}
 }
 
 // GetJob retrieves a job by ID
@@ -132,6 +152,29 @@ func (q *JobQueue) ListJobs() ([]*Job, error) {
 	}
 	defer rows.Close()
 
+	return q.scanJobs(rows)
+}
+
+// ListActiveJobs returns pending/running jobs + recently completed/failed (within 60s)
+func (q *JobQueue) ListActiveJobs() ([]*Job, error) {
+	cutoff := time.Now().Add(-60 * time.Second)
+	rows, err := q.db.Query(`
+		SELECT id, type, status, file_path, params, progress, result, error, created_at, started_at, completed_at
+		FROM jobs
+		WHERE status IN (?, ?)
+		   OR (status IN (?, ?) AND completed_at > ?)
+		ORDER BY created_at DESC`,
+		StatusPending, StatusRunning, StatusCompleted, StatusFailed, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return q.scanJobs(rows)
+}
+
+// scanJobs reads job rows into a slice
+func (q *JobQueue) scanJobs(rows *sql.Rows) ([]*Job, error) {
 	var jobs []*Job
 	for rows.Next() {
 		job := &Job{}
@@ -204,12 +247,8 @@ func (q *JobQueue) RetryJob(id string) error {
 		return fmt.Errorf("failed to reset job: %w", err)
 	}
 
-	// Push to worker channel
-	select {
-	case q.pending <- id:
-	default:
-		log.Printf("[job] queue full, retried job %s will be picked up on next poll", id)
-	}
+	// Push to appropriate worker channel
+	q.enqueueToChannel(job.Type, id)
 
 	log.Printf("[job] retrying job %s", id)
 	return nil
@@ -225,13 +264,25 @@ func (q *JobQueue) Stop() {
 	q.cancel()
 }
 
-// worker processes jobs from the pending channel one at a time
-func (q *JobQueue) worker() {
+// transcribeWorker processes transcribe jobs one at a time (GPU-bound)
+func (q *JobQueue) transcribeWorker() {
 	for {
 		select {
 		case <-q.ctx.Done():
 			return
-		case jobID := <-q.pending:
+		case jobID := <-q.pendingTranscribe:
+			q.processJob(jobID)
+		}
+	}
+}
+
+// translateWorker processes translate jobs one at a time (web API, runs concurrently with transcribe)
+func (q *JobQueue) translateWorker() {
+	for {
+		select {
+		case <-q.ctx.Done():
+			return
+		case jobID := <-q.pendingTranslate:
 			q.processJob(jobID)
 		}
 	}
@@ -306,9 +357,52 @@ func (q *JobQueue) processJob(jobID string) {
 
 func (q *JobQueue) completeJob(job *Job) {
 	now := time.Now()
-	q.db.Exec("UPDATE jobs SET status = ?, progress = 1.0, completed_at = ? WHERE id = ?",
-		StatusCompleted, now, job.ID)
+	// Persist result to DB (handlers set job.Result before returning)
+	q.db.Exec("UPDATE jobs SET status = ?, progress = 1.0, result = ?, completed_at = ? WHERE id = ?",
+		StatusCompleted, string(job.Result), now, job.ID)
 	log.Printf("[job] job %s completed", job.ID)
+
+	// Chain: if transcribe job has ChainTranslate, auto-enqueue translation
+	if job.Type == JobTranscribe {
+		q.maybeChainTranslate(job)
+	}
+}
+
+// maybeChainTranslate checks if a completed transcribe job should trigger a translation job
+func (q *JobQueue) maybeChainTranslate(job *Job) {
+	var params TranscribeParams
+	if err := json.Unmarshal(job.Params, &params); err != nil {
+		return
+	}
+	if params.ChainTranslate == nil {
+		return
+	}
+
+	var result TranscribeResult
+	if err := json.Unmarshal(job.Result, &result); err != nil {
+		log.Printf("[job] chain: failed to parse transcribe result for job %s: %v", job.ID, err)
+		return
+	}
+
+	// Extract subtitle ID from output path (e.g., "generated:whisper_ja.vtt")
+	subtitleID := result.OutputPath
+	if subtitleID == "" {
+		log.Printf("[job] chain: no output path in transcribe result for job %s", job.ID)
+		return
+	}
+
+	// Build translate params from chain config
+	translateParams := *params.ChainTranslate
+	translateParams.SubtitleID = subtitleID
+
+	chainJob, err := q.Enqueue(JobTranslate, job.FilePath, translateParams)
+	if err != nil {
+		log.Printf("[job] chain: failed to enqueue translation for job %s: %v", job.ID, err)
+		return
+	}
+
+	fileName := filepath.Base(job.FilePath)
+	log.Printf("[job] chain: transcribe %s → translate %s (file: %s)", job.ID, chainJob.ID, fileName)
 }
 
 func (q *JobQueue) failJob(job *Job, errMsg string) {
@@ -323,7 +417,7 @@ func (q *JobQueue) resumeJobs() {
 	// Mark any previously "running" jobs as pending (server restarted)
 	q.db.Exec("UPDATE jobs SET status = ? WHERE status = ?", StatusPending, StatusRunning)
 
-	rows, err := q.db.Query("SELECT id FROM jobs WHERE status = ? ORDER BY created_at ASC", StatusPending)
+	rows, err := q.db.Query("SELECT id, type FROM jobs WHERE status = ? ORDER BY created_at ASC", StatusPending)
 	if err != nil {
 		log.Printf("[job] failed to resume jobs: %v", err)
 		return
@@ -333,14 +427,12 @@ func (q *JobQueue) resumeJobs() {
 	count := 0
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var jobType JobType
+		if err := rows.Scan(&id, &jobType); err != nil {
 			continue
 		}
-		select {
-		case q.pending <- id:
-			count++
-		default:
-		}
+		q.enqueueToChannel(jobType, id)
+		count++
 	}
 
 	if count > 0 {
