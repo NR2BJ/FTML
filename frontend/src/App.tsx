@@ -15,6 +15,7 @@ import Dashboard from '@/pages/admin/Dashboard'
 import RateLimits from '@/pages/admin/RateLimits'
 import Trash from '@/pages/admin/Trash'
 import DeleteRequests from '@/pages/admin/DeleteRequests'
+import Jobs from '@/pages/Jobs'
 import Layout from '@/components/layout/Layout'
 
 // Initialize theme before render
@@ -70,6 +71,7 @@ export default function App() {
           <Route path="watch/*" element={<Watch />} />
           <Route path="history" element={<WatchHistory />} />
           <Route path="account" element={<Account />} />
+          <Route path="jobs" element={<Jobs />} />
           <Route path="settings" element={<AdminRoute><Settings /></AdminRoute>} />
           <Route path="admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
           <Route path="admin/registrations" element={<AdminRoute><Registrations /></AdminRoute>} />

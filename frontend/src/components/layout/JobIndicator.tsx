@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useJobStore } from '@/stores/jobStore'
 import { cancelJob } from '@/api/job'
 import {
   Loader2, CheckCircle2, XCircle, Clock, X, RefreshCw,
-  Languages, Mic
+  Languages, Mic, ArrowRight
 } from 'lucide-react'
 
 function formatElapsed(startedAt?: string) {
@@ -28,6 +29,7 @@ export default function JobIndicator() {
   const [open, setOpen] = useState(false)
   const [, setTick] = useState(0)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const navigate = useNavigate()
 
   // Start polling on mount
   useEffect(() => {
@@ -105,7 +107,7 @@ export default function JobIndicator() {
             </div>
           ) : (
             jobs.map(job => (
-              <div key={job.id} className="px-3 py-2 border-b border-dark-700/50 last:border-0">
+              <div key={job.id} className="px-3 py-2 border-b border-dark-700/50 last:border-b">
                 <div className="flex items-start gap-2">
                   {/* Icon */}
                   <div className="mt-0.5 shrink-0">
@@ -191,6 +193,15 @@ export default function JobIndicator() {
               </div>
             ))
           )}
+
+          {/* View all link */}
+          <button
+            onClick={() => { setOpen(false); navigate('/jobs') }}
+            className="w-full px-3 py-2 text-xs text-gray-400 hover:text-primary-400 hover:bg-dark-700/50 transition-colors flex items-center justify-center gap-1 border-t border-dark-700"
+          >
+            View all jobs
+            <ArrowRight className="w-3 h-3" />
+          </button>
         </div>
       )}
     </div>

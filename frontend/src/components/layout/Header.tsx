@@ -6,7 +6,7 @@ import { useThemeStore } from '@/stores/themeStore'
 import {
   Film, Search, LogOut, User, Settings, Clock, UserCog, Users, UserPlus,
   Shield, ChevronDown, Monitor, BarChart3, ShieldAlert, Menu,
-  Folder, FileVideo, Trash2, Sun, Moon, Laptop, FileX
+  Folder, FileVideo, Trash2, Sun, Moon, Laptop, FileX, Briefcase
 } from 'lucide-react'
 import { searchFiles, type FileEntry } from '@/api/files'
 import { getPendingRegistrationCount, getPendingDeleteRequestCount } from '@/api/admin'
@@ -330,6 +330,13 @@ export default function Header() {
               )}
 
               {/* Common links */}
+              <button
+                onClick={() => navigate('/jobs')}
+                className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 flex items-center gap-2"
+              >
+                <Briefcase className="w-4 h-4" />
+                Jobs
+              </button>
               <button
                 onClick={() => navigate('/account')}
                 className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 flex items-center gap-2"
