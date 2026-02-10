@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	geminiAPIBase      = "https://generativelanguage.googleapis.com/v1beta/models"
-	geminiBatchSize    = 200
-	geminiConcurrency  = 4
+	geminiAPIBase          = "https://generativelanguage.googleapis.com/v1beta/models"
+	geminiBatchSize        = 200
+	geminiConcurrency      = 4
+	geminiMinSubdivideSize = 10 // stop subdividing below this cue count
 )
 
 // ModelResolver returns the current Gemini model from settings
@@ -61,10 +62,14 @@ func isTransientError(err error) bool {
 		strings.Contains(msg, "status 429")
 }
 
+func isBlockedError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "blocked")
+}
+
 type batchResult struct {
-	cues    []SubtitleCue
-	err     error
-	blocked bool
+	cues         []SubtitleCue
+	err          error
+	blockedCount int
 }
 
 func (g *GeminiTranslator) Translate(ctx context.Context, cues []SubtitleCue, opts TranslateOptions, updateProgress func(float64)) ([]SubtitleCue, error) {
@@ -78,26 +83,21 @@ func (g *GeminiTranslator) Translate(ctx context.Context, cues []SubtitleCue, op
 		systemPrompt += "\n\nUser instructions: " + opts.CustomPrompt
 	}
 
-	// For small cue counts, try single request (best quality — full context)
+	// For small cue counts, try single request with subdivision support
 	if len(cues) <= geminiBatchSize {
 		log.Printf("[gemini] using model: %s, translating %d cues in single request", model, len(cues))
 		updateProgress(0.1)
 
-		translated, err := g.callGeminiAPI(ctx, cues, systemPrompt, model)
-		if err == nil {
-			updateProgress(1.0)
-			log.Printf("[gemini] translation complete: %d cues (single request)", len(translated))
-			return translated, nil
+		translated, blockedCount := g.translateWithSubdivision(ctx, cues, systemPrompt, model, 0, "single-request")
+		updateProgress(1.0)
+		if blockedCount > 0 {
+			log.Printf("[gemini] WARNING: %d/%d cues blocked in single-request mode, kept original text", blockedCount, len(cues))
 		}
-
-		// If blocked, fallback to batch mode; otherwise return error
-		if !strings.Contains(err.Error(), "blocked") {
-			return nil, err
-		}
-		log.Printf("[gemini] single request blocked, falling back to batch mode")
+		log.Printf("[gemini] translation complete: %d cues (single request, %d blocked)", len(translated), blockedCount)
+		return translated, nil
 	}
 
-	// Batch mode — concurrent execution
+	// Batch mode — concurrent execution with subdivision on block
 	totalBatches := (len(cues) + geminiBatchSize - 1) / geminiBatchSize
 	log.Printf("[gemini] using model: %s, translating %d cues in %d batches (%d per batch, %d concurrent)",
 		model, len(cues), totalBatches, geminiBatchSize, geminiConcurrency)
@@ -123,30 +123,15 @@ func (g *GeminiTranslator) Translate(ctx context.Context, cues []SubtitleCue, op
 			defer func() { <-sem }() // release slot
 
 			batchNum := idx + 1
-			log.Printf("[gemini] batch %d/%d (%d cues) started", batchNum, totalBatches, len(batch))
+			batchLabel := fmt.Sprintf("batch %d/%d", batchNum, totalBatches)
+			log.Printf("[gemini] %s (%d cues) started", batchLabel, len(batch))
 
-			translated, err := g.callGeminiAPI(ctx, batch, systemPrompt, model)
-			if err != nil {
-				// Retry once on transient errors
-				if isTransientError(err) {
-					log.Printf("[gemini] batch %d failed (%v), retrying after 5s...", batchNum, err)
-					time.Sleep(5 * time.Second)
-					translated, err = g.callGeminiAPI(ctx, batch, systemPrompt, model)
-				}
-			}
-
-			if err != nil && strings.Contains(err.Error(), "blocked") {
-				log.Printf("[gemini] batch %d blocked, keeping original text", batchNum)
-				results[idx] = batchResult{cues: batch, blocked: true}
-			} else if err != nil {
-				results[idx] = batchResult{err: fmt.Errorf("batch %d: %w", batchNum, err)}
-			} else {
-				results[idx] = batchResult{cues: translated}
-			}
+			translated, blockedCount := g.translateWithSubdivision(ctx, batch, systemPrompt, model, 0, batchLabel)
+			results[idx] = batchResult{cues: translated, blockedCount: blockedCount}
 
 			done := completedBatches.Add(1)
 			updateProgress(float64(done) / float64(totalBatches))
-			log.Printf("[gemini] batch %d/%d completed", batchNum, totalBatches)
+			log.Printf("[gemini] %s completed (%d blocked)", batchLabel, blockedCount)
 		}(batchIdx, batch)
 	}
 
@@ -154,25 +139,81 @@ func (g *GeminiTranslator) Translate(ctx context.Context, cues []SubtitleCue, op
 
 	// Merge results in order
 	var result []SubtitleCue
-	blockedBatches := 0
+	totalBlockedCues := 0
 	for _, r := range results {
 		if r.err != nil {
 			return nil, r.err
 		}
-		if r.blocked {
-			blockedBatches++
-		}
+		totalBlockedCues += r.blockedCount
 		result = append(result, r.cues...)
 	}
 
-	if blockedBatches > 0 {
-		log.Printf("[gemini] WARNING: %d/%d batches were blocked, kept original text", blockedBatches, totalBatches)
+	if totalBlockedCues > 0 {
+		log.Printf("[gemini] WARNING: %d/%d cues were blocked, kept original text", totalBlockedCues, len(cues))
 	}
 
 	updateProgress(1.0)
-	log.Printf("[gemini] translation complete: %d cues (batch mode, %d batches, %d concurrent, %d blocked)",
-		len(result), totalBatches, geminiConcurrency, blockedBatches)
+	log.Printf("[gemini] translation complete: %d cues (batch mode, %d batches, %d concurrent, %d blocked cues)",
+		len(result), totalBatches, geminiConcurrency, totalBlockedCues)
 	return result, nil
+}
+
+// translateWithSubdivision attempts to translate cues, and on block recursively
+// splits the batch in half until sub-batches succeed or reach minimum size.
+// Returns translated cues (always same count as input) and count of blocked cues.
+func (g *GeminiTranslator) translateWithSubdivision(
+	ctx context.Context,
+	cues []SubtitleCue,
+	systemPrompt string,
+	model string,
+	depth int,
+	label string,
+) ([]SubtitleCue, int) {
+	// Try translating the full batch (with transient-error retry)
+	translated, err := g.callGeminiAPI(ctx, cues, systemPrompt, model)
+	if err != nil && isTransientError(err) {
+		log.Printf("[gemini] %s failed (%v), retrying after 5s... (depth=%d)", label, err, depth)
+		time.Sleep(5 * time.Second)
+		translated, err = g.callGeminiAPI(ctx, cues, systemPrompt, model)
+	}
+
+	// Success — return translated cues
+	if err == nil {
+		if depth > 0 {
+			log.Printf("[gemini] %s translated successfully (%d cues, depth=%d)", label, len(translated), depth)
+		}
+		return translated, 0
+	}
+
+	// Non-blocked error — keep original text to avoid data loss
+	if !isBlockedError(err) {
+		log.Printf("[gemini] %s failed: %v (depth=%d), keeping original text", label, err, depth)
+		return cues, len(cues)
+	}
+
+	// Blocked — check if we can subdivide further
+	if len(cues) <= geminiMinSubdivideSize {
+		log.Printf("[gemini] %s blocked at minimum size (%d cues, depth=%d), keeping original text", label, len(cues), depth)
+		return cues, len(cues)
+	}
+
+	// Split in half and recurse sequentially
+	mid := len(cues) / 2
+	log.Printf("[gemini] %s blocked (%d cues, depth=%d), subdividing into [0:%d] and [%d:%d]",
+		label, len(cues), depth, mid, mid, len(cues))
+
+	leftLabel := fmt.Sprintf("%s-L%d", label, depth+1)
+	rightLabel := fmt.Sprintf("%s-R%d", label, depth+1)
+
+	leftTranslated, leftBlocked := g.translateWithSubdivision(ctx, cues[:mid], systemPrompt, model, depth+1, leftLabel)
+	rightTranslated, rightBlocked := g.translateWithSubdivision(ctx, cues[mid:], systemPrompt, model, depth+1, rightLabel)
+
+	// Merge results in order
+	merged := make([]SubtitleCue, 0, len(cues))
+	merged = append(merged, leftTranslated...)
+	merged = append(merged, rightTranslated...)
+
+	return merged, leftBlocked + rightBlocked
 }
 
 // callGeminiAPI sends cues to Gemini and returns translated cues.
