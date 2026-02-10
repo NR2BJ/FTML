@@ -254,6 +254,10 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 		// In copy mode, -output_ts_offset alone doesn't work because packets keep original PTS.
 		// The setts bitstream filter rewrites PTS/DTS at the packet level before muxing.
 		args = append(args, "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS")
+		// Audio sync: force audio PTS to align with video.
+		// Without this, video PTS is reset to 0 by setts but audio keeps the original
+		// MKV offset, causing A/V desync in passthrough mode.
+		args = append(args, "-af", "aresample=async=1")
 		// fMP4 HLS requires codec tags for browser MSE compatibility
 		if params.SourceVideoCodec == "hevc" {
 			args = append(args, "-tag:v", "hvc1")

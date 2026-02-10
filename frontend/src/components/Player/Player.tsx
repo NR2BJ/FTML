@@ -134,7 +134,7 @@ export default function Player({ path }: PlayerProps) {
     // Compute session ID and start heartbeat
     // The backend uses fullPath (mediaPath + videoPath) for the session ID,
     // but generateSessionID uses videoPath (relative). We match that here.
-    computeSessionID(filePath, q, startTime, codec || 'h264').then((sid) => {
+    computeSessionID(filePath, q, startTime, codec || 'h264', storeAudioTrack).then((sid) => {
       startHeartbeat(sid)
     })
 

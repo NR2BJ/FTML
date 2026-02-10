@@ -75,9 +75,7 @@ export const getHLSUrl = (path: string, quality: string = '720p', startTime: num
   if (codec) {
     url += `&codec=${codec}`
   }
-  if (audioTrack > 0) {
-    url += `&audio=${audioTrack}`
-  }
+  url += `&audio=${audioTrack}`
   return url
 }
 

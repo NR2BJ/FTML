@@ -184,7 +184,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		params.AudioStreamIndex = audioStreamIdx
 	}
 
-	sessionID := generateSessionID(videoPath, quality, startTime, string(codec))
+	sessionID := generateSessionID(videoPath, quality, startTime, string(codec), audioStreamIdx)
 
 	// If seeking, stop any existing sessions for the same video+quality+codec at different times
 	if startTime > 0 {
@@ -251,8 +251,8 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 			uriEnd := strings.LastIndex(trimmed, `"`)
 			if uriStart >= 0 && uriEnd > uriStart {
 				segName := trimmed[uriStart+1 : uriEnd]
-				segURL := fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s&codec=%s",
-					encodedVideoPath, segName, token, quality, string(codec))
+				segURL := fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s&codec=%s&audio=%d",
+					encodedVideoPath, segName, token, quality, string(codec), audioStreamIdx)
 				if startTime > 0 {
 					segURL += fmt.Sprintf("&start=%.0f", startTime)
 				}
@@ -264,8 +264,8 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		// Handle segment lines (.ts, .m4s, .mp4)
 		if strings.HasSuffix(trimmed, ".ts") || strings.HasSuffix(trimmed, ".m4s") || strings.HasSuffix(trimmed, ".mp4") {
 			segName := trimmed
-			segURL := fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s&codec=%s",
-				encodedVideoPath, segName, token, quality, string(codec))
+			segURL := fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s&codec=%s&audio=%d",
+				encodedVideoPath, segName, token, quality, string(codec), audioStreamIdx)
 			if startTime > 0 {
 				segURL += fmt.Sprintf("&start=%.0f", startTime)
 			}
@@ -306,7 +306,11 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 	if st := r.URL.Query().Get("start"); st != "" {
 		fmt.Sscanf(st, "%f", &startTime)
 	}
-	sessionID := generateSessionID(videoPath, quality, startTime, codecStr)
+	audioStreamIdx := 0
+	if audioStr := r.URL.Query().Get("audio"); audioStr != "" {
+		fmt.Sscanf(audioStr, "%d", &audioStreamIdx)
+	}
+	sessionID := generateSessionID(videoPath, quality, startTime, codecStr, audioStreamIdx)
 
 	sessionDir := h.hlsManager.GetSessionDir(sessionID)
 	segmentPath := filepath.Join(sessionDir, segmentName)
@@ -402,8 +406,8 @@ func parseCodecParams(r *http.Request) (ffmpeg.Codec, *ffmpeg.EncoderInfo, ffmpe
 	return codec, encoder, browser
 }
 
-func generateSessionID(path, quality string, startTime float64, codec string) string {
-	key := fmt.Sprintf("%s|%s|%.0f|%s", path, quality, startTime, codec)
+func generateSessionID(path, quality string, startTime float64, codec string, audioStreamIdx int) string {
+	key := fmt.Sprintf("%s|%s|%.0f|%s|%d", path, quality, startTime, codec, audioStreamIdx)
 	h := sha256.Sum256([]byte(key))
 	return fmt.Sprintf("%x", h[:8])
 }
