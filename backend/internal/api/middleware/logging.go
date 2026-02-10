@@ -22,6 +22,9 @@ var silentPaths = map[string]bool{
 	"/api/admin/registrations/count":   true,
 	"/api/admin/delete-requests/count": true,
 	"/api/jobs/active":                 true,
+	"/api/admin/dashboard":             true,
+	"/api/admin/file-logs":             true,
+	"/api/admin/sessions":              true,
 }
 
 func Logger(next http.Handler) http.Handler {
