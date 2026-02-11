@@ -81,7 +81,6 @@ FTML_PORT=7979
 ### 3. Create Docker resources
 
 ```bash
-docker network create homeserver-net
 docker volume create ftml_data
 docker volume create whisper_models
 ```
