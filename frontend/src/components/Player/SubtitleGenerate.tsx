@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Wand2, Loader2, X, Check, AlertCircle } from 'lucide-react'
 import { usePlayerStore } from '@/stores/playerStore'
-import { generateSubtitle, getJob, listSubtitles, type Job } from '@/api/subtitle'
+import { generateSubtitle, listSubtitles } from '@/api/subtitle'
+import { getJob, type Job } from '@/api/job'
 import { listAvailableEngines, type AvailableEngine } from '@/api/whisperBackends'
 
 const MODELS = [

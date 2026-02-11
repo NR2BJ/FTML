@@ -2,27 +2,11 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useJobStore } from '@/stores/jobStore'
 import { cancelJob } from '@/api/job'
+import { formatElapsed, shortFileName } from '@/utils/format'
 import {
   Loader2, CheckCircle2, XCircle, Clock, X, RefreshCw,
   Languages, Mic, ArrowRight
 } from 'lucide-react'
-
-function formatElapsed(startedAt?: string) {
-  if (!startedAt) return ''
-  const elapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)
-  if (elapsed < 60) return `${elapsed}s`
-  const min = Math.floor(elapsed / 60)
-  const sec = elapsed % 60
-  return `${min}m ${sec}s`
-}
-
-function shortFileName(filePath: string) {
-  const parts = filePath.split('/')
-  const name = parts[parts.length - 1]
-  // Truncate long names
-  if (name.length > 40) return name.slice(0, 37) + '...'
-  return name
-}
 
 export default function JobIndicator() {
   const { jobs, startPolling } = useJobStore()
@@ -121,7 +105,7 @@ export default function JobIndicator() {
                   {/* Content */}
                   <div className="flex-1 min-w-0">
                     <div className="text-xs text-gray-300 truncate" title={job.file_path}>
-                      {shortFileName(job.file_path)}
+                      {shortFileName(job.file_path, 40)}
                     </div>
 
                     <div className="flex items-center gap-1.5 mt-0.5">

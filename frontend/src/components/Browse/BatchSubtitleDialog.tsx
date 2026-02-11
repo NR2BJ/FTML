@@ -18,15 +18,13 @@ import {
   batchTranslate,
   batchGenerateTranslate,
   translateSubtitle,
-  getJob,
-  retryJob,
   listPresets,
   createPreset,
   updatePreset,
   deletePreset,
-  type Job,
   type TranslationPreset,
 } from '@/api/subtitle'
+import { getJob, retryJob, type Job } from '@/api/job'
 import { listAvailableEngines, type AvailableEngine } from '@/api/whisperBackends'
 import { isVideoFile } from '@/utils/format'
 

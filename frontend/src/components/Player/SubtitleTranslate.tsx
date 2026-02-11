@@ -3,16 +3,15 @@ import { Languages, Loader2, X, Check, AlertCircle, Save, Trash2, Pencil } from 
 import { usePlayerStore } from '@/stores/playerStore'
 import {
   translateSubtitle,
-  getJob,
   listSubtitles,
   listPresets,
   createPreset,
   updatePreset,
   deletePreset,
-  type Job,
   type SubtitleEntry,
   type TranslationPreset,
 } from '@/api/subtitle'
+import { getJob, type Job } from '@/api/job'
 
 const ENGINES = [
   { value: 'gemini', label: 'Gemini' },

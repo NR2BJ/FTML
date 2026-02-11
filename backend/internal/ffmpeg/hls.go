@@ -41,6 +41,35 @@ type HLSManager struct {
 	fallbackCacheTime map[string]time.Time // sessionID → when the entry was added
 }
 
+// logFFmpegTail prints the last 20 lines of the ffmpeg.log file for debugging.
+func logFFmpegTail(outputDir, sessionID string) {
+	logPath := filepath.Join(outputDir, "ffmpeg.log")
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
+	start := len(lines) - 20
+	if start < 0 {
+		start = 0
+	}
+	log.Printf("[HLS] FFmpeg stderr:\n%s", strings.Join(lines[start:], "\n"))
+}
+
+// isSessionStopped checks whether a session was intentionally stopped.
+func (m *HLSManager) isSessionStopped(sessionID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	s, exists := m.sessions[sessionID]
+	return !exists || s.Stopped
+}
+
+// resetOutputDir removes and recreates the output directory.
+func resetOutputDir(dir string) {
+	os.RemoveAll(dir)
+	os.MkdirAll(dir, 0755)
+}
+
 func NewHLSManager(baseDir string) *HLSManager {
 	hlsDir := filepath.Join(baseDir, "hls")
 	os.MkdirAll(hlsDir, 0755)
@@ -156,23 +185,11 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 		elapsed := time.Since(startedAt)
 		if err != nil {
 			log.Printf("[HLS] FFmpeg exited with error: session=%s err=%v elapsed=%v", sessionID, err, elapsed)
-			// Print last lines of ffmpeg.log for debugging
-			logPath := filepath.Join(outputDir, "ffmpeg.log")
-			if logData, readErr := os.ReadFile(logPath); readErr == nil {
-				lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
-				start := len(lines) - 20
-				if start < 0 {
-					start = 0
-				}
-				log.Printf("[HLS] FFmpeg stderr:\n%s", strings.Join(lines[start:], "\n"))
-			}
+			logFFmpegTail(outputDir, sessionID)
 
 			// Auto-retry with software encoder if VAAPI failed quickly (< 5 seconds)
 			// But skip if the session was intentionally stopped (seek, quality switch, cleanup)
-			m.mu.RLock()
-			s, exists := m.sessions[sessionID]
-			wasStopped := !exists || s.Stopped
-			m.mu.RUnlock()
+			wasStopped := m.isSessionStopped(sessionID)
 
 			if !wasStopped && elapsed < 5*time.Second && params.HWAccel == "vaapi" {
 				log.Printf("[HLS] VAAPI failed fast, retrying with hybrid (CPU decode + GPU encode): session=%s", sessionID)
@@ -425,9 +442,7 @@ func appendSoftwareArgs(args []string, params *TranscodeParams) []string {
 // (CPU decode + GPU encode). This is tried before full software fallback
 // because GPU encoding is much faster than CPU encoding.
 func (m *HLSManager) retryWithHybrid(sessionID, inputPath, outputDir string, startTime float64, quality, codec string, origParams *TranscodeParams) {
-	// Clean up failed output
-	os.RemoveAll(outputDir)
-	os.MkdirAll(outputDir, 0755)
+	resetOutputDir(outputDir)
 
 	// Build hybrid params: keep VAAPI encoder + device, clear hwaccel decode
 	hybridParams := *origParams
@@ -477,28 +492,14 @@ func (m *HLSManager) retryWithHybrid(sessionID, inputPath, outputDir string, sta
 		}
 		elapsed := time.Since(startedAt)
 		if err != nil {
-			m.mu.RLock()
-			s, exists := m.sessions[sessionID]
-			wasStopped := !exists || s.Stopped
-			m.mu.RUnlock()
-
-			if wasStopped {
+			if m.isSessionStopped(sessionID) {
 				log.Printf("[HLS] Hybrid fallback stopped (session cleaned up): session=%s", sessionID)
 			} else if elapsed < 5*time.Second {
-				// Hybrid also failed fast — fall through to full software
 				log.Printf("[HLS] Hybrid also failed fast (%v), trying full SW: session=%s", elapsed, sessionID)
 				m.retryWithSoftware(sessionID, inputPath, outputDir, startTime, quality, codec, origParams)
 			} else {
 				log.Printf("[HLS] Hybrid fallback failed: session=%s err=%v elapsed=%v", sessionID, err, elapsed)
-				logPath := filepath.Join(outputDir, "ffmpeg.log")
-				if logData, readErr := os.ReadFile(logPath); readErr == nil {
-					lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
-					start := len(lines) - 20
-					if start < 0 {
-						start = 0
-					}
-					log.Printf("[HLS] FFmpeg stderr:\n%s", strings.Join(lines[start:], "\n"))
-				}
+				logFFmpegTail(outputDir, sessionID)
 			}
 		} else {
 			log.Printf("[HLS] Hybrid fallback completed: session=%s encoder=%s", sessionID, hybridParams.Encoder)
@@ -526,9 +527,7 @@ func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, s
 		return
 	}
 
-	// Clean up failed output
-	os.RemoveAll(outputDir)
-	os.MkdirAll(outputDir, 0755)
+	resetOutputDir(outputDir)
 
 	// Build new params with software encoder
 	swParams := *origParams
@@ -577,25 +576,11 @@ func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, s
 			logFile.Close()
 		}
 		if err != nil {
-			// Check if this was an intentional stop (cleanup, seek, quality switch)
-			m.mu.RLock()
-			s, exists := m.sessions[sessionID]
-			wasStopped := !exists || s.Stopped
-			m.mu.RUnlock()
-
-			if wasStopped {
+			if m.isSessionStopped(sessionID) {
 				log.Printf("[HLS] Software fallback stopped (session cleaned up): session=%s", sessionID)
 			} else {
 				log.Printf("[HLS] Software fallback also failed: session=%s err=%v", sessionID, err)
-				logPath := filepath.Join(outputDir, "ffmpeg.log")
-				if logData, readErr := os.ReadFile(logPath); readErr == nil {
-					lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
-					start := len(lines) - 20
-					if start < 0 {
-						start = 0
-					}
-					log.Printf("[HLS] FFmpeg stderr:\n%s", strings.Join(lines[start:], "\n"))
-				}
+				logFFmpegTail(outputDir, sessionID)
 			}
 		} else {
 			log.Printf("[HLS] Software fallback completed: session=%s encoder=%s", sessionID, fallback)

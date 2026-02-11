@@ -1,4 +1,5 @@
 import client from './client'
+export type { Job } from './job'
 
 export interface SubtitleEntry {
   id: string
@@ -6,20 +7,6 @@ export interface SubtitleEntry {
   language: string
   type: 'embedded' | 'external' | 'generated'
   format: string
-}
-
-export interface Job {
-  id: string
-  type: 'transcribe' | 'translate'
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
-  file_path: string
-  params: Record<string, unknown>
-  progress: number
-  result?: Record<string, unknown>
-  error?: string
-  created_at: string
-  started_at?: string
-  completed_at?: string
 }
 
 export interface GenerateParams {
@@ -52,18 +39,6 @@ export const translateSubtitle = (path: string, params: TranslateParams) =>
 
 export const deleteSubtitle = (path: string, subtitleId: string) =>
   client.delete(`/subtitle/delete/${path}?id=${encodeURIComponent(subtitleId)}`)
-
-export const getJob = (jobId: string) =>
-  client.get<Job>(`/jobs/${jobId}`)
-
-export const listJobs = () =>
-  client.get<Job[]>(`/jobs`)
-
-export const cancelJob = (jobId: string) =>
-  client.delete(`/jobs/${jobId}`)
-
-export const retryJob = (jobId: string) =>
-  client.post(`/jobs/${jobId}/retry`)
 
 export const uploadSubtitle = (videoPath: string, file: File) => {
   const formData = new FormData()

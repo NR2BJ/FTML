@@ -120,27 +120,12 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		return
 	}
 
-	quality := r.URL.Query().Get("quality")
-	if quality == "" {
-		quality = "720p"
-	}
+	sp := parseStreamParams(r)
 
 	// "original" quality means direct play - redirect
-	if quality == "original" {
+	if sp.quality == "original" {
 		http.Redirect(w, r, "/api/stream/direct/"+videoPath, http.StatusTemporaryRedirect)
 		return
-	}
-
-	// Parse optional start time for seeking
-	var startTime float64
-	if st := r.URL.Query().Get("start"); st != "" {
-		fmt.Sscanf(st, "%f", &startTime)
-	}
-
-	// Parse audio stream index
-	audioStreamIdx := 0
-	if audioStr := r.URL.Query().Get("audio"); audioStr != "" {
-		fmt.Sscanf(audioStr, "%d", &audioStreamIdx)
 	}
 
 	// Parse codec params
@@ -149,12 +134,12 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	// Probe the file to generate presets and find the matching transcode params
 	info, _ := ffmpeg.Probe(fullPath)
 	presets := ffmpeg.GeneratePresets(info, codec, encoder, browser)
-	params := ffmpeg.GetTranscodeParams(quality, presets, encoder)
+	params := ffmpeg.GetTranscodeParams(sp.quality, presets, encoder)
 
 	// Passthrough fallback: HLS URL doesn't include browser codec params,
 	// so GeneratePresets may not include a passthrough option. Build params
 	// directly from the probed video codec (passthrough = video copy + audio AAC).
-	if params == nil && quality == "passthrough" && info != nil {
+	if params == nil && sp.quality == "passthrough" && info != nil {
 		videoCodecNorm := ffmpeg.NormalizeCodecName(info.VideoCodec)
 		// 10bit H.264 can't be decoded via MSE — don't allow passthrough
 		if !(videoCodecNorm == "h264" && ffmpeg.Is10bit(info.PixFmt)) {
@@ -170,7 +155,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	}
 
 	// If quality not found in presets, use first available transcode preset
-	if params == nil && quality != "original" && quality != "passthrough" {
+	if params == nil && sp.quality != "original" && sp.quality != "passthrough" {
 		for _, p := range presets {
 			if p.Value != "original" && p.Value != "passthrough" {
 				params = ffmpeg.GetTranscodeParams(p.Value, presets, encoder)
@@ -181,17 +166,17 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 
 	// Apply audio stream index to params
 	if params != nil {
-		params.AudioStreamIndex = audioStreamIdx
+		params.AudioStreamIndex = sp.audioStreamIdx
 	}
 
-	sessionID := generateSessionID(videoPath, quality, startTime, string(codec), audioStreamIdx)
+	sessionID := generateSessionID(videoPath, sp.quality, sp.startTime, string(codec), sp.audioStreamIdx)
 
 	// If seeking, stop any existing sessions for the same video+quality+codec at different times
-	if startTime > 0 {
-		h.hlsManager.StopSessionsForPath(fullPath, quality, string(codec), sessionID)
+	if sp.startTime > 0 {
+		h.hlsManager.StopSessionsForPath(fullPath, sp.quality, string(codec), sessionID)
 	}
 
-	session, err := h.hlsManager.GetOrCreateSession(sessionID, fullPath, startTime, quality, string(codec), params)
+	session, err := h.hlsManager.GetOrCreateSession(sessionID, fullPath, sp.startTime, sp.quality, string(codec), params)
 	if err != nil {
 		log.Printf("[stream] failed to start transcoding: %v", err)
 		jsonError(w, "failed to start transcoding", http.StatusInternalServerError)
@@ -246,16 +231,11 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 
 		// Handle #EXT-X-MAP:URI="init.mp4" (fmp4 init segment)
 		if strings.HasPrefix(trimmed, "#EXT-X-MAP:URI=") {
-			// Extract the filename from URI="..."
 			uriStart := strings.Index(trimmed, `"`)
 			uriEnd := strings.LastIndex(trimmed, `"`)
 			if uriStart >= 0 && uriEnd > uriStart {
 				segName := trimmed[uriStart+1 : uriEnd]
-				segURL := fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s&codec=%s&audio=%d",
-					encodedVideoPath, segName, token, quality, string(codec), audioStreamIdx)
-				if startTime > 0 {
-					segURL += fmt.Sprintf("&start=%.0f", startTime)
-				}
+				segURL := buildSegmentURL(encodedVideoPath, segName, token, sp.quality, string(codec), sp.audioStreamIdx, sp.startTime)
 				lines[i] = fmt.Sprintf(`#EXT-X-MAP:URI="%s"`, segURL)
 			}
 			continue
@@ -263,13 +243,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 
 		// Handle segment lines (.ts, .m4s, .mp4)
 		if strings.HasSuffix(trimmed, ".ts") || strings.HasSuffix(trimmed, ".m4s") || strings.HasSuffix(trimmed, ".mp4") {
-			segName := trimmed
-			segURL := fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s&codec=%s&audio=%d",
-				encodedVideoPath, segName, token, quality, string(codec), audioStreamIdx)
-			if startTime > 0 {
-				segURL += fmt.Sprintf("&start=%.0f", startTime)
-			}
-			lines[i] = segURL
+			lines[i] = buildSegmentURL(encodedVideoPath, trimmed, token, sp.quality, string(codec), sp.audioStreamIdx, sp.startTime)
 		}
 	}
 
@@ -294,23 +268,8 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 		return
 	}
 	videoPath := strings.Join(parts[:len(parts)-1], "/")
-	quality := r.URL.Query().Get("quality")
-	if quality == "" {
-		quality = "720p"
-	}
-	codecStr := r.URL.Query().Get("codec")
-	if codecStr == "" {
-		codecStr = "h264"
-	}
-	var startTime float64
-	if st := r.URL.Query().Get("start"); st != "" {
-		fmt.Sscanf(st, "%f", &startTime)
-	}
-	audioStreamIdx := 0
-	if audioStr := r.URL.Query().Get("audio"); audioStr != "" {
-		fmt.Sscanf(audioStr, "%d", &audioStreamIdx)
-	}
-	sessionID := generateSessionID(videoPath, quality, startTime, codecStr, audioStreamIdx)
+	sp := parseStreamParams(r)
+	sessionID := generateSessionID(videoPath, sp.quality, sp.startTime, sp.codec, sp.audioStreamIdx)
 
 	sessionDir := h.hlsManager.GetSessionDir(sessionID)
 	segmentPath := filepath.Join(sessionDir, segmentName)
@@ -404,6 +363,42 @@ func parseCodecParams(r *http.Request) (ffmpeg.Codec, *ffmpeg.EncoderInfo, ffmpe
 	}
 
 	return codec, encoder, browser
+}
+
+type streamParams struct {
+	quality        string
+	codec          string
+	startTime      float64
+	audioStreamIdx int
+}
+
+func parseStreamParams(r *http.Request) streamParams {
+	p := streamParams{
+		quality: r.URL.Query().Get("quality"),
+		codec:   r.URL.Query().Get("codec"),
+	}
+	if p.quality == "" {
+		p.quality = "720p"
+	}
+	if p.codec == "" {
+		p.codec = "h264"
+	}
+	if st := r.URL.Query().Get("start"); st != "" {
+		fmt.Sscanf(st, "%f", &p.startTime)
+	}
+	if audioStr := r.URL.Query().Get("audio"); audioStr != "" {
+		fmt.Sscanf(audioStr, "%d", &p.audioStreamIdx)
+	}
+	return p
+}
+
+func buildSegmentURL(encodedVideoPath, segName, token, quality, codec string, audioStreamIdx int, startTime float64) string {
+	u := fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s&codec=%s&audio=%d",
+		encodedVideoPath, segName, token, quality, codec, audioStreamIdx)
+	if startTime > 0 {
+		u += fmt.Sprintf("&start=%.0f", startTime)
+	}
+	return u
 }
 
 func generateSessionID(path, quality string, startTime float64, codec string, audioStreamIdx int) string {

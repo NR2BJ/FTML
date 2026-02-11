@@ -3,74 +3,29 @@ import { useJobStore } from '@/stores/jobStore'
 import { cancelJob, retryJob } from '@/api/job'
 import type { Job } from '@/api/job'
 import {
+  formatElapsed, estimateRemaining, formatDurationBetween,
+  timeAgo, shortFileName,
+} from '@/utils/format'
+import {
   Loader2, CheckCircle2, XCircle, Clock, X, RefreshCw,
   Languages, Mic, Briefcase, RotateCcw, AlertCircle
 } from 'lucide-react'
 
 // ─── Helpers ────────────────────────────────────────────────
 
-function formatElapsed(startedAt?: string) {
-  if (!startedAt) return ''
-  const elapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)
-  if (elapsed < 0) return '0s'
-  if (elapsed < 60) return `${elapsed}s`
-  const min = Math.floor(elapsed / 60)
-  const sec = elapsed % 60
-  return `${min}m ${sec}s`
-}
-
-function estimateRemaining(startedAt?: string, progress?: number) {
-  if (!startedAt || !progress || progress <= 0 || progress >= 1) return null
-  const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000
-  if (elapsed < 5) return null // too early to estimate
-  const remaining = elapsed * (1 - progress) / progress
-  if (remaining < 60) return `~${Math.ceil(remaining)}s`
-  const min = Math.floor(remaining / 60)
-  const sec = Math.ceil(remaining % 60)
-  return `~${min}m ${sec}s`
-}
-
-function formatDurationBetween(start?: string, end?: string) {
-  if (!start || !end) return ''
-  const ms = new Date(end).getTime() - new Date(start).getTime()
-  const sec = Math.floor(ms / 1000)
-  if (sec < 60) return `${sec}s`
-  const min = Math.floor(sec / 60)
-  const s = sec % 60
-  return `${min}m ${s}s`
-}
-
-function timeAgo(dateStr?: string) {
-  if (!dateStr) return ''
-  const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000)
-  if (diff < 0) return 'just now'
-  if (diff < 60) return `${diff}s ago`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  return `${Math.floor(diff / 86400)}d ago`
-}
-
-function shortFileName(filePath: string) {
-  const parts = filePath.split('/')
-  return parts[parts.length - 1]
-}
-
-function getJobParams(job: Job) {
+function getJobParams(job: Job): string[] {
   const p = job.params || {}
-  const details: string[] = []
-
   if (job.type === 'transcribe') {
-    if (p.engine) details.push(`Engine: ${p.engine}`)
-    if (p.model) details.push(`Model: ${p.model}`)
-    if (p.language) details.push(`Lang: ${p.language}`)
-  } else if (job.type === 'translate') {
-    if (p.engine) details.push(`Engine: ${p.engine}`)
-    if (p.preset) details.push(`Preset: ${p.preset}`)
-    if (p.source_lang && p.target_lang) details.push(`${p.source_lang} → ${p.target_lang}`)
-    else if (p.target_lang) details.push(`→ ${p.target_lang}`)
+    return ['engine', 'model', 'language']
+      .filter(k => p[k])
+      .map(k => `${k}: ${p[k]}`)
   }
-
-  return details
+  const tags: string[] = ['engine', 'preset']
+    .filter(k => p[k])
+    .map(k => `${k}: ${p[k]}`)
+  if (p.source_lang && p.target_lang) tags.push(`${p.source_lang} → ${p.target_lang}`)
+  else if (p.target_lang) tags.push(`→ ${p.target_lang}`)
+  return tags
 }
 
 // ─── Sub-components ─────────────────────────────────────────
