@@ -35,7 +35,8 @@ export default function Sessions() {
 
   useEffect(() => {
     fetchSessions()
-    const interval = setInterval(fetchSessions, 10000)
+    const SESSIONS_REFRESH_INTERVAL_MS = 10000
+    const interval = setInterval(fetchSessions, SESSIONS_REFRESH_INTERVAL_MS)
     return () => clearInterval(interval)
   }, [])
 

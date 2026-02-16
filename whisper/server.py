@@ -959,48 +959,6 @@ async def transcribe_openai(
 
 
 # ---------------------------------------------------------------------------
-# whisper.cpp-compatible endpoint (legacy)
-# ---------------------------------------------------------------------------
-
-@app.post("/inference")
-async def transcribe_legacy(
-    file: UploadFile = File(...),
-    language: str = Form(default=""),
-    response_format: str = Form(default="vtt"),
-    temperature: str = Form(default="0.0"),
-):
-    """Legacy endpoint matching whisper.cpp /inference for backwards compat."""
-    if loading_model:
-        raise HTTPException(503, "Model is loading, please wait")
-
-    audio_bytes = await file.read()
-    log.info(f"[legacy] Received: {file.filename} ({len(audio_bytes)} bytes)")
-
-    try:
-        audio = decode_audio(audio_bytes)
-    except Exception as e:
-        raise HTTPException(400, f"Failed to decode audio: {e}")
-
-    log.info(f"[legacy] Audio: {len(audio)/16000:.1f}s")
-
-    try:
-        loop = asyncio.get_event_loop()
-        chunks, full_text, elapsed = await loop.run_in_executor(
-            None, run_inference, audio, language
-        )
-    except Exception as e:
-        raise HTTPException(500, f"Inference failed: {e}")
-
-    log.info(f"[legacy] Done: {len(chunks)} chunks in {elapsed:.1f}s")
-
-    if response_format == "vtt":
-        vtt = chunks_to_vtt(chunks) if chunks else f"WEBVTT\n\n1\n00:00:00.000 --> 99:59:59.999\n{full_text}\n"
-        return PlainTextResponse(vtt, media_type="text/vtt")
-    else:
-        return JSONResponse({"text": full_text})
-
-
-# ---------------------------------------------------------------------------
 # Model management
 # ---------------------------------------------------------------------------
 

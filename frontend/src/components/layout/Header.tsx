@@ -47,7 +47,8 @@ export default function Header() {
 
   useEffect(() => {
     fetchPendingCount()
-    const interval = setInterval(fetchPendingCount, 60000)
+    const PENDING_COUNT_INTERVAL_MS = 60000
+    const interval = setInterval(fetchPendingCount, PENDING_COUNT_INTERVAL_MS)
     return () => clearInterval(interval)
   }, [fetchPendingCount])
 

@@ -91,7 +91,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadStats()
-    const interval = setInterval(loadStats, 15000)
+    const STATS_REFRESH_INTERVAL_MS = 15000
+    const interval = setInterval(loadStats, STATS_REFRESH_INTERVAL_MS)
     return () => clearInterval(interval)
   }, [loadStats])
 

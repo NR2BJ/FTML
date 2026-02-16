@@ -21,7 +21,8 @@ export default function RateLimits() {
 
   useEffect(() => {
     loadStatus()
-    const interval = setInterval(loadStatus, 10000) // refresh every 10s
+    const STATUS_REFRESH_INTERVAL_MS = 10000
+    const interval = setInterval(loadStatus, STATUS_REFRESH_INTERVAL_MS)
     return () => clearInterval(interval)
   }, [])
 

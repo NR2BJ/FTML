@@ -7,6 +7,8 @@ export interface Toast {
   duration: number
 }
 
+const DEFAULT_TOAST_DURATION_MS = 3000
+
 interface ToastState {
   toasts: Toast[]
   addToast: (toast: Omit<Toast, 'id' | 'duration'> & { duration?: number }) => void
@@ -18,7 +20,7 @@ export const useToastStore = create<ToastState>((set) => ({
   addToast: (toast) => {
     const id = crypto.randomUUID()
     set((state) => ({
-      toasts: [...state.toasts, { ...toast, id, duration: toast.duration ?? 3000 }],
+      toasts: [...state.toasts, { ...toast, id, duration: toast.duration ?? DEFAULT_TOAST_DURATION_MS }],
     }))
   },
   removeToast: (id) => {

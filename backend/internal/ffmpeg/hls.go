@@ -13,6 +13,21 @@ import (
 	"time"
 )
 
+// HLS session management constants
+const (
+	vaapiFailThreshold       = 5 * time.Second   // fast-fail detection for VAAPI/hybrid fallback
+	cleanupInterval          = 15 * time.Second   // session cleanup ticker
+	maxSessionAge            = 30 * time.Minute   // hard limit for any session
+	heartbeatTimeout         = 2 * time.Minute    // no heartbeat → kill
+	pauseMaxDuration         = 5 * time.Minute    // paused too long without heartbeat
+	pauseHeartbeatThreshold  = 90 * time.Second   // heartbeat freshness for long-paused sessions
+	activeHeartbeatTimeout   = 45 * time.Second   // active session idle timeout
+	completedHeartbeatTimeout = 5 * time.Minute   // FFmpeg-done session idle timeout
+	fallbackCacheTTL         = 30 * time.Minute   // purge stale fallback cache entries
+	ffmpegAnalyzeDuration    = "20000000"          // 20s in microseconds
+	ffmpegProbeSize          = "10000000"          // 10MB probe size
+)
+
 type HLSSession struct {
 	ID            string
 	InputPath     string
@@ -191,7 +206,7 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 			// But skip if the session was intentionally stopped (seek, quality switch, cleanup)
 			wasStopped := m.isSessionStopped(sessionID)
 
-			if !wasStopped && elapsed < 5*time.Second && params.HWAccel == "vaapi" {
+			if !wasStopped && elapsed < vaapiFailThreshold && params.HWAccel == "vaapi" {
 				log.Printf("[HLS] VAAPI failed fast, retrying with hybrid (CPU decode + GPU encode): session=%s", sessionID)
 				m.retryWithHybrid(sessionID, inputPath, outputDir, startTime, quality, codec, params)
 			} else if wasStopped {
@@ -218,8 +233,8 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "warning",
-		"-analyzeduration", "20000000",
-		"-probesize", "10000000",
+		"-analyzeduration", ffmpegAnalyzeDuration,
+		"-probesize", ffmpegProbeSize,
 	}
 
 	isPassthrough := params.VideoCodec == "copy" || params.Encoder == "copy"
@@ -494,7 +509,7 @@ func (m *HLSManager) retryWithHybrid(sessionID, inputPath, outputDir string, sta
 		if err != nil {
 			if m.isSessionStopped(sessionID) {
 				log.Printf("[HLS] Hybrid fallback stopped (session cleaned up): session=%s", sessionID)
-			} else if elapsed < 5*time.Second {
+			} else if elapsed < vaapiFailThreshold {
 				log.Printf("[HLS] Hybrid also failed fast (%v), trying full SW: session=%s", elapsed, sessionID)
 				m.retryWithSoftware(sessionID, inputPath, outputDir, startTime, quality, codec, origParams)
 			} else {
@@ -733,15 +748,15 @@ func (m *HLSManager) Heartbeat(sessionID string) bool {
 }
 
 func (m *HLSManager) cleanup() {
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		m.mu.Lock()
 		now := time.Now()
 		for id, s := range m.sessions {
-			// Hard limit: 30 minutes max (applies to all sessions)
-			if now.Sub(s.CreatedAt) > 30*time.Minute {
+			// Hard limit: max session age (applies to all sessions)
+			if now.Sub(s.CreatedAt) > maxSessionAge {
 				s.Stopped = true
 				if s.Paused && s.Cmd != nil && s.Cmd.Process != nil {
 					s.Cmd.Process.Signal(syscall.SIGCONT)
@@ -749,7 +764,7 @@ func (m *HLSManager) cleanup() {
 				s.Cancel()
 				os.RemoveAll(s.OutputDir)
 				delete(m.sessions, id)
-				log.Printf("[HLS] Stopped session: %s (max age 30m)", id)
+				log.Printf("[HLS] Stopped session: %s (max age %v)", id, maxSessionAge)
 				continue
 			}
 			// Paused sessions: keep alive as long as client sends heartbeats (60s interval).
@@ -757,9 +772,8 @@ func (m *HLSManager) cleanup() {
 			if s.Paused {
 				pausedDur := now.Sub(s.PausedAt)
 				heartbeatAge := now.Sub(s.LastHeartbeat)
-				// Kill if no heartbeat for 2 minutes (client sends every 60s)
-				// OR if paused for 5+ minutes without any heartbeat refresh
-				if heartbeatAge > 2*time.Minute || (pausedDur > 5*time.Minute && heartbeatAge > 90*time.Second) {
+				// Kill if no heartbeat for too long, or paused too long without refresh
+				if heartbeatAge > heartbeatTimeout || (pausedDur > pauseMaxDuration && heartbeatAge > pauseHeartbeatThreshold) {
 					s.Stopped = true
 					if s.Cmd != nil && s.Cmd.Process != nil {
 						s.Cmd.Process.Signal(syscall.SIGCONT)
@@ -775,9 +789,9 @@ func (m *HLSManager) cleanup() {
 			// If FFmpeg already finished (all segments written), use 5-minute timeout
 			// so viewers can watch the remaining buffered content.
 			// If FFmpeg is still running, use 45s timeout.
-			activeTimeout := 45 * time.Second
+			activeTimeout := activeHeartbeatTimeout
 			if s.FFmpegDone {
-				activeTimeout = 5 * time.Minute
+				activeTimeout = completedHeartbeatTimeout
 			}
 			if now.Sub(s.LastHeartbeat) > activeTimeout {
 				s.Stopped = true
@@ -787,9 +801,9 @@ func (m *HLSManager) cleanup() {
 				log.Printf("[HLS] Stopped session: %s (heartbeat timeout %.0fs)", id, activeTimeout.Seconds())
 			}
 		}
-		// Purge stale fallback cache entries (30-minute TTL to prevent memory leaks)
+		// Purge stale fallback cache entries
 		for id, t := range m.fallbackCacheTime {
-			if now.Sub(t) > 30*time.Minute {
+			if now.Sub(t) > fallbackCacheTTL {
 				delete(m.fallbackCache, id)
 				delete(m.fallbackCacheTime, id)
 			}

@@ -14,6 +14,10 @@ import PlaybackStats from './PlaybackStats'
 import SubtitleDisplay from './SubtitleDisplay'
 import NextEpisodeOverlay from './NextEpisodeOverlay'
 
+const HEARTBEAT_INTERVAL_MS = 15000
+const POSITION_SAVE_INTERVAL_MS = 10000
+const NEXT_EP_HEARTBEAT_INTERVAL_MS = 60000
+
 interface PlayerProps {
   path: string
 }
@@ -83,7 +87,7 @@ export default function Player({ path }: PlayerProps) {
     sendHeartbeat(sid).catch(() => {})
     heartbeatRef.current = setInterval(() => {
       sendHeartbeat(sid).catch(() => {})
-    }, 15000)
+    }, HEARTBEAT_INTERVAL_MS)
   }, [stopHeartbeat])
 
   // Stop the current HLS session on the server
@@ -372,7 +376,7 @@ export default function Player({ path }: PlayerProps) {
       }
     }
 
-    const interval = setInterval(savePosition, 10000)
+    const interval = setInterval(savePosition, POSITION_SAVE_INTERVAL_MS)
 
     const handlePause = () => savePosition()
 
@@ -510,7 +514,7 @@ export default function Player({ path }: PlayerProps) {
       const sid = sessionIDRef.current
       heartbeatRef.current = setInterval(() => {
         sendHeartbeat(sid).catch(() => {})
-      }, 60000)
+      }, NEXT_EP_HEARTBEAT_INTERVAL_MS)
     }
   }, [setPlaying, stopHeartbeat])
 
