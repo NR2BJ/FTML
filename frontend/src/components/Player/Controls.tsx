@@ -3,6 +3,8 @@ import { usePlayerStore } from '@/stores/playerStore'
 import { useToastStore } from '@/stores/toastStore'
 import { Play, Pause, Volume2, VolumeX, Maximize, SkipBack, SkipForward, BarChart2, PictureInPicture2, Camera, Repeat } from 'lucide-react'
 import { formatDuration } from '@/utils/format'
+import { captureScreenshot } from '@/utils/screenshot'
+import { toggleABLoopWithToast } from '@/utils/abloop'
 import SubtitleSelector from './SubtitleSelector'
 import AudioSelector from './AudioSelector'
 import QualitySelector from './QualitySelector'
@@ -128,37 +130,15 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
   const takeScreenshot = () => {
     const video = videoRef.current
     if (!video) return
-    try {
-      const canvas = document.createElement('canvas')
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      const dataUrl = canvas.toDataURL('image/png')
-      const a = document.createElement('a')
-      const fileName = filePath.split('/').pop()?.replace(/\.[^.]+$/, '') || 'screenshot'
-      a.href = dataUrl
-      a.download = `${fileName}_${formatDuration(currentTime).replace(/:/g, '-')}.png`
-      a.click()
+    if (captureScreenshot(video, filePath, currentTime)) {
       addToast({ type: 'success', message: 'Screenshot saved' })
-    } catch {
+    } else {
       addToast({ type: 'error', message: 'Screenshot failed' })
     }
   }
 
   // A-B Loop
-  const handleABLoop = () => {
-    toggleABLoop(currentTime)
-    const { abLoop: loop } = usePlayerStore.getState()
-    if (loop.a !== null && loop.b === null) {
-      addToast({ type: 'info', message: `Loop A set at ${formatDuration(currentTime)}` })
-    } else if (loop.a !== null && loop.b !== null) {
-      addToast({ type: 'info', message: `Loop B set at ${formatDuration(loop.b)}` })
-    } else {
-      addToast({ type: 'info', message: 'A-B loop cleared' })
-    }
-  }
+  const handleABLoop = () => toggleABLoopWithToast(currentTime)
 
   // A-B loop progress positions
   const loopAPos = abLoop.a !== null && duration > 0 ? (abLoop.a / duration) * 100 : null

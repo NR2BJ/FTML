@@ -24,7 +24,9 @@ func main() {
 	cfg := config.Load()
 
 	// Ensure data directory exists
-	os.MkdirAll(cfg.DataPath, 0755)
+	if err := os.MkdirAll(cfg.DataPath, 0755); err != nil {
+		log.Fatalf("Failed to create data directory %s: %v", cfg.DataPath, err)
+	}
 
 	// Initialize database
 	database, err := db.NewSQLite(cfg.DBPath)

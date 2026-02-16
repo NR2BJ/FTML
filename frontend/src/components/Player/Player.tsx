@@ -9,6 +9,8 @@ import { computeSessionID } from '@/utils/session'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useToastStore } from '@/stores/toastStore'
 import { formatDuration } from '@/utils/format'
+import { captureScreenshot } from '@/utils/screenshot'
+import { toggleABLoopWithToast } from '@/utils/abloop'
 import Controls from './Controls'
 import PlaybackStats from './PlaybackStats'
 import SubtitleDisplay from './SubtitleDisplay'
@@ -693,40 +695,12 @@ export default function Player({ path }: PlayerProps) {
         }
         case 's':
         case 'S': {
-          // Screenshot
-          try {
-            const canvas = document.createElement('canvas')
-            canvas.width = video.videoWidth
-            canvas.height = video.videoHeight
-            const ctx = canvas.getContext('2d')
-            if (ctx) {
-              ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-              const dataUrl = canvas.toDataURL('image/png')
-              const a = document.createElement('a')
-              const fileName = path.split('/').pop()?.replace(/\.[^.]+$/, '') || 'screenshot'
-              a.href = dataUrl
-              a.download = `${fileName}_${formatDuration(absTime).replace(/:/g, '-')}.png`
-              a.click()
-              useToastStore.getState().addToast({ type: 'success', message: 'Screenshot saved' })
-            }
-          } catch {
-            // ignore
-          }
+          captureScreenshot(video, path, absTime)
           break
         }
         case 'b':
         case 'B': {
-          // A-B Loop toggle
-          const store = usePlayerStore.getState()
-          store.toggleABLoop(absTime)
-          const { abLoop } = usePlayerStore.getState()
-          if (abLoop.a !== null && abLoop.b === null) {
-            useToastStore.getState().addToast({ type: 'info', message: `Loop A set at ${formatDuration(absTime)}` })
-          } else if (abLoop.a !== null && abLoop.b !== null) {
-            useToastStore.getState().addToast({ type: 'info', message: `Loop B set at ${formatDuration(abLoop.b)}` })
-          } else {
-            useToastStore.getState().addToast({ type: 'info', message: 'A-B loop cleared' })
-          }
+          toggleABLoopWithToast(absTime)
           break
         }
         case '<': {

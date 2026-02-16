@@ -1,4 +1,5 @@
 import client from './client'
+import type { WatchHistoryEntry } from './user'
 
 export interface AdminUser {
   id: number
@@ -27,13 +28,6 @@ export interface Registration {
   created_at: string
   reviewed_at?: string
   reviewed_by?: number
-}
-
-export interface WatchHistoryEntry {
-  file_path: string
-  position: number
-  duration: number
-  updated_at: string
 }
 
 // User management

@@ -2,19 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Clock, Trash2, Play } from 'lucide-react'
 import { listWatchHistory, deleteWatchHistory, type WatchHistoryEntry } from '@/api/user'
-
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = Math.floor(seconds % 60)
-  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
-
-function getFileName(path: string): string {
-  const parts = path.split('/')
-  return parts[parts.length - 1] || path
-}
+import { formatDuration, shortFileName } from '@/utils/format'
 
 export default function WatchHistory() {
   const [history, setHistory] = useState<WatchHistoryEntry[]>([])
@@ -90,7 +78,7 @@ export default function WatchHistory() {
                     <div className="flex items-center gap-2 mb-2">
                       <Play className="w-4 h-4 text-primary-500 flex-shrink-0" />
                       <span className="text-sm text-white truncate">
-                        {getFileName(entry.file_path)}
+                        {shortFileName(entry.file_path)}
                       </span>
                     </div>
                     <div className="flex items-center gap-3">

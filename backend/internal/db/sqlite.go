@@ -570,8 +570,8 @@ func (d *Database) ApproveRegistration(id int64, reviewerID int64) error {
 		return err
 	}
 
-	// Create user with viewer role
-	_, err = tx.Exec("INSERT INTO users (username, password, role) VALUES (?, ?, 'viewer')", username, password)
+	// Create user with default user role
+	_, err = tx.Exec("INSERT INTO users (username, password, role) VALUES (?, ?, 'user')", username, password)
 	if err != nil {
 		return err
 	}
