@@ -168,6 +168,7 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 
 	log.Printf("[HLS] Starting transcode: session=%s codec=%s encoder=%s hwaccel=%s input=%s",
 		sessionID, params.VideoCodec, params.Encoder, params.HWAccel, inputPath)
+	log.Printf("[HLS] FFmpeg args: ffmpeg %s", strings.Join(args, " "))
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -277,22 +278,22 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 	if isPassthrough {
 		// Video passthrough: copy video stream as-is
 		args = append(args, "-c:v", "copy")
-		// Fix negative packet duration / DTS warnings in MKV→fMP4 remux.
-		// Without this, MSE may refuse to play the first segments on initial load.
-		args = append(args, "-avoid_negative_ts", "make_zero")
-		args = append(args, "-fflags", "+genpts+igndts")
+		// Generate missing PTS for packets that lack them (common in MKV).
+		// NOTE: igndts is intentionally omitted — both PTS and DTS are needed for
+		// the setts bitstream filter to properly reset timestamps on both streams.
+		args = append(args, "-fflags", "+genpts")
 		args = append(args, "-max_interleave_delta", "0")
-		// Reset video PTS to 0-based. MKV files often have non-zero first PTS (5-10s offset).
+		// Reset video PTS/DTS to 0-based. MKV files often have non-zero first PTS (5-10s offset).
 		// In copy mode, -output_ts_offset alone doesn't work because packets keep original PTS.
 		// The setts bitstream filter rewrites PTS/DTS at the packet level before muxing.
 		args = append(args, "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS")
 
 		// Audio handling: copy AAC directly, re-encode others to AAC.
-		// Both paths reset audio PTS to 0-based to match the video setts filter.
+		// Both paths reset audio PTS/DTS to 0-based to match the video setts filter.
 		if params.SourceAudioCodec == "aac" {
-			// Source is AAC — copy without re-encoding, reset PTS via bitstream filter
+			// Source is AAC — copy without re-encoding, reset PTS/DTS via bitstream filter
 			args = append(args, "-c:a", "copy")
-			args = append(args, "-bsf:a", "setts=pts=PTS-STARTPTS")
+			args = append(args, "-bsf:a", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS")
 		} else {
 			// Source is not AAC (DTS, FLAC, etc.) — re-encode to AAC with PTS reset
 			args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
