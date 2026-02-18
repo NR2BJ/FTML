@@ -150,6 +150,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 				Encoder:          "copy",
 				SegmentFmt:       "fmp4", // Always fmp4 for passthrough — MKV→mpegts causes DTS issues
 				SourceVideoCodec: videoCodecNorm,
+				SourceAudioCodec: ffmpeg.NormalizeAudioCodecName(info.AudioCodec),
 			}
 		}
 	}
@@ -167,6 +168,12 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	// Apply audio stream index to params
 	if params != nil {
 		params.AudioStreamIndex = sp.audioStreamIdx
+		// Update SourceAudioCodec for the selected audio track (passthrough copy decision)
+		if params.VideoCodec == "copy" && info != nil && sp.audioStreamIdx < len(info.AudioStreams) {
+			params.SourceAudioCodec = ffmpeg.NormalizeAudioCodecName(
+				info.AudioStreams[sp.audioStreamIdx].CodecName,
+			)
+		}
 	}
 
 	sessionID := generateSessionID(videoPath, sp.quality, sp.startTime, string(codec), sp.audioStreamIdx)

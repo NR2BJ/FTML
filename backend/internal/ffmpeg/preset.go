@@ -23,6 +23,7 @@ type TranscodeParams struct {
 	SegmentFmt       string `json:"segment_fmt"`        // "mpegts" or "fmp4"
 	AudioStreamIndex int    `json:"audio_stream_index"` // which audio stream to use (0-based, audio-only index)
 	SourceVideoCodec string `json:"source_video_codec"` // for passthrough: normalized source codec ("hevc", "h264", etc.)
+	SourceAudioCodec string `json:"source_audio_codec"` // for passthrough: normalized source audio codec ("aac", "dts", etc.)
 }
 
 // QualityOption is returned to the frontend for the quality selector.
@@ -39,6 +40,7 @@ type QualityOption struct {
 	CanOriginal      bool   `json:"can_original,omitempty"`          // Whether browser can play full original (video+audio)
 	CanOriginalVideo bool   `json:"can_original_video,omitempty"`    // Whether browser can play original video codec
 	CanOriginalAudio bool   `json:"can_original_audio,omitempty"`    // Whether browser can play original audio codec
+	SourceAudioCodec string `json:"-"`                               // internal: source audio codec for passthrough copy decision
 }
 
 // Standard resolution tiers
@@ -270,6 +272,7 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 			CanOriginalAudio: canDirectPlayAudio,
 			VideoCodec:       videoCodecNorm,
 			AudioCodec:       "aac",
+			SourceAudioCodec: NormalizeAudioCodecName(info.AudioCodec),
 		})
 	}
 
@@ -446,6 +449,7 @@ func GetTranscodeParams(quality string, presets []QualityOption, encoder *Encode
 					Encoder:          "copy",
 					SegmentFmt:       "fmp4",
 					SourceVideoCodec: p.VideoCodec,
+					SourceAudioCodec: p.SourceAudioCodec,
 				}
 			}
 		}

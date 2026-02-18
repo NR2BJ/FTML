@@ -275,21 +275,30 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 	)
 
 	if isPassthrough {
-		// Video passthrough: copy video stream as-is, only transcode audio
+		// Video passthrough: copy video stream as-is
 		args = append(args, "-c:v", "copy")
 		// Fix negative packet duration / DTS warnings in MKV→fMP4 remux.
 		// Without this, MSE may refuse to play the first segments on initial load.
 		args = append(args, "-avoid_negative_ts", "make_zero")
 		args = append(args, "-fflags", "+genpts+igndts")
 		args = append(args, "-max_interleave_delta", "0")
-		// Reset PTS to 0-based. MKV files often have non-zero first PTS (5-10s offset).
+		// Reset video PTS to 0-based. MKV files often have non-zero first PTS (5-10s offset).
 		// In copy mode, -output_ts_offset alone doesn't work because packets keep original PTS.
 		// The setts bitstream filter rewrites PTS/DTS at the packet level before muxing.
 		args = append(args, "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS")
-		// Audio sync: force audio PTS to align with video.
-		// Without this, video PTS is reset to 0 by setts but audio keeps the original
-		// MKV offset, causing A/V desync in passthrough mode.
-		args = append(args, "-af", "aresample=async=1")
+
+		// Audio handling: copy AAC directly, re-encode others to AAC.
+		// Both paths reset audio PTS to 0-based to match the video setts filter.
+		if params.SourceAudioCodec == "aac" {
+			// Source is AAC — copy without re-encoding, reset PTS via bitstream filter
+			args = append(args, "-c:a", "copy")
+			args = append(args, "-bsf:a", "setts=pts=PTS-STARTPTS")
+		} else {
+			// Source is not AAC (DTS, FLAC, etc.) — re-encode to AAC with PTS reset
+			args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
+			args = append(args, "-af", "asetpts=PTS-STARTPTS,aresample=async=1")
+		}
+
 		// fMP4 HLS requires codec tags for browser MSE compatibility
 		if params.SourceVideoCodec == "hevc" {
 			args = append(args, "-tag:v", "hvc1")
@@ -311,10 +320,10 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 
 		// Keyframe interval (consistent across codecs for HLS segment alignment)
 		args = append(args, "-g", "48", "-keyint_min", "48")
-	}
 
-	// Audio encoder — always use AAC for maximum compatibility
-	args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
+		// Audio encoder for transcode mode
+		args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
+	}
 
 	// HLS output
 	args = append(args, "-f", "hls", "-hls_time", "4", "-hls_list_size", "0")
