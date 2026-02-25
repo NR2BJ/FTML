@@ -319,10 +319,6 @@ def run_inference(audio: np.ndarray, language: str = ""):
     if language and language != "auto":
         config.language = f"<|{language}|>"
 
-    # Tune for media with BGM/SFX (anime, movies, etc.)
-    config.no_speech_threshold = float(os.environ.get("NO_SPEECH_THRESHOLD", "0.4"))
-    config.compression_ratio_threshold = float(os.environ.get("COMPRESSION_RATIO_THRESHOLD", "1.8"))
-
     sr = 16000
     chunk_samples = CHUNK_DURATION_S * sr
     total_duration = len(audio) / sr

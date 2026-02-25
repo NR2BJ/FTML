@@ -58,8 +58,6 @@ services:
       dockerfile: Dockerfile.openvino-genai
     environment:
       - DEVICE=${WHISPER_DEVICE:-GPU}
-      - NO_SPEECH_THRESHOLD=${NO_SPEECH_THRESHOLD:-0.4}
-      - COMPRESSION_RATIO_THRESHOLD=${COMPRESSION_RATIO_THRESHOLD:-1.8}
     volumes:
       - whisper_models:/root/.cache/huggingface
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro
