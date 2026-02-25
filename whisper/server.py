@@ -91,7 +91,7 @@ vad_model = SileroVAD(16000)
 
 # Preprocessing mode: 'adaptive' (BGM detect + lightweight filter), 'vocal_sep' (MDX-Net),
 # or 'none' (raw VAD only). Backwards compat: ENABLE_VOCAL_SEP=0 → 'none'.
-PREPROCESS_MODE = os.environ.get("PREPROCESS_MODE", "adaptive")
+PREPROCESS_MODE = os.environ.get("PREPROCESS_MODE", "raw")
 if os.environ.get("ENABLE_VOCAL_SEP") == "0" and "PREPROCESS_MODE" not in os.environ:
     PREPROCESS_MODE = "none"
 
