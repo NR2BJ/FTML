@@ -43,7 +43,7 @@ DEFAULT_MODEL_ID = "OpenVINO/whisper-large-v3-int8-ov"
 # Audio chunking: split long audio into chunks for VRAM management.
 # Whisper processes each chunk independently, timestamps are remapped to absolute.
 CHUNK_DURATION_S = int(os.environ.get("CHUNK_DURATION_S", "300"))  # 5 minutes
-CHUNK_OVERLAP_S = 1  # 1s overlap to protect sentence boundaries
+CHUNK_OVERLAP_S = int(os.environ.get("CHUNK_OVERLAP_S", "2"))  # overlap to protect sentence boundaries
 
 
 @asynccontextmanager
@@ -201,6 +201,7 @@ def chunks_to_vtt(chunks) -> str:
 
         # Skip chunks spanning an entire 30s window (likely hallucination)
         if duration >= 29.0:
+            log.debug(f"Filtered 29s+ chunk: [{format_ts(start_ts)}→{format_ts(end_ts)}] {text[:50]}")
             continue
 
         # Skip 3+ consecutive identical texts (repetition hallucination)
@@ -259,7 +260,7 @@ _HALLUCINATION_PATTERNS = [
     re.compile(r'^by\s+\w\.?$', re.IGNORECASE),   # "by H.", "by A."
     re.compile(r'^[\.…\s]+$'),                      # dots/ellipsis only
     re.compile(r'^[\s\W]+$'),                        # whitespace/punctuation only
-    re.compile(r'^\w{1,2}$'),                        # 1-2 char: "me", "a", "I"
+    re.compile(r'^[a-zA-Z]{1,2}$'),                   # 1-2 ASCII chars: "me", "a", "I"
 ]
 
 
@@ -288,11 +289,12 @@ def is_hallucination(text: str, duration: float) -> bool:
             return True
 
     # Short text + short duration = noise artifact
-    if len(t) <= 4 and duration < 1.0:
+    # CJK chars are 3 bytes each in UTF-8, so byte length filters ASCII-only junk
+    if len(t.encode('utf-8')) <= 4 and duration < 0.5:
         return True
 
-    # Sub-0.3s is too short for real speech
-    if duration < 0.3:
+    # Sub-0.2s is too short for real speech
+    if duration < 0.2:
         return True
 
     return False
@@ -316,6 +318,10 @@ def run_inference(audio: np.ndarray, language: str = ""):
     config.task = "transcribe"
     if language and language != "auto":
         config.language = f"<|{language}|>"
+
+    # Tune for media with BGM/SFX (anime, movies, etc.)
+    config.no_speech_threshold = float(os.environ.get("NO_SPEECH_THRESHOLD", "0.4"))
+    config.compression_ratio_threshold = float(os.environ.get("COMPRESSION_RATIO_THRESHOLD", "1.8"))
 
     sr = 16000
     chunk_samples = CHUNK_DURATION_S * sr
@@ -375,10 +381,14 @@ def run_inference(audio: np.ndarray, language: str = ""):
             if is_hallucination(text, duration):
                 continue
 
-            # Deduplicate overlap region: skip if this chunk starts before
-            # the last accepted chunk ends
-            if all_chunks and abs_start < all_chunks[-1]['end_ts']:
-                continue
+            # Deduplicate overlap region
+            if all_chunks:
+                last = all_chunks[-1]
+                if abs_start < last['end_ts']:
+                    continue
+                # Near-boundary identical text dedup (within 3s)
+                if (abs_start - last['end_ts']) < 3.0 and text == last['text']:
+                    continue
 
             all_chunks.append({'text': text, 'start_ts': abs_start, 'end_ts': abs_end})
             added += 1
