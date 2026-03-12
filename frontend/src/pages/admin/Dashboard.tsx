@@ -52,6 +52,7 @@ const actionLabels: Record<string, { label: string; color: string }> = {
   empty_trash: { label: 'Empty Trash', color: 'text-red-500' },
   subtitle_generate: { label: 'STT Generate', color: 'text-cyan-400' },
   subtitle_translate: { label: 'Sub Translate', color: 'text-emerald-400' },
+  subtitle_generate_translate: { label: 'STT+Trans', color: 'text-cyan-300' },
   subtitle_delete: { label: 'Sub Delete', color: 'text-red-400' },
   subtitle_upload: { label: 'Sub Upload', color: 'text-teal-400' },
   subtitle_convert: { label: 'Sub Convert', color: 'text-indigo-400' },
@@ -285,7 +286,10 @@ export default function Dashboard() {
               const actionInfo = actionLabels[log.action] || { label: log.action, color: 'text-gray-400' }
               return (
                 <div key={log.id} className="flex items-center gap-3 text-sm py-1.5 px-2 rounded hover:bg-dark-800/50">
-                  <span className={`text-xs font-medium w-20 shrink-0 ${actionInfo.color}`}>
+                  <span
+                    className={`text-xs font-medium w-20 shrink-0 truncate ${actionInfo.color}`}
+                    title={actionInfo.label}
+                  >
                     {actionInfo.label}
                   </span>
                   <span className="text-gray-300 truncate flex-1" title={log.file_path}>

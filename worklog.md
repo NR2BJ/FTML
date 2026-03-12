@@ -14,3 +14,4 @@
 - Stage 1 optimization pass: added search debounce/cancellation on the frontend, enforced a minimum search query length, switched backend search to `filepath.WalkDir`, and avoided unnecessary `entry.Info()` calls for directories.
 - Added SQLite indexes for hot admin/job/watch-history queries and removed unused `BuildTree(...)` plus the dead `HLSSession.VideoPath` field.
 - Verified stage 1 with `GOCACHE=/tmp/ftml-go-build go test ./...` and `npm run build`.
+- Added a compact dashboard label for `subtitle_generate_translate` and truncated unknown action labels so long file-log actions no longer overlap the file path column.
