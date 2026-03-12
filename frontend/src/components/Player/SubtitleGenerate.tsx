@@ -5,14 +5,6 @@ import { generateSubtitle, listSubtitles } from '@/api/subtitle'
 import { getJob, type Job } from '@/api/job'
 import { listAvailableEngines, type AvailableEngine } from '@/api/whisperBackends'
 
-const MODELS = [
-  { value: 'large-v3', label: 'Large V3 (Best)' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'small', label: 'Small' },
-  { value: 'base', label: 'Base' },
-  { value: 'tiny', label: 'Tiny (Fast)' },
-]
-
 const LANGUAGES = [
   { value: 'auto', label: 'Auto Detect' },
   { value: 'ko', label: 'Korean' },
@@ -32,7 +24,6 @@ export default function SubtitleGenerate({ onClose }: Props) {
   const { currentFile, setSubtitles } = usePlayerStore()
   const [engines, setEngines] = useState<AvailableEngine[]>([])
   const [engine, setEngine] = useState('')
-  const [model, setModel] = useState('large-v3')
   const [language, setLanguage] = useState('auto')
   const [jobId, setJobId] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
@@ -48,8 +39,6 @@ export default function SubtitleGenerate({ onClose }: Props) {
       })
       .catch(() => setEngines([]))
   }, [])
-
-  const selectedType = engines.find(e => e.value === engine)?.type
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -86,7 +75,7 @@ export default function SubtitleGenerate({ onClose }: Props) {
     if (!currentFile) return
     setError(null)
     try {
-      const { data } = await generateSubtitle(currentFile, { engine, model, language })
+      const { data } = await generateSubtitle(currentFile, { engine, language })
       setJobId(data.job_id)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start generation'
@@ -128,22 +117,6 @@ export default function SubtitleGenerate({ onClose }: Props) {
               <p className="text-[10px] text-amber-400 mt-0.5">No backends configured. Add one in Settings.</p>
             )}
           </div>
-
-          {/* Model (only for non-openai engines) */}
-          {selectedType !== 'openai' && (
-            <div className="mb-2">
-              <label className="text-xs text-gray-400 block mb-0.5">Model</label>
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                className="w-full bg-gray-800 text-sm text-white rounded px-2 py-1 border border-gray-600"
-              >
-                {MODELS.map((m) => (
-                  <option key={m.value} value={m.value}>{m.label}</option>
-                ))}
-              </select>
-            </div>
-          )}
 
           {/* Language */}
           <div className="mb-3">

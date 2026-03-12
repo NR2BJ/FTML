@@ -34,6 +34,7 @@ export default function Player({ path }: PlayerProps) {
   const absTimeRef = useRef<number>(0)      // current absolute playback time (survives HLS destroy)
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const sessionIDRef = useRef<string | null>(null)
+  const startRequestSeqRef = useRef(0)
   const [useHLS, setUseHLS] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [gestureText, setGestureText] = useState<string | null>(null)
@@ -94,6 +95,7 @@ export default function Player({ path }: PlayerProps) {
 
   // Stop the current HLS session on the server
   const stopCurrentSession = useCallback(() => {
+    startRequestSeqRef.current += 1
     stopHeartbeat()
     if (sessionIDRef.current) {
       stopSession(sessionIDRef.current).catch(() => {})
@@ -122,6 +124,9 @@ export default function Player({ path }: PlayerProps) {
 
   // Helper to start HLS playback from a given time
   const startHLS = useCallback((videoEl: HTMLVideoElement, filePath: string, q: string, startTime: number = 0, autoPlay: boolean = false) => {
+    const requestSeq = startRequestSeqRef.current + 1
+    startRequestSeqRef.current = requestSeq
+
     // Stop previous session's heartbeat (but don't kill the server session - seek creates a new one)
     stopHeartbeat()
 
@@ -141,6 +146,7 @@ export default function Player({ path }: PlayerProps) {
     // The backend uses fullPath (mediaPath + videoPath) for the session ID,
     // but generateSessionID uses videoPath (relative). We match that here.
     computeSessionID(filePath, q, startTime, codec || 'h264', storeAudioTrack).then((sid) => {
+      if (startRequestSeqRef.current !== requestSeq) return
       startHeartbeat(sid)
     })
 
@@ -159,10 +165,25 @@ export default function Player({ path }: PlayerProps) {
       hlsRef.current = hls
       hls.loadSource(getHLSUrl(filePath, q, startTime, codec, storeAudioTrack))
       hls.attachMedia(videoEl)
+      let mediaRecoveryAttempts = 0
       hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          setError(`Playback error: ${data.type}`)
+        if (!data.fatal) return
+
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            hls.startLoad()
+            return
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            if (mediaRecoveryAttempts < 2) {
+              mediaRecoveryAttempts += 1
+              hls.recoverMediaError()
+              return
+            }
+            break
         }
+
+        stopCurrentSession()
+        setError(`Playback error: ${data.type}`)
       })
       if (autoPlay) {
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -180,7 +201,7 @@ export default function Player({ path }: PlayerProps) {
     } else {
       setError('HLS is not supported in this browser')
     }
-  }, [startHeartbeat, stopHeartbeat])
+  }, [startHeartbeat, stopCurrentSession, stopHeartbeat])
 
   // Seek to absolute time. If beyond buffered range in HLS, restart transcoding.
   const seek = useCallback((absTime: number) => {

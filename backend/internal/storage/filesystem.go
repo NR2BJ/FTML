@@ -33,19 +33,9 @@ func IsSubtitleFile(name string) bool {
 }
 
 func ListDirectory(basePath, relativePath string) ([]*FileEntry, error) {
-	fullPath := filepath.Join(basePath, relativePath)
-
-	// Prevent path traversal
-	absBase, err := filepath.Abs(basePath)
+	fullPath, err := ResolveWithinBase(basePath, relativePath)
 	if err != nil {
 		return nil, err
-	}
-	absFull, err := filepath.Abs(fullPath)
-	if err != nil {
-		return nil, err
-	}
-	if !strings.HasPrefix(absFull, absBase) {
-		return nil, os.ErrPermission
 	}
 
 	entries, err := os.ReadDir(fullPath)

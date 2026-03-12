@@ -53,6 +53,40 @@ func videoHash(videoPath string) string {
 	return fmt.Sprintf("%x", h[:8])
 }
 
+func isSimpleFilename(name string) bool {
+	return name == filepath.Base(name) && name != "." && name != ".."
+}
+
+func (h *SubtitleHandler) safeVideoPath(relPath string) (string, bool) {
+	fullPath, err := storage.ResolveWithinBase(h.mediaPath, relPath)
+	if err != nil {
+		return "", false
+	}
+	return fullPath, true
+}
+
+func (h *SubtitleHandler) safeGeneratedSubtitlePath(videoPath, filename string) (string, bool) {
+	if !isSimpleFilename(filename) {
+		return "", false
+	}
+	fullPath, err := storage.ResolveWithinBase(h.subtitlePath, filepath.Join(videoHash(videoPath), filename))
+	if err != nil {
+		return "", false
+	}
+	return fullPath, true
+}
+
+func (h *SubtitleHandler) safeSiblingSubtitlePath(videoFullPath, filename string) (string, bool) {
+	if !isSimpleFilename(filename) {
+		return "", false
+	}
+	fullPath, err := storage.ResolveWithinBase(filepath.Dir(videoFullPath), filename)
+	if err != nil {
+		return "", false
+	}
+	return fullPath, true
+}
+
 type SubtitleEntry struct {
 	ID       string `json:"id"`
 	Label    string `json:"label"`
@@ -76,7 +110,11 @@ var textSubtitleCodecs = map[string]bool{
 // ListSubtitles returns available subtitles (embedded + external) for a video
 func (h *SubtitleHandler) ListSubtitles(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
-	fullPath := filepath.Join(h.mediaPath, path)
+	fullPath, ok := h.safeVideoPath(path)
+	if !ok {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		jsonError(w, "file not found", http.StatusNotFound)
@@ -212,7 +250,11 @@ func (h *SubtitleHandler) ServeSubtitle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	fullPath := filepath.Join(h.mediaPath, path)
+	fullPath, ok := h.safeVideoPath(path)
+	if !ok {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
 
 	if strings.HasPrefix(subtitleID, "embedded:") {
 		h.serveEmbeddedSubtitle(w, fullPath, subtitleID)
@@ -253,13 +295,8 @@ func (h *SubtitleHandler) serveEmbeddedSubtitle(w http.ResponseWriter, videoPath
 
 func (h *SubtitleHandler) serveExternalSubtitle(w http.ResponseWriter, videoPath, subtitleID string) {
 	filename := strings.TrimPrefix(subtitleID, "external:")
-	videoDir := filepath.Dir(videoPath)
-	subPath := filepath.Join(videoDir, filename)
-
-	// Security: ensure the subtitle file is in the same directory
-	absDir, _ := filepath.Abs(videoDir)
-	absSub, _ := filepath.Abs(subPath)
-	if !strings.HasPrefix(absSub, absDir) {
+	subPath, ok := h.safeSiblingSubtitlePath(videoPath, filename)
+	if !ok {
 		jsonError(w, "invalid path", http.StatusForbidden)
 		return
 	}
@@ -341,13 +378,8 @@ func langFromTags(tags map[string]string) string {
 
 func (h *SubtitleHandler) serveGeneratedSubtitle(w http.ResponseWriter, videoPath, subtitleID string) {
 	filename := strings.TrimPrefix(subtitleID, "generated:")
-	hash := videoHash(videoPath)
-	subPath := filepath.Join(h.subtitlePath, hash, filename)
-
-	// Security: ensure file is within subtitle directory
-	absBase, _ := filepath.Abs(h.subtitlePath)
-	absSub, _ := filepath.Abs(subPath)
-	if !strings.HasPrefix(absSub, absBase) {
+	subPath, ok := h.safeGeneratedSubtitlePath(videoPath, filename)
+	if !ok {
 		jsonError(w, "invalid path", http.StatusForbidden)
 		return
 	}
@@ -378,7 +410,11 @@ func (h *SubtitleHandler) serveGeneratedSubtitle(w http.ResponseWriter, videoPat
 // GenerateSubtitle creates a transcription job
 func (h *SubtitleHandler) GenerateSubtitle(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
-	fullPath := filepath.Join(h.mediaPath, path)
+	fullPath, ok := h.safeVideoPath(path)
+	if !ok {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		jsonError(w, "file not found", http.StatusNotFound)
@@ -414,7 +450,11 @@ func (h *SubtitleHandler) GenerateSubtitle(w http.ResponseWriter, r *http.Reques
 // TranslateSubtitle creates a translation job
 func (h *SubtitleHandler) TranslateSubtitle(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
-	fullPath := filepath.Join(h.mediaPath, path)
+	fullPath, ok := h.safeVideoPath(path)
+	if !ok {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		jsonError(w, "file not found", http.StatusNotFound)
@@ -484,7 +524,11 @@ func (h *SubtitleHandler) BatchGenerate(w http.ResponseWriter, r *http.Request) 
 	var skipped []string
 
 	for _, path := range req.Paths {
-		fullPath := filepath.Join(h.mediaPath, path)
+		fullPath, ok := h.safeVideoPath(path)
+		if !ok {
+			skipped = append(skipped, path)
+			continue
+		}
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			skipped = append(skipped, path)
 			continue
@@ -546,6 +590,12 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 	var skipped []string
 
 	for _, path := range req.Paths {
+		fullPath, ok := h.safeVideoPath(path)
+		if !ok {
+			skipped = append(skipped, path)
+			continue
+		}
+
 		// Find the first generated subtitle for this file
 		hash := videoHash(path)
 		genDir := filepath.Join(h.subtitlePath, hash)
@@ -574,7 +624,6 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 
 		// Fallback: try embedded text subtitles
 		if subtitleID == "" {
-			fullPath := filepath.Join(h.mediaPath, path)
 			info, probeErr := ffmpeg.Probe(fullPath)
 			if probeErr == nil {
 				for _, s := range info.Streams {
@@ -588,7 +637,6 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 
 		// Fallback: try external subtitle files
 		if subtitleID == "" {
-			fullPath := filepath.Join(h.mediaPath, path)
 			videoDir := filepath.Dir(fullPath)
 			videoBase := strings.TrimSuffix(filepath.Base(fullPath), filepath.Ext(fullPath))
 			dirEntries, readErr := os.ReadDir(videoDir)
@@ -643,11 +691,11 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 // BatchGenerateTranslate creates transcription jobs with chained translation for multiple files
 func (h *SubtitleHandler) BatchGenerateTranslate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Paths      []string `json:"paths"`
-		Engine     string   `json:"engine"`
-		Model      string   `json:"model"`
-		Language   string   `json:"language"`
-		Translate  struct {
+		Paths     []string `json:"paths"`
+		Engine    string   `json:"engine"`
+		Model     string   `json:"model"`
+		Language  string   `json:"language"`
+		Translate struct {
 			TargetLang   string `json:"target_lang"`
 			Engine       string `json:"engine"`
 			Preset       string `json:"preset"`
@@ -683,7 +731,11 @@ func (h *SubtitleHandler) BatchGenerateTranslate(w http.ResponseWriter, r *http.
 	var skipped []string
 
 	for _, path := range req.Paths {
-		fullPath := filepath.Join(h.mediaPath, path)
+		fullPath, ok := h.safeVideoPath(path)
+		if !ok {
+			skipped = append(skipped, path)
+			continue
+		}
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			skipped = append(skipped, path)
 			continue
@@ -722,7 +774,11 @@ func (h *SubtitleHandler) BatchGenerateTranslate(w http.ResponseWriter, r *http.
 // POST /subtitle/upload/* — multipart/form-data with "file" field
 func (h *SubtitleHandler) UploadSubtitle(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
-	fullPath := filepath.Join(h.mediaPath, path)
+	fullPath, ok := h.safeVideoPath(path)
+	if !ok {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		jsonError(w, "video file not found", http.StatusNotFound)
@@ -754,7 +810,7 @@ func (h *SubtitleHandler) UploadSubtitle(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Validate filename (no path traversal)
-	if strings.ContainsAny(filename, "/\\") || strings.Contains(filename, "..") {
+	if !isSimpleFilename(filename) || strings.Contains(filename, "..") {
 		jsonError(w, "invalid filename", http.StatusBadRequest)
 		return
 	}
@@ -806,18 +862,13 @@ func (h *SubtitleHandler) DeleteSubtitle(w http.ResponseWriter, r *http.Request)
 	filename := strings.TrimPrefix(subtitleID, "generated:")
 
 	// Validate filename: must not contain path separators or ".."
-	if strings.ContainsAny(filename, "/\\") || strings.Contains(filename, "..") {
+	if !isSimpleFilename(filename) || strings.Contains(filename, "..") {
 		jsonError(w, "invalid subtitle id", http.StatusBadRequest)
 		return
 	}
 
-	hash := videoHash(path)
-	subPath := filepath.Join(h.subtitlePath, hash, filename)
-
-	// Security: ensure the resolved path is within the subtitle directory
-	absBase, _ := filepath.Abs(h.subtitlePath)
-	absSub, _ := filepath.Abs(subPath)
-	if !strings.HasPrefix(absSub, absBase) {
+	subPath, ok := h.safeGeneratedSubtitlePath(path, filename)
+	if !ok {
 		jsonError(w, "invalid path", http.StatusForbidden)
 		return
 	}
@@ -866,17 +917,66 @@ func (h *SubtitleHandler) ConvertSubtitle(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Find the subtitle file
-	subDir := filepath.Join(h.subtitlePath, videoPath)
-	entries, err := filepath.Glob(filepath.Join(subDir, req.SubtitleID+".*"))
-	if err != nil || len(entries) == 0 {
-		// Also check embedded subtitle references
+	videoFullPath, ok := h.safeVideoPath(videoPath)
+	if !ok {
+		jsonError(w, "invalid video path", http.StatusForbidden)
+		return
+	}
+
+	var srcPath string
+	var srcExt string
+	embeddedStream := -1
+
+	switch {
+	case strings.HasPrefix(req.SubtitleID, "generated:"):
+		filename := strings.TrimPrefix(req.SubtitleID, "generated:")
+		var ok bool
+		srcPath, ok = h.safeGeneratedSubtitlePath(videoPath, filename)
+		if !ok {
+			jsonError(w, "invalid subtitle path", http.StatusForbidden)
+			return
+		}
+		srcExt = strings.TrimPrefix(strings.ToLower(filepath.Ext(srcPath)), ".")
+	case strings.HasPrefix(req.SubtitleID, "external:"):
+		filename := strings.TrimPrefix(req.SubtitleID, "external:")
+		var ok bool
+		srcPath, ok = h.safeSiblingSubtitlePath(videoFullPath, filename)
+		if !ok {
+			jsonError(w, "invalid subtitle path", http.StatusForbidden)
+			return
+		}
+		srcExt = strings.TrimPrefix(strings.ToLower(filepath.Ext(srcPath)), ".")
+	case strings.HasPrefix(req.SubtitleID, "embedded:"):
+		if _, err := fmt.Sscanf(strings.TrimPrefix(req.SubtitleID, "embedded:"), "%d", &embeddedStream); err != nil {
+			jsonError(w, "invalid embedded subtitle id", http.StatusBadRequest)
+			return
+		}
+	default:
 		jsonError(w, "subtitle not found", http.StatusNotFound)
 		return
 	}
 
-	srcPath := entries[0]
-	srcExt := strings.TrimPrefix(strings.ToLower(filepath.Ext(srcPath)), ".")
+	if embeddedStream >= 0 {
+		cmd := exec.Command("ffmpeg",
+			"-hide_banner",
+			"-loglevel", "error",
+			"-i", videoFullPath,
+			"-map", fmt.Sprintf("0:%d", embeddedStream),
+			"-f", targetFmt,
+			"pipe:1",
+		)
+		outputData, err := cmd.Output()
+		if err != nil {
+			jsonError(w, "conversion failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		h.logSubtitleOp(r, "subtitle_convert", videoPath, targetFmt)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"embedded_%d.%s\"", embeddedStream, targetFmt))
+		w.Write(outputData)
+		return
+	}
 
 	// If source format is the same as target, just serve the file
 	if srcExt == targetFmt {
@@ -929,7 +1029,7 @@ func (h *SubtitleHandler) ConvertSubtitle(w http.ResponseWriter, r *http.Request
 		"-f", targetFmt,
 		"-",
 	)
-	outputData, err = cmd.Output()
+	outputData, err := cmd.Output()
 	if err != nil {
 		jsonError(w, "conversion failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -962,6 +1062,11 @@ func (h *SubtitleHandler) RequestDelete(w http.ResponseWriter, r *http.Request) 
 	}
 	if !strings.HasPrefix(req.SubtitleID, "generated:") {
 		jsonError(w, "only generated subtitles can be requested for deletion", http.StatusBadRequest)
+		return
+	}
+	filename := strings.TrimPrefix(req.SubtitleID, "generated:")
+	if !isSimpleFilename(filename) || strings.Contains(filename, "..") {
+		jsonError(w, "invalid subtitle id", http.StatusBadRequest)
 		return
 	}
 

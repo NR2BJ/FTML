@@ -13,40 +13,52 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/job"
+	"github.com/video-stream/backend/internal/storage"
 )
 
 // Service manages translation engines and processes translation jobs
 type Service struct {
-	engines      map[string]Translator
-	mediaPath    string
-	subtitlePath string
+	database      *db.Database
+	mediaPath     string
+	subtitlePath  string
+	modelResolver ModelResolver
 }
 
-// NewService creates a translation service with available engines
-func NewService(mediaPath, subtitlePath, geminiKey string, geminiModelResolver ModelResolver, openAIKey, deeplKey string) *Service {
-	s := &Service{
-		engines:      make(map[string]Translator),
-		mediaPath:    mediaPath,
-		subtitlePath: subtitlePath,
+// NewService creates a translation service that resolves API keys dynamically from DB.
+func NewService(mediaPath, subtitlePath string, database *db.Database, geminiModelResolver ModelResolver) *Service {
+	return &Service{
+		database:      database,
+		mediaPath:     mediaPath,
+		subtitlePath:  subtitlePath,
+		modelResolver: geminiModelResolver,
 	}
+}
 
-	if geminiKey != "" {
-		s.engines["gemini"] = NewGeminiTranslator(geminiKey, geminiModelResolver)
-		log.Printf("[translate] registered Gemini engine (model resolved dynamically from DB)")
+func (s *Service) resolveEngine(name string) (Translator, error) {
+	switch name {
+	case "gemini":
+		key := s.database.GetSetting("gemini_api_key", "")
+		if key == "" {
+			return nil, fmt.Errorf("Gemini API key not configured")
+		}
+		return NewGeminiTranslator(key, s.modelResolver), nil
+	case "openai":
+		key := s.database.GetSetting("openai_api_key", "")
+		if key == "" {
+			return nil, fmt.Errorf("OpenAI API key not configured")
+		}
+		return NewOpenAITranslator(key), nil
+	case "deepl":
+		key := s.database.GetSetting("deepl_api_key", "")
+		if key == "" {
+			return nil, fmt.Errorf("DeepL API key not configured")
+		}
+		return NewDeepLTranslator(key), nil
+	default:
+		return nil, fmt.Errorf("unknown translation engine: %s", name)
 	}
-
-	if openAIKey != "" {
-		s.engines["openai"] = NewOpenAITranslator(openAIKey)
-		log.Printf("[translate] registered OpenAI translation engine")
-	}
-
-	if deeplKey != "" {
-		s.engines["deepl"] = NewDeepLTranslator(deeplKey)
-		log.Printf("[translate] registered DeepL translation engine")
-	}
-
-	return s
 }
 
 // HandleJob processes a translation job
@@ -56,9 +68,9 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		return fmt.Errorf("unmarshal params: %w", err)
 	}
 
-	engine, ok := s.engines[params.Engine]
-	if !ok {
-		return fmt.Errorf("unknown translation engine: %s", params.Engine)
+	engine, err := s.resolveEngine(params.Engine)
+	if err != nil {
+		return err
 	}
 
 	// Load source subtitle
@@ -155,7 +167,10 @@ func (s *Service) loadSubtitle(videoPath, subtitleID string) (string, error) {
 		// Load from generated subtitles directory
 		filename := strings.TrimPrefix(subtitleID, "generated:")
 		hash := videoHash(videoPath)
-		subPath := filepath.Join(s.subtitlePath, hash, filename)
+		subPath, err := storage.ResolveWithinBase(s.subtitlePath, filepath.Join(hash, filename))
+		if err != nil {
+			return "", fmt.Errorf("resolve generated subtitle: %w", err)
+		}
 		data, err := os.ReadFile(subPath)
 		if err != nil {
 			return "", fmt.Errorf("read generated subtitle: %w", err)
@@ -166,9 +181,15 @@ func (s *Service) loadSubtitle(videoPath, subtitleID string) (string, error) {
 	if strings.HasPrefix(subtitleID, "external:") {
 		// Load from media directory
 		filename := strings.TrimPrefix(subtitleID, "external:")
-		fullPath := filepath.Join(s.mediaPath, videoPath)
+		fullPath, err := storage.ResolveWithinBase(s.mediaPath, videoPath)
+		if err != nil {
+			return "", fmt.Errorf("resolve video path: %w", err)
+		}
 		videoDir := filepath.Dir(fullPath)
-		subPath := filepath.Join(videoDir, filename)
+		subPath, err := storage.ResolveWithinBase(videoDir, filename)
+		if err != nil {
+			return "", fmt.Errorf("resolve external subtitle: %w", err)
+		}
 
 		ext := strings.ToLower(filepath.Ext(filename))
 		switch ext {
@@ -210,7 +231,10 @@ func (s *Service) loadSubtitle(videoPath, subtitleID string) (string, error) {
 		var streamIndex int
 		fmt.Sscanf(strings.TrimPrefix(subtitleID, "embedded:"), "%d", &streamIndex)
 
-		fullPath := filepath.Join(s.mediaPath, videoPath)
+		fullPath, err := storage.ResolveWithinBase(s.mediaPath, videoPath)
+		if err != nil {
+			return "", fmt.Errorf("resolve video path: %w", err)
+		}
 		cmd := exec.Command("ffmpeg",
 			"-hide_banner",
 			"-loglevel", "warning",

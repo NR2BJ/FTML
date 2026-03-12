@@ -87,7 +87,11 @@ func (h *FilesHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 
 func (h *FilesHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
-	fullPath := filepath.Join(h.mediaPath, path)
+	fullPath, ok := h.safePath(path)
+	if !ok {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
 
 	if !storage.IsVideoFile(path) {
 		jsonError(w, "not a video file", http.StatusBadRequest)
@@ -105,8 +109,12 @@ func (h *FilesHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 
 func (h *FilesHandler) GetThumbnail(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
-	fullPath := filepath.Join(h.mediaPath, path)
-	thumbDir := filepath.Join(h.dataPath, "thumbnails", path)
+	fullPath, ok := h.safePath(path)
+	if !ok {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
+	thumbDir := filepath.Join(h.dataPath, "thumbnails", filepath.Clean(path))
 
 	thumbPath, err := ffmpeg.GenerateThumbnail(fullPath, thumbDir)
 	if err != nil {
@@ -155,7 +163,7 @@ func (h *FilesHandler) BatchInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type result struct {
-		Path string           `json:"path"`
+		Path string            `json:"path"`
 		Info *ffmpeg.MediaInfo `json:"info"`
 	}
 
@@ -170,7 +178,11 @@ func (h *FilesHandler) BatchInfo(w http.ResponseWriter, r *http.Request) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			fullPath := filepath.Join(h.mediaPath, filePath)
+			fullPath, ok := h.safePath(filePath)
+			if !ok {
+				results[idx] = result{Path: filePath, Info: nil}
+				return
+			}
 			info, err := ffmpeg.Probe(fullPath)
 			if err != nil {
 				results[idx] = result{Path: filePath, Info: nil}
@@ -267,10 +279,8 @@ func extractNumber(s string, start int) (int, int) {
 // safePath validates that the resolved path is within the media directory.
 // Returns the absolute path and true if valid, or empty string and false if invalid.
 func (h *FilesHandler) safePath(relPath string) (string, bool) {
-	absMedia, _ := filepath.Abs(h.mediaPath)
-	full := filepath.Join(h.mediaPath, relPath)
-	absFull, _ := filepath.Abs(full)
-	if !strings.HasPrefix(absFull, absMedia) {
+	absFull, err := storage.ResolveWithinBase(h.mediaPath, relPath)
+	if err != nil {
 		return "", false
 	}
 	return absFull, true
@@ -593,7 +603,11 @@ func (h *FilesHandler) RestoreTrash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	destPath := filepath.Join(h.mediaPath, originalPath)
+	destPath, ok := h.safePath(originalPath)
+	if !ok {
+		jsonError(w, "invalid original path", http.StatusForbidden)
+		return
+	}
 
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {

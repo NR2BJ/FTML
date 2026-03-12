@@ -1,7 +1,6 @@
 package whisper
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -145,38 +144,46 @@ func (c *OpenVINOGenAIClient) sendWithRetry(ctx context.Context, audioPath, lang
 }
 
 func (c *OpenVINOGenAIClient) doSend(ctx context.Context, audioPath, language string, updateProgress func(float64)) (*TranscribeResult, error) {
-	// Build multipart form
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-
-	// Add audio file
 	audioFile, err := os.Open(audioPath)
 	if err != nil {
 		return nil, fmt.Errorf("open audio: %w", err)
 	}
 	defer audioFile.Close()
 
-	part, err := writer.CreateFormFile("file", filepath.Base(audioPath))
-	if err != nil {
-		return nil, fmt.Errorf("create form file: %w", err)
-	}
-	if _, err := io.Copy(part, audioFile); err != nil {
-		return nil, fmt.Errorf("copy audio data: %w", err)
-	}
+	pipeReader, pipeWriter := io.Pipe()
+	writer := multipart.NewWriter(pipeWriter)
 
-	// Add parameters
-	writer.WriteField("response_format", "vtt")
-	if language != "" && language != "auto" {
-		writer.WriteField("language", language)
-	}
+	go func() {
+		defer pipeWriter.Close()
+		defer writer.Close()
 
-	writer.Close()
+		part, err := writer.CreateFormFile("file", filepath.Base(audioPath))
+		if err != nil {
+			pipeWriter.CloseWithError(fmt.Errorf("create form file: %w", err))
+			return
+		}
+		if _, err := io.Copy(part, audioFile); err != nil {
+			pipeWriter.CloseWithError(fmt.Errorf("copy audio data: %w", err))
+			return
+		}
+
+		if err := writer.WriteField("response_format", "vtt"); err != nil {
+			pipeWriter.CloseWithError(fmt.Errorf("write response format: %w", err))
+			return
+		}
+		if language != "" && language != "auto" {
+			if err := writer.WriteField("language", language); err != nil {
+				pipeWriter.CloseWithError(fmt.Errorf("write language: %w", err))
+				return
+			}
+		}
+	}()
 
 	updateProgress(0.15)
 
 	// Send request — uses OpenAI-compatible endpoint
 	url := c.baseURL + "/v1/audio/transcriptions"
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, &buf)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, pipeReader)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

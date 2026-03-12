@@ -21,6 +21,7 @@ import (
 	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/ffmpeg"
 	"github.com/video-stream/backend/internal/gpu"
+	"github.com/video-stream/backend/internal/storage"
 )
 
 var startTime = time.Now()
@@ -471,9 +472,17 @@ func (h *AdminHandler) ApproveDeleteRequest(w http.ResponseWriter, r *http.Reque
 	// Delete the actual subtitle file
 	if strings.HasPrefix(req.SubtitleID, "generated:") {
 		filename := strings.TrimPrefix(req.SubtitleID, "generated:")
+		if filename != filepath.Base(filename) || strings.Contains(filename, "..") {
+			jsonError(w, "invalid subtitle path", http.StatusBadRequest)
+			return
+		}
 		sum := sha256.Sum256([]byte(req.VideoPath))
 		hash := fmt.Sprintf("%x", sum[:8])
-		subPath := filepath.Join(h.subtitlePath, hash, filename)
+		subPath, err := storage.ResolveWithinBase(h.subtitlePath, filepath.Join(hash, filename))
+		if err != nil {
+			jsonError(w, "invalid subtitle path", http.StatusBadRequest)
+			return
+		}
 		if err := os.Remove(subPath); err != nil && !os.IsNotExist(err) {
 			log.Printf("[admin] failed to delete subtitle file %s: %v", subPath, err)
 			jsonError(w, "failed to delete subtitle file", http.StatusInternalServerError)

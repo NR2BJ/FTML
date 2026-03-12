@@ -13,6 +13,7 @@ import (
 
 	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/job"
+	"github.com/video-stream/backend/internal/storage"
 )
 
 // Service manages whisper transcription engines and processes jobs
@@ -97,7 +98,10 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 	}
 
 	// Resolve full path
-	fullPath := filepath.Join(s.mediaPath, j.FilePath)
+	fullPath, err := storage.ResolveWithinBase(s.mediaPath, j.FilePath)
+	if err != nil {
+		return fmt.Errorf("resolve file path: %w", err)
+	}
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		return fmt.Errorf("file not found: %s", j.FilePath)
 	}

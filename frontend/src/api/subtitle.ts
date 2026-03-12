@@ -11,7 +11,7 @@ export interface SubtitleEntry {
 
 export interface GenerateParams {
   engine: string   // "whisper.cpp" | "openai"
-  model: string    // "large-v3" | "medium" | "small" etc.
+  model?: string
   language: string // "auto" | "ko" | "en" | "ja" etc.
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/video-stream/backend/internal/ffmpeg"
+	"github.com/video-stream/backend/internal/storage"
 )
 
 type StreamHandler struct {
@@ -190,7 +191,8 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		return
 	}
 
-	// Wait for playlist to be ready with at least 3 segments
+	// Wait for the playlist to contain at least one media segment.
+	// Short clips and near-end seeks may legitimately produce fewer than 3.
 	playlistPath := filepath.Join(session.OutputDir, "playlist.m3u8")
 	ready := false
 	for i := 0; i < 100; i++ {
@@ -203,7 +205,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 					segCount++
 				}
 			}
-			if segCount >= 3 {
+			if segCount >= 1 {
 				ready = true
 				break
 			}
@@ -279,11 +281,8 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 	sessionID := generateSessionID(videoPath, sp.quality, sp.startTime, sp.codec, sp.audioStreamIdx)
 
 	sessionDir := h.hlsManager.GetSessionDir(sessionID)
-	segmentPath := filepath.Join(sessionDir, segmentName)
-	// Verify resolved path stays within session directory
-	absSession, _ := filepath.Abs(sessionDir)
-	absSeg, _ := filepath.Abs(segmentPath)
-	if !strings.HasPrefix(absSeg, absSession) {
+	segmentPath, err := storage.ResolveWithinBase(sessionDir, segmentName)
+	if err != nil {
 		jsonError(w, "invalid segment path", http.StatusForbidden)
 		return
 	}
@@ -313,10 +312,8 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 
 // safePath validates that the resolved path stays within the media directory.
 func (h *StreamHandler) safePath(relPath string) (string, bool) {
-	absMedia, _ := filepath.Abs(h.mediaPath)
-	full := filepath.Join(h.mediaPath, relPath)
-	absFull, _ := filepath.Abs(full)
-	if !strings.HasPrefix(absFull, absMedia) {
+	absFull, err := storage.ResolveWithinBase(h.mediaPath, relPath)
+	if err != nil {
 		return "", false
 	}
 	return absFull, true

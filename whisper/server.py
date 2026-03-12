@@ -21,6 +21,7 @@ import os
 import logging
 import re
 import time
+import wave
 from contextlib import asynccontextmanager
 
 import threading
@@ -235,6 +236,14 @@ def decode_audio(audio_bytes: bytes) -> np.ndarray:
     return audio.astype(np.float32)
 
 
+def wav_frames_to_audio(frames: bytes, channels: int) -> np.ndarray:
+    """Convert PCM16 WAV frames to normalized float32 audio."""
+    audio = np.frombuffer(frames, dtype=np.int16)
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1)
+    return (audio.astype(np.float32) / 32768.0)
+
+
 # ---------------------------------------------------------------------------
 # Hallucination filtering
 # ---------------------------------------------------------------------------
@@ -288,13 +297,8 @@ def is_hallucination(text: str, duration: float) -> bool:
         if pattern.match(t):
             return True
 
-    # Short text + short duration = noise artifact
-    # CJK chars are 3 bytes each in UTF-8, so byte length filters ASCII-only junk
-    if len(t.encode('utf-8')) <= 4 and duration < 0.5:
-        return True
-
-    # Sub-0.2s is too short for real speech
-    if duration < 0.2:
+    # Ultra-short ASCII fragments are still usually decode noise.
+    if duration < 0.12 and t.isascii():
         return True
 
     return False
@@ -381,7 +385,8 @@ def run_inference(audio: np.ndarray, language: str = ""):
             if all_chunks:
                 last = all_chunks[-1]
                 if abs_start < last['end_ts']:
-                    continue
+                    if text == last['text'] or abs_end <= last['end_ts']:
+                        continue
                 # Near-boundary identical text dedup (within 3s)
                 if (abs_start - last['end_ts']) < 3.0 and text == last['text']:
                     continue
@@ -407,6 +412,110 @@ def run_inference(audio: np.ndarray, language: str = ""):
     return all_chunks, full_text, total_elapsed
 
 
+def run_inference_wav(file_obj, language: str = ""):
+    """Run inference directly from a PCM16 16kHz WAV file-like object."""
+    ensure_model_loaded()
+
+    config = pipeline.get_generation_config()
+    config.return_timestamps = True
+    config.task = "transcribe"
+    if language and language != "auto":
+        config.language = f"<|{language}|>"
+
+    file_obj.seek(0)
+    with wave.open(file_obj, "rb") as wav_file:
+        sr = wav_file.getframerate()
+        channels = wav_file.getnchannels()
+        sample_width = wav_file.getsampwidth()
+        total_frames = wav_file.getnframes()
+
+        if sr != 16000 or sample_width != 2:
+            raise wave.Error(f"unsupported WAV format: sr={sr}, sample_width={sample_width}")
+
+        chunk_frames = CHUNK_DURATION_S * sr
+        overlap_frames = CHUNK_OVERLAP_S * sr
+        total_duration = total_frames / sr
+
+        if total_frames <= chunk_frames:
+            log.info(f"Inference: {total_duration:.1f}s, model={model_id_str}, language={language or 'auto'}")
+            wav_file.rewind()
+            audio = wav_frames_to_audio(wav_file.readframes(total_frames), channels)
+
+            t0 = time.time()
+            result = pipeline.generate(audio, config)
+            elapsed = time.time() - t0
+
+            chunks = getattr(result, "chunks", [])
+            full_text = "".join(c.text for c in chunks).strip() if chunks else str(result)
+            log.info(f"Done: {len(chunks)} chunks, {len(full_text)} chars in {elapsed:.1f}s")
+
+            _schedule_idle_unload()
+            return chunks, full_text, elapsed
+
+        num_chunks = 1 + max(0, int(np.ceil((total_frames - chunk_frames) / (chunk_frames - overlap_frames))))
+        log.info(f"Chunked inference: {total_duration:.1f}s -> {num_chunks} chunks of {CHUNK_DURATION_S}s, "
+                 f"model={model_id_str}, language={language or 'auto'}")
+
+        all_chunks = []
+        total_elapsed = 0.0
+        pos = 0
+        chunk_idx = 0
+
+        while pos < total_frames:
+            end = min(pos + chunk_frames, total_frames)
+            wav_file.setpos(pos)
+            segment = wav_frames_to_audio(wav_file.readframes(end - pos), channels)
+            offset_s = pos / sr
+            seg_duration = len(segment) / sr
+
+            t0 = time.time()
+            result = pipeline.generate(segment, config)
+            elapsed = time.time() - t0
+            total_elapsed += elapsed
+
+            chunks = getattr(result, "chunks", [])
+            added = 0
+
+            for c in chunks:
+                text = c.text.strip()
+                if not text:
+                    continue
+
+                abs_start = c.start_ts + offset_s
+                abs_end = c.end_ts + offset_s
+                duration = abs_end - abs_start
+
+                if is_hallucination(text, duration):
+                    continue
+
+                if all_chunks:
+                    last = all_chunks[-1]
+                    if abs_start < last['end_ts']:
+                        if text == last['text'] or abs_end <= last['end_ts']:
+                            continue
+                    if (abs_start - last['end_ts']) < 3.0 and text == last['text']:
+                        continue
+
+                all_chunks.append({'text': text, 'start_ts': abs_start, 'end_ts': abs_end})
+                added += 1
+
+            log.info(f"  Chunk {chunk_idx + 1}/{num_chunks} "
+                     f"[{offset_s:.0f}s-{offset_s + seg_duration:.0f}s] "
+                     f"({elapsed:.1f}s): {added} cues")
+
+            if end < total_frames:
+                pos = end - overlap_frames
+            else:
+                break
+            chunk_idx += 1
+
+    full_text = " ".join(c['text'] for c in all_chunks)
+    log.info(f"Done: {len(all_chunks)} chunks, {len(full_text)} chars in {total_elapsed:.1f}s")
+
+    _schedule_idle_unload()
+    return all_chunks, full_text, total_elapsed
+
+
 # ---------------------------------------------------------------------------
 # OpenAI-compatible endpoint
 # ---------------------------------------------------------------------------
@@ -420,22 +529,22 @@ async def transcribe_openai(
     if loading_model:
         raise HTTPException(503, "Model is loading, please wait")
 
-    audio_bytes = await file.read()
-    log.info(f"Received: {file.filename} ({len(audio_bytes)} bytes)")
-
     try:
-        audio = decode_audio(audio_bytes)
-    except Exception as e:
-        log.error(f"Audio decode failed: {e}")
-        raise HTTPException(400, f"Failed to decode audio: {e}")
-
-    log.info(f"Audio: {len(audio)/16000:.1f}s, {len(audio)} samples")
-
-    try:
-        loop = asyncio.get_event_loop()
-        chunks, full_text, elapsed = await loop.run_in_executor(
-            None, run_inference, audio, language
-        )
+        loop = asyncio.get_running_loop()
+        await file.seek(0)
+        try:
+            chunks, full_text, elapsed = await loop.run_in_executor(
+                None, run_inference_wav, file.file, language
+            )
+        except wave.Error:
+            await file.seek(0)
+            audio_bytes = await file.read()
+            log.info(f"Received: {file.filename} ({len(audio_bytes)} bytes)")
+            audio = decode_audio(audio_bytes)
+            log.info(f"Audio: {len(audio)/16000:.1f}s, {len(audio)} samples")
+            chunks, full_text, elapsed = await loop.run_in_executor(
+                None, run_inference, audio, language
+            )
     except Exception as e:
         log.error(f"Inference failed: {e}")
         raise HTTPException(500, f"Inference failed: {e}")

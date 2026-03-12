@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -57,11 +58,6 @@ func main() {
 	defer jobQueue.Stop()
 	log.Printf("Job queue started")
 
-	// Load translation API keys from DB (configured via admin settings UI)
-	geminiKey := database.GetSetting("gemini_api_key", "")
-	openAIKey := database.GetSetting("openai_api_key", "")
-	deeplKey := database.GetSetting("deepl_api_key", "")
-
 	// Initialize whisper service (dynamically resolves backends from DB)
 	whisperSvc := whisper.NewService(cfg.MediaPath, cfg.SubtitlePath, database)
 	jobQueue.RegisterHandler(job.JobTranscribe, whisperSvc.HandleJob)
@@ -71,7 +67,7 @@ func main() {
 	geminiModelResolver := func() string {
 		return database.GetSetting("gemini_model", "gemini-2.0-flash")
 	}
-	translateSvc := translate.NewService(cfg.MediaPath, cfg.SubtitlePath, geminiKey, geminiModelResolver, openAIKey, deeplKey)
+	translateSvc := translate.NewService(cfg.MediaPath, cfg.SubtitlePath, database, geminiModelResolver)
 	jobQueue.RegisterHandler(job.JobTranslate, translateSvc.HandleJob)
 
 	// Create router
@@ -82,15 +78,6 @@ func main() {
 	log.Printf("Starting server on %s", addr)
 	log.Printf("Media path: %s", cfg.MediaPath)
 
-	// Graceful shutdown
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		log.Println("Shutting down...")
-		os.Exit(0)
-	}()
-
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           router,
@@ -99,7 +86,23 @@ func main() {
 		MaxHeaderBytes:    1 << 20, // 1MB
 		// ReadTimeout and WriteTimeout intentionally not set — HLS streaming needs long-lived connections
 	}
-	if err := server.ListenAndServe(); err != nil {
+
+	// Graceful shutdown
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		log.Println("Shutting down...")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("Graceful shutdown failed: %v", err)
+		}
+	}()
+
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
