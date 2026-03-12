@@ -18,3 +18,5 @@
 - Tuned the combined generate+translate dashboard action to use a yellow label so it reads as visually distinct from generate-only and translate-only entries.
 - Stage 2 optimization pass: added `ffprobe` result caching keyed by file size/mtime with in-flight deduplication, and capped thumbnail generation concurrency while deduplicating concurrent requests for the same output file.
 - Verified stage 2 with `GOCACHE=/tmp/ftml-go-build go test ./...`.
+- Stage 3 optimization pass: switched route-level pages to `React.lazy(...)` with suspense boundaries and added Vite manual chunking for router/media/icons/data/vendor bundles to reduce the initial JS payload.
+- Verified stage 3 with `npm run build`; the app now emits route-level chunks instead of a single ~957 kB main bundle, with `Browse`, `Watch`, and admin pages split into separate assets.

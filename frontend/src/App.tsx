@@ -1,22 +1,23 @@
-import { useEffect } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { initTheme } from '@/stores/themeStore'
-import Login from '@/pages/Login'
-import Browse from '@/pages/Browse'
-import Watch from '@/pages/Watch'
-import Settings from '@/pages/Settings'
-import WatchHistory from '@/pages/WatchHistory'
-import Account from '@/pages/Account'
-import UserManagement from '@/pages/admin/UserManagement'
-import Registrations from '@/pages/admin/Registrations'
-import Sessions from '@/pages/admin/Sessions'
-import Dashboard from '@/pages/admin/Dashboard'
-import RateLimits from '@/pages/admin/RateLimits'
-import Trash from '@/pages/admin/Trash'
-import DeleteRequests from '@/pages/admin/DeleteRequests'
-import Jobs from '@/pages/Jobs'
-import Layout from '@/components/layout/Layout'
+
+const Login = lazy(() => import('@/pages/Login'))
+const Browse = lazy(() => import('@/pages/Browse'))
+const Watch = lazy(() => import('@/pages/Watch'))
+const Settings = lazy(() => import('@/pages/Settings'))
+const WatchHistory = lazy(() => import('@/pages/WatchHistory'))
+const Account = lazy(() => import('@/pages/Account'))
+const UserManagement = lazy(() => import('@/pages/admin/UserManagement'))
+const Registrations = lazy(() => import('@/pages/admin/Registrations'))
+const Sessions = lazy(() => import('@/pages/admin/Sessions'))
+const Dashboard = lazy(() => import('@/pages/admin/Dashboard'))
+const RateLimits = lazy(() => import('@/pages/admin/RateLimits'))
+const Trash = lazy(() => import('@/pages/admin/Trash'))
+const DeleteRequests = lazy(() => import('@/pages/admin/DeleteRequests'))
+const Jobs = lazy(() => import('@/pages/Jobs'))
+const Layout = lazy(() => import('@/components/layout/Layout'))
 
 // Initialize theme before render
 initTheme()
@@ -47,6 +48,18 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function RouteFallback() {
+  return (
+    <div className="flex items-center justify-center h-screen bg-dark-950">
+      <div className="text-gray-400">Loading...</div>
+    </div>
+  )
+}
+
+function renderLazy(element: React.ReactNode) {
+  return <Suspense fallback={<RouteFallback />}>{element}</Suspense>
+}
+
 export default function App() {
   const { checkAuth } = useAuthStore()
 
@@ -57,29 +70,29 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/login" element={<Login />} />
+        <Route path="/login" element={renderLazy(<Login />)} />
         <Route
           path="/"
           element={
             <ProtectedRoute>
-              <Layout />
+              {renderLazy(<Layout />)}
             </ProtectedRoute>
           }
         >
-          <Route index element={<Browse />} />
-          <Route path="browse/*" element={<Browse />} />
-          <Route path="watch/*" element={<Watch />} />
-          <Route path="history" element={<WatchHistory />} />
-          <Route path="account" element={<Account />} />
-          <Route path="jobs" element={<Jobs />} />
-          <Route path="settings" element={<AdminRoute><Settings /></AdminRoute>} />
-          <Route path="admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
-          <Route path="admin/registrations" element={<AdminRoute><Registrations /></AdminRoute>} />
-          <Route path="admin/sessions" element={<AdminRoute><Sessions /></AdminRoute>} />
-          <Route path="admin/dashboard" element={<AdminRoute><Dashboard /></AdminRoute>} />
-          <Route path="admin/ratelimits" element={<AdminRoute><RateLimits /></AdminRoute>} />
-          <Route path="admin/delete-requests" element={<AdminRoute><DeleteRequests /></AdminRoute>} />
-          <Route path="admin/trash" element={<AdminRoute><Trash /></AdminRoute>} />
+          <Route index element={renderLazy(<Browse />)} />
+          <Route path="browse/*" element={renderLazy(<Browse />)} />
+          <Route path="watch/*" element={renderLazy(<Watch />)} />
+          <Route path="history" element={renderLazy(<WatchHistory />)} />
+          <Route path="account" element={renderLazy(<Account />)} />
+          <Route path="jobs" element={renderLazy(<Jobs />)} />
+          <Route path="settings" element={<AdminRoute>{renderLazy(<Settings />)}</AdminRoute>} />
+          <Route path="admin/users" element={<AdminRoute>{renderLazy(<UserManagement />)}</AdminRoute>} />
+          <Route path="admin/registrations" element={<AdminRoute>{renderLazy(<Registrations />)}</AdminRoute>} />
+          <Route path="admin/sessions" element={<AdminRoute>{renderLazy(<Sessions />)}</AdminRoute>} />
+          <Route path="admin/dashboard" element={<AdminRoute>{renderLazy(<Dashboard />)}</AdminRoute>} />
+          <Route path="admin/ratelimits" element={<AdminRoute>{renderLazy(<RateLimits />)}</AdminRoute>} />
+          <Route path="admin/delete-requests" element={<AdminRoute>{renderLazy(<DeleteRequests />)}</AdminRoute>} />
+          <Route path="admin/trash" element={<AdminRoute>{renderLazy(<Trash />)}</AdminRoute>} />
         </Route>
       </Routes>
     </BrowserRouter>
