@@ -27,6 +27,7 @@ export default function Header() {
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const userMenuRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchRequestRef = useRef(0)
 
   const isAdmin = user?.role === 'admin'
 
@@ -79,21 +80,44 @@ export default function Header() {
     setShowUserMenu(false)
   }, [location])
 
-  const handleSearch = async (value: string) => {
-    setQuery(value)
-    setSelectedIndex(-1)
-    if (value.length < 2) {
+  useEffect(() => {
+    const trimmed = query.trim()
+    if (trimmed.length < 2) {
+      searchRequestRef.current += 1
       setResults([])
       setShowResults(false)
       return
     }
-    try {
-      const { data } = await searchFiles(value)
-      setResults(data.results || [])
-      setShowResults(true)
-    } catch {
-      setResults([])
+
+    const requestId = searchRequestRef.current + 1
+    searchRequestRef.current = requestId
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const { data } = await searchFiles(trimmed, controller.signal)
+        if (searchRequestRef.current !== requestId) {
+          return
+        }
+        setResults(data.results || [])
+        setShowResults(true)
+      } catch {
+        if (controller.signal.aborted || searchRequestRef.current !== requestId) {
+          return
+        }
+        setResults([])
+        setShowResults(false)
+      }
+    }, 250)
+
+    return () => {
+      controller.abort()
+      window.clearTimeout(timeoutId)
     }
+  }, [query])
+
+  const handleSearchChange = (value: string) => {
+    setQuery(value)
+    setSelectedIndex(-1)
   }
 
   const handleSelect = (entry: FileEntry) => {
@@ -171,7 +195,7 @@ export default function Header() {
             ref={searchInputRef}
             type="text"
             value={query}
-            onChange={(e) => handleSearch(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             onKeyDown={handleSearchKeyDown}
             onBlur={() => setTimeout(() => setShowResults(false), 200)}
             onFocus={() => { if (results.length > 0) setShowResults(true) }}

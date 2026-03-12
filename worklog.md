@@ -11,3 +11,6 @@
 - Improved player stability by guarding async session ID startup with a generation ref and adding hls.js fatal error recovery before surfacing playback failure.
 - Replaced `os.Exit(0)` shutdown handling with `server.Shutdown(...)`.
 - Verified with `GOCACHE=/tmp/ftml-go-build go test ./...`, `npm run build`, and `python3 -m py_compile whisper/server.py`.
+- Stage 1 optimization pass: added search debounce/cancellation on the frontend, enforced a minimum search query length, switched backend search to `filepath.WalkDir`, and avoided unnecessary `entry.Info()` calls for directories.
+- Added SQLite indexes for hot admin/job/watch-history queries and removed unused `BuildTree(...)` plus the dead `HLSSession.VideoPath` field.
+- Verified stage 1 with `GOCACHE=/tmp/ftml-go-build go test ./...` and `npm run build`.

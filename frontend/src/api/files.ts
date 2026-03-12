@@ -53,8 +53,11 @@ export const getTree = (path = '') =>
 export const getFileInfo = (path: string) =>
   client.get<MediaInfo>(`/files/info/${path}`)
 
-export const searchFiles = (query: string) =>
-  client.get<{ query: string; results: FileEntry[] }>(`/files/search?q=${encodeURIComponent(query)}`)
+export const searchFiles = (query: string, signal?: AbortSignal) =>
+  client.get<{ query: string; results: FileEntry[] }>('/files/search', {
+    params: { q: query },
+    signal,
+  })
 
 export const getThumbnailUrl = (path: string) => {
   const token = localStorage.getItem('token') || ''

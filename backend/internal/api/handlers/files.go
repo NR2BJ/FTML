@@ -126,9 +126,13 @@ func (h *FilesHandler) GetThumbnail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *FilesHandler) Search(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("q")
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
 		jsonError(w, "query parameter 'q' is required", http.StatusBadRequest)
+		return
+	}
+	if len([]rune(q)) < 2 {
+		jsonError(w, "query must be at least 2 characters", http.StatusBadRequest)
 		return
 	}
 

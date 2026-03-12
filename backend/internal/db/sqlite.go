@@ -121,6 +121,17 @@ func (d *Database) migrate() error {
 		detail TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+	CREATE INDEX IF NOT EXISTS idx_watch_history_user_updated_at ON watch_history(user_id, updated_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_jobs_status_created_at ON jobs(status, created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_jobs_status_completed_at ON jobs(status, completed_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_registrations_status_created_at ON registrations(status, created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_delete_requests_status_created_at ON delete_requests(status, created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_delete_requests_user_created_at ON delete_requests(user_id, created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_delete_requests_video_subtitle_status ON delete_requests(video_path, subtitle_id, status);
+	CREATE INDEX IF NOT EXISTS idx_file_logs_created_at ON file_logs(created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_file_logs_action_created_at ON file_logs(action, created_at DESC);
 	`
 	if _, err := d.db.Exec(schema); err != nil {
 		return err

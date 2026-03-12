@@ -15,23 +15,22 @@ import (
 
 // HLS session management constants
 const (
-	vaapiFailThreshold       = 5 * time.Second   // fast-fail detection for VAAPI/hybrid fallback
-	cleanupInterval          = 15 * time.Second   // session cleanup ticker
-	maxSessionAge            = 30 * time.Minute   // hard limit for any session
-	heartbeatTimeout         = 2 * time.Minute    // no heartbeat → kill
-	pauseMaxDuration         = 5 * time.Minute    // paused too long without heartbeat
-	pauseHeartbeatThreshold  = 90 * time.Second   // heartbeat freshness for long-paused sessions
-	activeHeartbeatTimeout   = 45 * time.Second   // active session idle timeout
-	completedHeartbeatTimeout = 5 * time.Minute   // FFmpeg-done session idle timeout
-	fallbackCacheTTL         = 30 * time.Minute   // purge stale fallback cache entries
-	ffmpegAnalyzeDuration    = "20000000"          // 20s in microseconds
-	ffmpegProbeSize          = "10000000"          // 10MB probe size
+	vaapiFailThreshold        = 5 * time.Second  // fast-fail detection for VAAPI/hybrid fallback
+	cleanupInterval           = 15 * time.Second // session cleanup ticker
+	maxSessionAge             = 30 * time.Minute // hard limit for any session
+	heartbeatTimeout          = 2 * time.Minute  // no heartbeat → kill
+	pauseMaxDuration          = 5 * time.Minute  // paused too long without heartbeat
+	pauseHeartbeatThreshold   = 90 * time.Second // heartbeat freshness for long-paused sessions
+	activeHeartbeatTimeout    = 45 * time.Second // active session idle timeout
+	completedHeartbeatTimeout = 5 * time.Minute  // FFmpeg-done session idle timeout
+	fallbackCacheTTL          = 30 * time.Minute // purge stale fallback cache entries
+	ffmpegAnalyzeDuration     = "20000000"       // 20s in microseconds
+	ffmpegProbeSize           = "10000000"       // 10MB probe size
 )
 
 type HLSSession struct {
 	ID            string
 	InputPath     string
-	VideoPath     string // original relative path (for matching on seek)
 	Quality       string
 	Codec         string // "h264", "hevc", "av1", "vp9"
 	OutputDir     string
