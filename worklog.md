@@ -15,3 +15,4 @@
 - Added SQLite indexes for hot admin/job/watch-history queries and removed unused `BuildTree(...)` plus the dead `HLSSession.VideoPath` field.
 - Verified stage 1 with `GOCACHE=/tmp/ftml-go-build go test ./...` and `npm run build`.
 - Added a compact dashboard label for `subtitle_generate_translate` and truncated unknown action labels so long file-log actions no longer overlap the file path column.
+- Tuned the combined generate+translate dashboard action to use a yellow label so it reads as visually distinct from generate-only and translate-only entries.
