@@ -2,9 +2,35 @@ package ffmpeg
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	probeCacheTTL        = 5 * time.Minute
+	probeCacheMaxEntries = 1024
+)
+
+type probeCacheEntry struct {
+	info      *MediaInfo
+	expiresAt time.Time
+}
+
+type probeCall struct {
+	done chan struct{}
+	info *MediaInfo
+	err  error
+}
+
+var (
+	probeMu       sync.Mutex
+	probeCache    = make(map[string]probeCacheEntry)
+	probeInFlight = make(map[string]*probeCall)
 )
 
 type ProbeResult struct {
@@ -32,24 +58,24 @@ type ProbeFormat struct {
 }
 
 type ProbeStream struct {
-	Index         int    `json:"index"`
-	CodecName     string `json:"codec_name"`
-	CodecType     string `json:"codec_type"` // video, audio, subtitle
-	Width         int    `json:"width,omitempty"`
-	Height        int    `json:"height,omitempty"`
-	PixFmt        string `json:"pix_fmt,omitempty"`
-	RFrameRate    string `json:"r_frame_rate,omitempty"`
-	BitRate       string `json:"bit_rate,omitempty"`
-	SampleRate    string `json:"sample_rate,omitempty"`
-	Channels      int    `json:"channels,omitempty"`
-	ChannelLayout string `json:"channel_layout,omitempty"`
+	Index         int               `json:"index"`
+	CodecName     string            `json:"codec_name"`
+	CodecType     string            `json:"codec_type"` // video, audio, subtitle
+	Width         int               `json:"width,omitempty"`
+	Height        int               `json:"height,omitempty"`
+	PixFmt        string            `json:"pix_fmt,omitempty"`
+	RFrameRate    string            `json:"r_frame_rate,omitempty"`
+	BitRate       string            `json:"bit_rate,omitempty"`
+	SampleRate    string            `json:"sample_rate,omitempty"`
+	Channels      int               `json:"channels,omitempty"`
+	ChannelLayout string            `json:"channel_layout,omitempty"`
 	Tags          map[string]string `json:"tags,omitempty"`
 }
 
 // AudioStreamInfo describes a single audio stream for track selection.
 type AudioStreamInfo struct {
-	Index         int    `json:"index"`                    // absolute stream index in the file
-	StreamIndex   int    `json:"stream_index"`             // audio-only index (0, 1, 2...)
+	Index         int    `json:"index"`        // absolute stream index in the file
+	StreamIndex   int    `json:"stream_index"` // audio-only index (0, 1, 2...)
 	CodecName     string `json:"codec_name"`
 	Channels      int    `json:"channels"`
 	ChannelLayout string `json:"channel_layout,omitempty"`
@@ -78,11 +104,55 @@ type MediaInfo struct {
 	Height       int               `json:"height"`
 	FrameRate    string            `json:"frame_rate"`
 	Streams      []ProbeStream     `json:"streams"`
-	AudioStreams []AudioStreamInfo  `json:"audio_streams,omitempty"`
-	Chapters    []ChapterInfo      `json:"chapters,omitempty"`
+	AudioStreams []AudioStreamInfo `json:"audio_streams,omitempty"`
+	Chapters     []ChapterInfo     `json:"chapters,omitempty"`
 }
 
 func Probe(filePath string) (*MediaInfo, error) {
+	cacheKey, err := probeCacheKey(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	probeMu.Lock()
+	if cached, ok := probeCache[cacheKey]; ok {
+		if now.Before(cached.expiresAt) {
+			probeMu.Unlock()
+			return cached.info, nil
+		}
+		delete(probeCache, cacheKey)
+	}
+	if call, ok := probeInFlight[cacheKey]; ok {
+		probeMu.Unlock()
+		<-call.done
+		return call.info, call.err
+	}
+
+	call := &probeCall{done: make(chan struct{})}
+	probeInFlight[cacheKey] = call
+	probeMu.Unlock()
+
+	info, err := probeUncached(filePath)
+
+	probeMu.Lock()
+	delete(probeInFlight, cacheKey)
+	if err == nil {
+		probeCache[cacheKey] = probeCacheEntry{
+			info:      info,
+			expiresAt: time.Now().Add(probeCacheTTL),
+		}
+		trimProbeCacheLocked(now)
+	}
+	call.info = info
+	call.err = err
+	close(call.done)
+	probeMu.Unlock()
+
+	return info, err
+}
+
+func probeUncached(filePath string) (*MediaInfo, error) {
 	cmd := exec.Command("ffprobe",
 		"-v", "quiet",
 		"-print_format", "json",
@@ -162,6 +232,31 @@ func Probe(filePath string) (*MediaInfo, error) {
 	}
 
 	return info, nil
+}
+
+func probeCacheKey(filePath string) (string, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s|%d|%d", filePath, info.Size(), info.ModTime().UnixNano()), nil
+}
+
+func trimProbeCacheLocked(now time.Time) {
+	if len(probeCache) == 0 {
+		return
+	}
+	for key, entry := range probeCache {
+		if !now.Before(entry.expiresAt) {
+			delete(probeCache, key)
+		}
+	}
+	for len(probeCache) > probeCacheMaxEntries {
+		for key := range probeCache {
+			delete(probeCache, key)
+			break
+		}
+	}
 }
 
 // parseFloat safely converts a string to float64, returning 0 on error.

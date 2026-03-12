@@ -6,16 +6,49 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
+)
+
+const thumbnailMaxConcurrent = 2
+
+type thumbnailCall struct {
+	done chan struct{}
+	err  error
+}
+
+var (
+	thumbnailMu       sync.Mutex
+	thumbnailInFlight = make(map[string]*thumbnailCall)
+	thumbnailSem      = make(chan struct{}, thumbnailMaxConcurrent)
 )
 
 // GenerateThumbnail creates a thumbnail for a video file.
 // Uses VAAPI hardware decode when available for faster extraction.
 // Seeks to 10% of the video duration for a more representative frame.
-func GenerateThumbnail(inputPath, outputDir string) (string, error) {
-	os.MkdirAll(outputDir, 0755)
-	outputPath := filepath.Join(outputDir, "thumb.jpg")
+func GenerateThumbnail(inputPath, outputDir string) (outputPath string, err error) {
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return "", err
+	}
+	outputPath = filepath.Join(outputDir, "thumb.jpg")
 
 	// Return cached thumbnail if it exists
+	if _, err := os.Stat(outputPath); err == nil {
+		return outputPath, nil
+	}
+
+	call, leader := beginThumbnailCall(outputPath)
+	if !leader {
+		<-call.done
+		if call.err != nil {
+			return "", call.err
+		}
+		return outputPath, nil
+	}
+	defer finishThumbnailCall(outputPath, call, &err)
+
+	thumbnailSem <- struct{}{}
+	defer func() { <-thumbnailSem }()
+
 	if _, err := os.Stat(outputPath); err == nil {
 		return outputPath, nil
 	}
@@ -55,6 +88,25 @@ func GenerateThumbnail(inputPath, outputDir string) (string, error) {
 		return "", err
 	}
 	return outputPath, nil
+}
+
+func beginThumbnailCall(outputPath string) (*thumbnailCall, bool) {
+	thumbnailMu.Lock()
+	defer thumbnailMu.Unlock()
+	if call, ok := thumbnailInFlight[outputPath]; ok {
+		return call, false
+	}
+	call := &thumbnailCall{done: make(chan struct{})}
+	thumbnailInFlight[outputPath] = call
+	return call, true
+}
+
+func finishThumbnailCall(outputPath string, call *thumbnailCall, err *error) {
+	thumbnailMu.Lock()
+	delete(thumbnailInFlight, outputPath)
+	call.err = *err
+	close(call.done)
+	thumbnailMu.Unlock()
 }
 
 // generateThumbnailVAAPI extracts a thumbnail using VAAPI hardware decode.

@@ -16,3 +16,5 @@
 - Verified stage 1 with `GOCACHE=/tmp/ftml-go-build go test ./...` and `npm run build`.
 - Added a compact dashboard label for `subtitle_generate_translate` and truncated unknown action labels so long file-log actions no longer overlap the file path column.
 - Tuned the combined generate+translate dashboard action to use a yellow label so it reads as visually distinct from generate-only and translate-only entries.
+- Stage 2 optimization pass: added `ffprobe` result caching keyed by file size/mtime with in-flight deduplication, and capped thumbnail generation concurrency while deduplicating concurrent requests for the same output file.
+- Verified stage 2 with `GOCACHE=/tmp/ftml-go-build go test ./...`.
