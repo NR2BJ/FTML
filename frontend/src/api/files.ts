@@ -59,10 +59,8 @@ export const searchFiles = (query: string, signal?: AbortSignal) =>
     signal,
   })
 
-export const getThumbnailUrl = (path: string) => {
-  const token = localStorage.getItem('token') || ''
-  return `/api/files/thumbnail/${encodeURI(path)}?token=${encodeURIComponent(token)}`
-}
+export const getThumbnailUrl = (path: string) =>
+  `/api/files/thumbnail/${encodeURI(path)}`
 
 export interface BatchInfoResult {
   path: string

@@ -194,13 +194,14 @@ function RecentJobRow({ job, onRetry }: { job: Job; onRetry: (id: string) => voi
 // ─── Main Component ─────────────────────────────────────────
 
 export default function Jobs() {
-  const { jobs, startPolling } = useJobStore()
+  const { jobs, startPolling, stopPolling } = useJobStore()
   const [, setTick] = useState(0)
 
   // Start polling on mount
   useEffect(() => {
     startPolling()
-  }, [startPolling])
+    return stopPolling
+  }, [startPolling, stopPolling])
 
   // Tick every second for elapsed time / ETA updates
   const activeJobs = jobs.filter(j => j.status === 'pending' || j.status === 'running')

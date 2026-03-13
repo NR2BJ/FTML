@@ -6,6 +6,7 @@ import { saveWatchPosition, getWatchPosition } from '@/api/user'
 import { listSubtitles } from '@/api/subtitle'
 import { detectBrowserCodecs } from '@/utils/codec'
 import { computeSessionID } from '@/utils/session'
+import { getStoredAuthToken } from '@/utils/authToken'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useToastStore } from '@/stores/toastStore'
 import { formatDuration } from '@/utils/format'
@@ -151,7 +152,7 @@ export default function Player({ path }: PlayerProps) {
     })
 
     if (Hls.isSupported()) {
-      const token = localStorage.getItem('token') || ''
+      const token = getStoredAuthToken()
       const hls = new Hls({
         maxBufferLength: 30,
         maxMaxBufferLength: 60,

@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 
 export default function JobIndicator() {
-  const { jobs, startPolling } = useJobStore()
+  const { jobs, startPolling, stopPolling } = useJobStore()
   const [open, setOpen] = useState(false)
   const [, setTick] = useState(0)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -18,7 +18,8 @@ export default function JobIndicator() {
   // Start polling on mount
   useEffect(() => {
     startPolling()
-  }, [startPolling])
+    return stopPolling
+  }, [startPolling, stopPolling])
 
   // Tick every second for elapsed time updates
   const activeJobs = jobs.filter(j => j.status === 'pending' || j.status === 'running')

@@ -1,8 +1,6 @@
 import client from './client'
 import type { BrowserCodecSupport } from '@/utils/codec'
 
-const getToken = () => localStorage.getItem('token') || ''
-
 export interface QualityOption {
   value: string
   label: string
@@ -68,7 +66,7 @@ export const getPresets = (path: string, codec?: string, browserCodecs?: Browser
 }
 
 export const getHLSUrl = (path: string, quality: string = '720p', startTime: number = 0, codec?: string, audioTrack: number = 0) => {
-  let url = `/api/stream/hls/${path}?token=${getToken()}&quality=${quality}`
+  let url = `/api/stream/hls/${path}?quality=${quality}`
   if (startTime > 0) {
     url += `&start=${Math.floor(startTime)}`
   }
@@ -80,7 +78,7 @@ export const getHLSUrl = (path: string, quality: string = '720p', startTime: num
 }
 
 export const getDirectUrl = (path: string) =>
-  `/api/stream/direct/${path}?token=${getToken()}`
+  `/api/stream/direct/${path}`
 
 export const sendHeartbeat = (sessionID: string) =>
   client.post(`/stream/heartbeat/${sessionID}`)

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { login as loginApi, getMe, type User } from '@/api/auth'
+import { clearStoredAuthToken, getStoredAuthToken, persistAuthToken, syncAuthTokenCookie } from '@/utils/authToken'
 
 interface AuthState {
   user: User | null
@@ -12,31 +13,32 @@ interface AuthState {
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
-  token: localStorage.getItem('token'),
+  token: getStoredAuthToken(),
   isLoading: true,
 
   login: async (username, password) => {
     const { data } = await loginApi({ username, password })
-    localStorage.setItem('token', data.token)
+    persistAuthToken(data.token)
     set({ token: data.token, user: data.user })
   },
 
   logout: () => {
-    localStorage.removeItem('token')
+    clearStoredAuthToken()
     set({ user: null, token: null })
   },
 
   checkAuth: async () => {
-    const token = localStorage.getItem('token')
+    const token = getStoredAuthToken()
     if (!token) {
       set({ isLoading: false })
       return
     }
+    syncAuthTokenCookie()
     try {
       const { data } = await getMe()
       set({ user: data, token, isLoading: false })
     } catch {
-      localStorage.removeItem('token')
+      clearStoredAuthToken()
       set({ user: null, token: null, isLoading: false })
     }
   },

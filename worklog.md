@@ -20,3 +20,11 @@
 - Verified stage 2 with `GOCACHE=/tmp/ftml-go-build go test ./...`.
 - Stage 3 optimization pass: switched route-level pages to `React.lazy(...)` with suspense boundaries and added Vite manual chunking for router/media/icons/data/vendor bundles to reduce the initial JS payload.
 - Verified stage 3 with `npm run build`; the app now emits route-level chunks instead of a single ~957 kB main bundle, with `Browse`, `Watch`, and admin pages split into separate assets.
+
+## 2026-03-13
+
+- Replaced frontend asset URL token query strings with same-origin cookie auth fallback, while keeping `Authorization` headers for API/HLS requests and backend query-token support only as a backward-compatible fallback.
+- Added an in-memory search index cache with TTL/in-flight deduplication so repeated filename searches stop re-walking the media tree on every request.
+- Refactored the shared job polling store to use subscriber counting, so `Jobs` and the global job indicator can mount/unmount independently without accidentally stopping each other's polling.
+- Switched the OpenAI Whisper upload path from buffered multipart bodies to streamed multipart uploads to avoid copying entire audio payloads into memory.
+- Verified the cleanup pass with `GOCACHE=/tmp/ftml-go-build go test ./...` and `npm run build`.

@@ -26,10 +26,8 @@ export interface TranslateParams {
 export const listSubtitles = (path: string) =>
   client.get<SubtitleEntry[]>(`/subtitle/list/${path}`)
 
-const getToken = () => localStorage.getItem('token') || ''
-
 export const getSubtitleUrl = (videoPath: string, subtitleId: string) =>
-  `/api/subtitle/content/${videoPath}?id=${encodeURIComponent(subtitleId)}&token=${getToken()}`
+  `/api/subtitle/content/${videoPath}?id=${encodeURIComponent(subtitleId)}`
 
 export const generateSubtitle = (path: string, params: GenerateParams) =>
   client.post<{ job_id: string }>(`/subtitle/generate/${path}`, params)

@@ -11,6 +11,7 @@ import (
 type contextKey string
 
 const UserClaimsKey contextKey = "user_claims"
+const authTokenCookieName = "ftml_token"
 
 func AuthMiddleware(jwtService *auth.JWTService) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -26,7 +27,14 @@ func AuthMiddleware(jwtService *auth.JWTService) func(http.Handler) http.Handler
 				}
 			}
 
-			// 2. Query parameter fallback (for HLS/direct stream URLs)
+			// 2. Same-origin cookie fallback (img/video/fetch URLs)
+			if tokenStr == "" {
+				if cookie, err := r.Cookie(authTokenCookieName); err == nil {
+					tokenStr = cookie.Value
+				}
+			}
+
+			// 3. Query parameter fallback for backward compatibility
 			if tokenStr == "" {
 				tokenStr = r.URL.Query().Get("token")
 			}

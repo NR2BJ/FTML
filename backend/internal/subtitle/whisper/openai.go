@@ -1,7 +1,6 @@
 package whisper
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -68,34 +67,48 @@ func (c *OpenAIWhisperClient) Transcribe(ctx context.Context, req TranscribeRequ
 }
 
 func (c *OpenAIWhisperClient) transcribeSingle(ctx context.Context, audioPath, language string, updateProgress func(float64)) (*TranscribeResult, error) {
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-
-	// Audio file
 	audioFile, err := os.Open(audioPath)
 	if err != nil {
 		return nil, err
 	}
 	defer audioFile.Close()
 
-	part, err := writer.CreateFormFile("file", filepath.Base(audioPath))
-	if err != nil {
-		return nil, err
-	}
-	if _, err := io.Copy(part, audioFile); err != nil {
-		return nil, err
-	}
+	pipeReader, pipeWriter := io.Pipe()
+	writer := multipart.NewWriter(pipeWriter)
 
-	writer.WriteField("model", "whisper-1")
-	writer.WriteField("response_format", "vtt")
-	if language != "" && language != "auto" {
-		writer.WriteField("language", language)
-	}
-	writer.Close()
+	go func() {
+		defer pipeWriter.Close()
+		defer writer.Close()
+
+		part, err := writer.CreateFormFile("file", filepath.Base(audioPath))
+		if err != nil {
+			pipeWriter.CloseWithError(fmt.Errorf("create form file: %w", err))
+			return
+		}
+		if _, err := io.Copy(part, audioFile); err != nil {
+			pipeWriter.CloseWithError(fmt.Errorf("copy audio data: %w", err))
+			return
+		}
+
+		if err := writer.WriteField("model", "whisper-1"); err != nil {
+			pipeWriter.CloseWithError(fmt.Errorf("write model: %w", err))
+			return
+		}
+		if err := writer.WriteField("response_format", "vtt"); err != nil {
+			pipeWriter.CloseWithError(fmt.Errorf("write response format: %w", err))
+			return
+		}
+		if language != "" && language != "auto" {
+			if err := writer.WriteField("language", language); err != nil {
+				pipeWriter.CloseWithError(fmt.Errorf("write language: %w", err))
+				return
+			}
+		}
+	}()
 
 	updateProgress(0.2)
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", openAITranscriptionURL, &buf)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", openAITranscriptionURL, pipeReader)
 	if err != nil {
 		return nil, err
 	}
@@ -194,10 +207,7 @@ func (c *OpenAIWhisperClient) transcribeChunked(ctx context.Context, req Transcr
 		vttContent = strings.TrimPrefix(strings.TrimSpace(vttContent), "WEBVTT")
 		vttContent = strings.TrimSpace(vttContent)
 
-		// TODO: Adjust timestamps based on chunk offset (i * 600 seconds)
-		// For now, concatenate directly — timestamps from OpenAI are relative to chunk start
 		if i > 0 && len(vttContent) > 0 {
-			// Add offset to timestamps for chunks after the first
 			offsetSeconds := float64(i) * 600.0
 			vttContent = offsetVTTTimestamps(vttContent, offsetSeconds)
 		}

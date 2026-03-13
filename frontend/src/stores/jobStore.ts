@@ -4,6 +4,7 @@ import { getActiveJobs, type Job } from '@/api/job'
 interface JobState {
   jobs: Job[]
   polling: boolean
+  subscribers: number
   intervalId: ReturnType<typeof setInterval> | null
   fetchActiveJobs: () => Promise<void>
   startPolling: () => void
@@ -16,6 +17,7 @@ const IDLE_INTERVAL = 30000    // 30s when no active jobs
 export const useJobStore = create<JobState>((set, get) => ({
   jobs: [],
   polling: false,
+  subscribers: 0,
   intervalId: null,
 
   fetchActiveJobs: async () => {
@@ -30,25 +32,39 @@ export const useJobStore = create<JobState>((set, get) => ({
       if (intervalId) {
         clearInterval(intervalId)
       }
-      const interval = hasActive ? ACTIVE_INTERVAL : IDLE_INTERVAL
-      const newId = setInterval(() => get().fetchActiveJobs(), interval)
-      set({ intervalId: newId })
+      if (get().subscribers > 0) {
+        const interval = hasActive ? ACTIVE_INTERVAL : IDLE_INTERVAL
+        const newId = setInterval(() => get().fetchActiveJobs(), interval)
+        set({ intervalId: newId })
+      } else {
+        set({ intervalId: null })
+      }
     } catch {
-      // ignore — server might be unreachable
+      if (get().subscribers > 0 && !get().intervalId) {
+        const newId = setInterval(() => get().fetchActiveJobs(), IDLE_INTERVAL)
+        set({ intervalId: newId })
+      }
     }
   },
 
   startPolling: () => {
-    if (get().polling) return
-    set({ polling: true })
-    get().fetchActiveJobs()
+    const nextSubscribers = get().subscribers + 1
+    set({ polling: true, subscribers: nextSubscribers })
+    if (nextSubscribers === 1) {
+      get().fetchActiveJobs()
+    }
   },
 
   stopPolling: () => {
+    const nextSubscribers = Math.max(0, get().subscribers - 1)
+    if (nextSubscribers > 0) {
+      set({ subscribers: nextSubscribers, polling: true })
+      return
+    }
     const { intervalId } = get()
     if (intervalId) {
       clearInterval(intervalId)
     }
-    set({ polling: false, intervalId: null })
+    set({ polling: false, subscribers: 0, intervalId: null })
   },
 }))

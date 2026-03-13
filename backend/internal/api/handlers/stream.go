@@ -397,12 +397,17 @@ func parseStreamParams(r *http.Request) streamParams {
 }
 
 func buildSegmentURL(encodedVideoPath, segName, token, quality, codec string, audioStreamIdx int, startTime float64) string {
-	u := fmt.Sprintf("/api/stream/hls/%s/%s?token=%s&quality=%s&codec=%s&audio=%d",
-		encodedVideoPath, segName, token, quality, codec, audioStreamIdx)
-	if startTime > 0 {
-		u += fmt.Sprintf("&start=%.0f", startTime)
+	params := url.Values{}
+	params.Set("quality", quality)
+	params.Set("codec", codec)
+	params.Set("audio", fmt.Sprintf("%d", audioStreamIdx))
+	if token != "" {
+		params.Set("token", token)
 	}
-	return u
+	if startTime > 0 {
+		params.Set("start", fmt.Sprintf("%.0f", startTime))
+	}
+	return fmt.Sprintf("/api/stream/hls/%s/%s?%s", encodedVideoPath, segName, params.Encode())
 }
 
 func generateSessionID(path, quality string, startTime float64, codec string, audioStreamIdx int) string {
