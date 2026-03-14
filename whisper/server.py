@@ -564,7 +564,11 @@ async def transcribe_openai(
                     segments.append({"start": c['start_ts'], "end": c['end_ts'], "text": c['text'].strip()})
         else:
             segments = []
-        return JSONResponse({"text": full_text, "language": language or "auto", "duration": len(audio) / 16000, "segments": segments})
+        duration = 0.0
+        if chunks:
+            last = chunks[-1]
+            duration = last.end_ts if hasattr(last, 'end_ts') else last['end_ts']
+        return JSONResponse({"text": full_text, "language": language or "auto", "duration": duration, "segments": segments})
     else:
         return JSONResponse({"text": full_text})
 

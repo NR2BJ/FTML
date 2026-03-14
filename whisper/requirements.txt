@@ -5,5 +5,3 @@ python-multipart
 librosa
 numpy
 huggingface_hub
-soundfile
-requests
