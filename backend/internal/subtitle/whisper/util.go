@@ -20,10 +20,10 @@ func extractAudio(ctx context.Context, videoPath string) (string, error) {
 		"-hide_banner",
 		"-loglevel", "error",
 		"-i", videoPath,
-		"-vn",          // no video
+		"-vn", // no video
+		"-af", "pan=mono|c0=0.5*FC+0.25*FL+0.25*FR,loudnorm=I=-16:TP=-1.5:LRA=11,acompressor=threshold=-25dB:ratio=3:attack=5:release=50",
 		"-acodec", "pcm_s16le",
 		"-ar", "16000", // 16kHz
-		"-ac", "1",     // mono
 		"-y",           // overwrite
 		tmpFile.Name(),
 	)

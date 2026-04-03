@@ -44,7 +44,7 @@ DEFAULT_MODEL_ID = "OpenVINO/whisper-large-v3-int8-ov"
 # Audio chunking: split long audio into chunks for VRAM management.
 # Whisper processes each chunk independently, timestamps are remapped to absolute.
 CHUNK_DURATION_S = int(os.environ.get("CHUNK_DURATION_S", "300"))  # 5 minutes
-CHUNK_OVERLAP_S = int(os.environ.get("CHUNK_OVERLAP_S", "2"))  # overlap to protect sentence boundaries
+CHUNK_OVERLAP_S = int(os.environ.get("CHUNK_OVERLAP_S", "5"))  # overlap to protect sentence boundaries
 
 
 @asynccontextmanager
@@ -308,6 +308,75 @@ def is_hallucination(text: str, duration: float) -> bool:
 # Inference
 # ---------------------------------------------------------------------------
 
+GAP_THRESHOLD_S = float(os.environ.get("GAP_THRESHOLD_S", "15"))  # 2nd-pass gap recovery threshold
+
+
+def _recover_gaps(audio_getter, all_chunks, config, total_duration, sr=16000):
+    """2nd pass: re-infer segments where subtitle gap > GAP_THRESHOLD_S.
+
+    Args:
+        audio_getter: callable(start_sample, end_sample) -> np.ndarray
+        all_chunks: list of {'text', 'start_ts', 'end_ts'} from 1st pass
+        config: WhisperGenerationConfig
+        total_duration: total audio duration in seconds
+        sr: sample rate
+    Returns:
+        updated all_chunks (sorted)
+    """
+    if GAP_THRESHOLD_S <= 0 or not all_chunks:
+        return all_chunks
+
+    gaps = []
+    prev_end = 0.0
+    for c in all_chunks:
+        if c['start_ts'] - prev_end > GAP_THRESHOLD_S:
+            gaps.append((prev_end, c['start_ts']))
+        prev_end = c['end_ts']
+    if total_duration - prev_end > GAP_THRESHOLD_S:
+        gaps.append((prev_end, total_duration))
+
+    if not gaps:
+        return all_chunks
+
+    log.info(f"Gap recovery: {len(gaps)} gaps > {GAP_THRESHOLD_S}s found")
+    recovered = 0
+
+    for gap_start, gap_end in gaps:
+        pad = 2.0
+        seg_start = max(0, int((gap_start - pad) * sr))
+        seg_end = min(int(total_duration * sr), int((gap_end + pad) * sr))
+        segment = audio_getter(seg_start, seg_end)
+        offset_s = seg_start / sr
+
+        t0 = time.time()
+        result = pipeline.generate(segment, config)
+        elapsed = time.time() - t0
+
+        chunks = getattr(result, "chunks", [])
+        added = 0
+        for c in chunks:
+            text = c.text.strip()
+            if not text:
+                continue
+            abs_start = c.start_ts + offset_s
+            abs_end = c.end_ts + offset_s
+            duration = abs_end - abs_start
+            if is_hallucination(text, duration):
+                continue
+            if abs_start >= gap_start - 1 and abs_end <= gap_end + 1:
+                all_chunks.append({'text': text, 'start_ts': abs_start, 'end_ts': abs_end})
+                added += 1
+
+        recovered += added
+        log.info(f"  Gap [{gap_start:.0f}s-{gap_end:.0f}s] ({elapsed:.1f}s): {added} cues recovered")
+
+    if recovered:
+        all_chunks.sort(key=lambda c: c['start_ts'])
+        log.info(f"Gap recovery: total {recovered} cues added")
+
+    return all_chunks
+
+
 def run_inference(audio: np.ndarray, language: str = ""):
     """Run Whisper inference on audio, with 5-min chunking for VRAM management.
 
@@ -404,6 +473,11 @@ def run_inference(audio: np.ndarray, language: str = ""):
         else:
             break
         chunk_idx += 1
+
+    # 2nd pass: recover gaps
+    all_chunks = _recover_gaps(
+        lambda s, e: audio[s:e], all_chunks, config, total_duration, sr
+    )
 
     full_text = " ".join(c['text'] for c in all_chunks)
     log.info(f"Done: {len(all_chunks)} chunks, {len(full_text)} chars in {total_elapsed:.1f}s")
@@ -508,6 +582,15 @@ def run_inference_wav(file_obj, language: str = ""):
             else:
                 break
             chunk_idx += 1
+
+        # 2nd pass: recover gaps (still inside wave.open context)
+        def _wav_getter(s, e):
+            wav_file.setpos(s)
+            return wav_frames_to_audio(wav_file.readframes(e - s), channels)
+
+        all_chunks = _recover_gaps(
+            _wav_getter, all_chunks, config, total_duration, sr
+        )
 
     full_text = " ".join(c['text'] for c in all_chunks)
     log.info(f"Done: {len(all_chunks)} chunks, {len(full_text)} chars in {total_elapsed:.1f}s")
