@@ -56,7 +56,6 @@ func main() {
 	// Initialize job queue
 	jobQueue := job.NewJobQueue(database.DB())
 	defer jobQueue.Stop()
-	log.Printf("Job queue started")
 
 	// Initialize whisper service (dynamically resolves backends from DB)
 	whisperSvc := whisper.NewService(cfg.MediaPath, cfg.SubtitlePath, database)
@@ -69,6 +68,10 @@ func main() {
 	}
 	translateSvc := translate.NewService(cfg.MediaPath, cfg.SubtitlePath, database, geminiModelResolver)
 	jobQueue.RegisterHandler(job.JobTranslate, translateSvc.HandleJob)
+	if err := jobQueue.Start(); err != nil {
+		log.Fatalf("Failed to start job queue: %v", err)
+	}
+	log.Printf("Job queue started")
 
 	// Create router
 	router := api.NewRouter(database, jwtService, cfg, jobQueue)

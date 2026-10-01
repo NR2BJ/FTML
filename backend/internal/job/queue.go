@@ -23,29 +23,46 @@ type JobQueue struct {
 	handlers          map[JobType]JobHandler
 	ctx               context.Context
 	cancel            context.CancelFunc
+	startOnce         sync.Once
+	startErr          error
+	workers           sync.WaitGroup
 }
 
-// NewJobQueue creates and starts a new job queue
+// NewJobQueue creates a queue. Register handlers before calling Start.
 func NewJobQueue(db *sql.DB) *JobQueue {
 	ctx, cancel := context.WithCancel(context.Background())
 	q := &JobQueue{
 		db:                db,
-		pendingTranscribe: make(chan string, 100),
-		pendingTranslate:  make(chan string, 100),
+		pendingTranscribe: make(chan string, 1),
+		pendingTranslate:  make(chan string, 1),
 		cancels:           make(map[string]context.CancelFunc),
 		handlers:          make(map[JobType]JobHandler),
 		ctx:               ctx,
 		cancel:            cancel,
 	}
 
-	// Resume any pending/running jobs from DB on startup
-	go q.resumeJobs()
-
-	// Start dual workers — transcribe and translate run independently
-	go q.transcribeWorker()
-	go q.translateWorker()
-
 	return q
+}
+
+func (q *JobQueue) Start() error {
+	q.startOnce.Do(func() {
+		q.mu.RLock()
+		_, transcribeOK := q.handlers[JobTranscribe]
+		_, translateOK := q.handlers[JobTranslate]
+		q.mu.RUnlock()
+		if !transcribeOK || !translateOK {
+			q.startErr = fmt.Errorf("register transcription and translation handlers before starting")
+			return
+		}
+		_, q.startErr = q.db.Exec("UPDATE jobs SET status = ?, started_at = NULL, progress = 0 WHERE status = ?", StatusPending, StatusRunning)
+		if q.startErr != nil {
+			return
+		}
+		q.workers.Add(2)
+		go q.worker(JobTranscribe, q.pendingTranscribe)
+		go q.worker(JobTranslate, q.pendingTranslate)
+	})
+	return q.startErr
 }
 
 // RegisterHandler registers a handler for a job type
@@ -57,6 +74,9 @@ func (q *JobQueue) RegisterHandler(jobType JobType, handler JobHandler) {
 
 // Enqueue creates a new job and adds it to the queue
 func (q *JobQueue) Enqueue(jobType JobType, filePath string, params interface{}) (*Job, error) {
+	if jobType != JobTranscribe && jobType != JobTranslate {
+		return nil, fmt.Errorf("unsupported job type: %s", jobType)
+	}
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("marshal params: %w", err)
@@ -94,13 +114,13 @@ func (q *JobQueue) enqueueToChannel(jobType JobType, jobID string) {
 		select {
 		case q.pendingTranscribe <- jobID:
 		default:
-			log.Printf("[job] transcribe queue full, job %s will be picked up on next poll", jobID)
+			// A wake-up is already pending; the worker drains jobs from SQLite.
 		}
 	case JobTranslate:
 		select {
 		case q.pendingTranslate <- jobID:
 		default:
-			log.Printf("[job] translate queue full, job %s will be picked up on next poll", jobID)
+			// SQLite remains authoritative even when notifications coalesce.
 		}
 	default:
 		log.Printf("[job] unknown job type %s for job %s", jobType, jobID)
@@ -211,6 +231,11 @@ func (q *JobQueue) scanJobs(rows *sql.Rows) ([]*Job, error) {
 
 // CancelJob cancels a pending or running job
 func (q *JobQueue) CancelJob(id string) error {
+	_, err := q.db.Exec(`UPDATE jobs SET status = ?, completed_at = ? WHERE id = ? AND status IN (?, ?)`,
+		StatusCancelled, time.Now(), id, StatusPending, StatusRunning)
+	if err != nil {
+		return err
+	}
 	q.mu.Lock()
 	if cancelFn, ok := q.cancels[id]; ok {
 		cancelFn()
@@ -218,12 +243,7 @@ func (q *JobQueue) CancelJob(id string) error {
 	}
 	q.mu.Unlock()
 
-	_, err := q.db.Exec(`
-		UPDATE jobs SET status = ?, completed_at = ?
-		WHERE id = ? AND status IN (?, ?)`,
-		StatusCancelled, time.Now(), id, StatusPending, StatusRunning,
-	)
-	return err
+	return nil
 }
 
 // RetryJob re-queues a failed or cancelled job
@@ -239,7 +259,7 @@ func (q *JobQueue) RetryJob(id string) error {
 
 	// Reset job state to pending
 	_, err = q.db.Exec(`
-		UPDATE jobs SET status = ?, progress = 0, error = NULL, started_at = NULL, completed_at = NULL
+		UPDATE jobs SET status = ?, progress = 0, error = NULL, result = NULL, started_at = NULL, completed_at = NULL
 		WHERE id = ?`,
 		StatusPending, id,
 	)
@@ -256,34 +276,35 @@ func (q *JobQueue) RetryJob(id string) error {
 
 // UpdateProgress updates the progress of a running job
 func (q *JobQueue) UpdateProgress(id string, progress float64) {
-	q.db.Exec("UPDATE jobs SET progress = ? WHERE id = ?", progress, id)
+	q.db.Exec("UPDATE jobs SET progress = ? WHERE id = ? AND status = ?", progress, id, StatusRunning)
 }
 
 // Stop shuts down the queue
 func (q *JobQueue) Stop() {
 	q.cancel()
+	q.workers.Wait()
 }
 
 // transcribeWorker processes transcribe jobs one at a time (GPU-bound)
-func (q *JobQueue) transcribeWorker() {
-	for {
-		select {
-		case <-q.ctx.Done():
-			return
-		case jobID := <-q.pendingTranscribe:
-			q.processJob(jobID)
+func (q *JobQueue) worker(kind JobType, wake <-chan string) {
+	defer q.workers.Done()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for q.ctx.Err() == nil {
+		var id string
+		err := q.db.QueryRow("SELECT id FROM jobs WHERE type = ? AND status = ? ORDER BY created_at, id LIMIT 1", kind, StatusPending).Scan(&id)
+		if err == nil {
+			q.processJob(id)
+			continue
 		}
-	}
-}
-
-// translateWorker processes translate jobs one at a time (web API, runs concurrently with transcribe)
-func (q *JobQueue) translateWorker() {
-	for {
+		if err != sql.ErrNoRows {
+			log.Printf("[job] pending job lookup failed: %v", err)
+		}
 		select {
 		case <-q.ctx.Done():
 			return
-		case jobID := <-q.pendingTranslate:
-			q.processJob(jobID)
+		case <-wake:
+		case <-ticker.C:
 		}
 	}
 }
@@ -306,24 +327,34 @@ func (q *JobQueue) processJob(jobID string) {
 	handler, ok := q.handlers[job.Type]
 	q.mu.RUnlock()
 
+	// Mark as running
+	now := time.Now()
+	claim, err := q.db.Exec("UPDATE jobs SET status = ?, started_at = ? WHERE id = ? AND status = ?",
+		StatusRunning, now, job.ID, StatusPending)
+	if err != nil {
+		log.Printf("[job] claim failed: %v", err)
+		return
+	}
+	claimed, err := claim.RowsAffected()
+	if err != nil || claimed != 1 {
+		return
+	}
+	job.StartedAt = &now
+	job.Status = StatusRunning
 	if !ok {
-		log.Printf("[job] no handler for job type %s", job.Type)
 		q.failJob(job, fmt.Sprintf("no handler for job type: %s", job.Type))
 		return
 	}
-
-	// Mark as running
-	now := time.Now()
-	job.StartedAt = &now
-	job.Status = StatusRunning
-	q.db.Exec("UPDATE jobs SET status = ?, started_at = ? WHERE id = ?",
-		StatusRunning, now, job.ID)
 
 	// Create cancellable context
 	ctx, cancelFn := context.WithCancel(q.ctx)
 	q.mu.Lock()
 	q.cancels[job.ID] = cancelFn
 	q.mu.Unlock()
+	var currentStatus JobStatus
+	if err := q.db.QueryRow("SELECT status FROM jobs WHERE id = ?", job.ID).Scan(&currentStatus); err != nil || currentStatus != StatusRunning {
+		cancelFn()
+	}
 
 	// Progress callback
 	updateProgress := func(progress float64) {
@@ -333,19 +364,30 @@ func (q *JobQueue) processJob(jobID string) {
 	// Run handler in a goroutine with context awareness
 	done := make(chan error, 1)
 	go func() {
+		if ctx.Err() != nil {
+			done <- ctx.Err()
+			return
+		}
 		done <- handler(ctx, job, updateProgress)
 	}()
 
 	select {
 	case <-ctx.Done():
-		// Cancelled
+		// Do not reuse the worker until its handler has actually stopped.
+		<-done
 		log.Printf("[job] job %s cancelled", job.ID)
 	case err := <-done:
+		if q.ctx.Err() != nil {
+			break
+		}
 		if err != nil {
 			q.failJob(job, err.Error())
 		} else {
 			q.completeJob(job)
 		}
+	}
+	if q.ctx.Err() != nil {
+		q.db.Exec("UPDATE jobs SET status = ?, started_at = NULL, progress = 0 WHERE id = ? AND status = ?", StatusPending, job.ID, StatusRunning)
 	}
 
 	// Cleanup cancel func
@@ -358,8 +400,16 @@ func (q *JobQueue) processJob(jobID string) {
 func (q *JobQueue) completeJob(job *Job) {
 	now := time.Now()
 	// Persist result to DB (handlers set job.Result before returning)
-	q.db.Exec("UPDATE jobs SET status = ?, progress = 1.0, result = ?, completed_at = ? WHERE id = ?",
-		StatusCompleted, string(job.Result), now, job.ID)
+	result, err := q.db.Exec("UPDATE jobs SET status = ?, progress = 1.0, result = ?, completed_at = ? WHERE id = ? AND status = ?",
+		StatusCompleted, string(job.Result), now, job.ID, StatusRunning)
+	if err != nil {
+		log.Printf("[job] completion persistence failed: %v", err)
+		return
+	}
+	changed, err := result.RowsAffected()
+	if err != nil || changed != 1 {
+		return
+	}
 	log.Printf("[job] job %s completed", job.ID)
 
 	// Chain: if transcribe job has ChainTranslate, auto-enqueue translation
@@ -407,35 +457,7 @@ func (q *JobQueue) maybeChainTranslate(job *Job) {
 
 func (q *JobQueue) failJob(job *Job, errMsg string) {
 	now := time.Now()
-	q.db.Exec("UPDATE jobs SET status = ?, error = ?, completed_at = ? WHERE id = ?",
-		StatusFailed, errMsg, now, job.ID)
+	q.db.Exec("UPDATE jobs SET status = ?, error = ?, completed_at = ? WHERE id = ? AND status = ?",
+		StatusFailed, errMsg, now, job.ID, StatusRunning)
 	log.Printf("[job] job %s failed: %s", job.ID, errMsg)
-}
-
-// resumeJobs re-queues any pending jobs found in DB on startup
-func (q *JobQueue) resumeJobs() {
-	// Mark any previously "running" jobs as pending (server restarted)
-	q.db.Exec("UPDATE jobs SET status = ? WHERE status = ?", StatusPending, StatusRunning)
-
-	rows, err := q.db.Query("SELECT id, type FROM jobs WHERE status = ? ORDER BY created_at ASC", StatusPending)
-	if err != nil {
-		log.Printf("[job] failed to resume jobs: %v", err)
-		return
-	}
-	defer rows.Close()
-
-	count := 0
-	for rows.Next() {
-		var id string
-		var jobType JobType
-		if err := rows.Scan(&id, &jobType); err != nil {
-			continue
-		}
-		q.enqueueToChannel(jobType, id)
-		count++
-	}
-
-	if count > 0 {
-		log.Printf("[job] resumed %d pending jobs", count)
-	}
 }
