@@ -1,3 +1,4 @@
+import { encodeMediaPath } from '@/utils/mediaPath'
 import client from './client'
 
 export interface FileEntry {
@@ -48,10 +49,10 @@ export interface MediaInfo {
 }
 
 export const getTree = (path = '') =>
-  client.get<TreeResponse>(`/files/tree/${path}`)
+  client.get<TreeResponse>(`/files/tree/${encodeMediaPath(path)}`)
 
 export const getFileInfo = (path: string) =>
-  client.get<MediaInfo>(`/files/info/${path}`)
+  client.get<MediaInfo>(`/files/info/${encodeMediaPath(path)}`)
 
 export const searchFiles = (query: string, signal?: AbortSignal) =>
   client.get<{ query: string; results: FileEntry[] }>('/files/search', {
@@ -60,7 +61,7 @@ export const searchFiles = (query: string, signal?: AbortSignal) =>
   })
 
 export const getThumbnailUrl = (path: string) =>
-  `/api/files/thumbnail/${encodeURI(path)}`
+  `/api/files/thumbnail/${encodeMediaPath(path)}`
 
 export interface BatchInfoResult {
   path: string
@@ -74,7 +75,7 @@ export const batchFileInfo = (paths: string[]) =>
 export const uploadFile = (path: string, file: File, onProgress?: (pct: number) => void) => {
   const formData = new FormData()
   formData.append('file', file)
-  return client.post(`/files/upload/${path}`, formData, {
+  return client.post(`/files/upload/${encodeMediaPath(path)}`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     onUploadProgress: onProgress
       ? (e) => onProgress(Math.round((e.loaded * 100) / (e.total || 1)))
@@ -83,13 +84,13 @@ export const uploadFile = (path: string, file: File, onProgress?: (pct: number) 
 }
 
 export const deleteFile = (path: string) =>
-  client.delete(`/files/delete/${path}`)
+  client.delete(`/files/delete/${encodeMediaPath(path)}`)
 
 export const moveFile = (source: string, destination: string) =>
   client.put('/files/move', { source, destination })
 
 export const createFolder = (path: string) =>
-  client.post(`/files/mkdir/${path}`)
+  client.post(`/files/mkdir/${encodeMediaPath(path)}`)
 
 export interface SiblingsResponse {
   current: string
@@ -98,7 +99,7 @@ export interface SiblingsResponse {
 }
 
 export const getSiblings = (path: string) =>
-  client.get<SiblingsResponse>(`/files/siblings/${path}`)
+  client.get<SiblingsResponse>(`/files/siblings/${encodeMediaPath(path)}`)
 
 // Trash management (Admin only)
 export interface TrashEntry {

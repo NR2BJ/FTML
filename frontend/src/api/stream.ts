@@ -1,4 +1,5 @@
 import client from './client'
+import { encodeMediaPath } from '@/utils/mediaPath'
 import type { BrowserCodecSupport } from '@/utils/codec'
 
 export interface QualityOption {
@@ -62,23 +63,17 @@ export const getPresets = (path: string, codec?: string, browserCodecs?: Browser
     params.flac = String(browserCodecs.flac)
     params.ac3 = String(browserCodecs.ac3)
   }
-  return client.get<QualityOption[]>(`/stream/presets/${path}`, { params })
+  return client.get<QualityOption[]>(`/stream/presets/${encodeMediaPath(path)}`, { params })
 }
 
-export const getHLSUrl = (path: string, quality: string = '720p', startTime: number = 0, codec?: string, audioTrack: number = 0) => {
-  let url = `/api/stream/hls/${path}?quality=${quality}`
-  if (startTime > 0) {
-    url += `&start=${Math.floor(startTime)}`
-  }
-  if (codec) {
-    url += `&codec=${codec}`
-  }
-  url += `&audio=${audioTrack}`
-  return url
+export const getHLSUrl = (path: string, sessionID: string, quality = '720p', startTime = 0, codec?: string, audioTrack = 0) => {
+  const params = new URLSearchParams({ session: sessionID, quality, start: String(startTime), audio: String(audioTrack) })
+  if (codec) params.set('codec', codec)
+  return `/api/stream/hls/${encodeMediaPath(path)}/playlist.m3u8?${params}`
 }
 
 export const getDirectUrl = (path: string) =>
-  `/api/stream/direct/${path}`
+  `/api/stream/direct/${encodeMediaPath(path)}`
 
 export const sendHeartbeat = (sessionID: string) =>
   client.post(`/stream/heartbeat/${sessionID}`)

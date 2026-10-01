@@ -1,18 +1,21 @@
 package handlers
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/video-stream/backend/internal/api/middleware"
 	"github.com/video-stream/backend/internal/ffmpeg"
 	"github.com/video-stream/backend/internal/storage"
 )
@@ -87,8 +90,12 @@ func (h *StreamHandler) PresetsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StreamHandler) HLSHandler(w http.ResponseWriter, r *http.Request) {
-	raw := chi.URLParam(r, "*")
-	path, _ := url.PathUnescape(raw)
+	path := extractPath(r)
+	sp := parseStreamParams(r)
+	if !sessionIDPattern.MatchString(sp.sessionID) || sp.audioStreamIdx < 0 || sp.startTime < 0 || math.IsNaN(sp.startTime) || math.IsInf(sp.startTime, 0) {
+		jsonError(w, "재생 요청이 올바르지 않습니다. 화면을 새로고침해 주세요", http.StatusBadRequest)
+		return
+	}
 
 	// Check if requesting a segment (.ts, .m4s, init.mp4)
 	if strings.HasSuffix(path, ".ts") || strings.HasSuffix(path, ".m4s") || strings.HasSuffix(path, ".mp4") {
@@ -122,10 +129,15 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	}
 
 	sp := parseStreamParams(r)
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		jsonError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 
 	// "original" quality means direct play - redirect
 	if sp.quality == "original" {
-		http.Redirect(w, r, "/api/stream/direct/"+videoPath, http.StatusTemporaryRedirect)
+		http.Redirect(w, r, "/api/stream/direct/"+escapeMediaPath(videoPath), http.StatusTemporaryRedirect)
 		return
 	}
 
@@ -134,6 +146,10 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 
 	// Probe the file to generate presets and find the matching transcode params
 	info, _ := ffmpeg.Probe(fullPath)
+	if info != nil && len(info.AudioStreams) > 0 && sp.audioStreamIdx >= len(info.AudioStreams) {
+		jsonError(w, "음성 트랙이 존재하지 않습니다", http.StatusBadRequest)
+		return
+	}
 	presets := ffmpeg.GeneratePresets(info, codec, encoder, browser)
 	params := ffmpeg.GetTranscodeParams(sp.quality, presets, encoder)
 
@@ -177,14 +193,8 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		}
 	}
 
-	sessionID := generateSessionID(videoPath, sp.quality, sp.startTime, string(codec), sp.audioStreamIdx)
-
-	// If seeking, stop any existing sessions for the same video+quality+codec at different times
-	if sp.startTime > 0 {
-		h.hlsManager.StopSessionsForPath(fullPath, sp.quality, string(codec), sessionID)
-	}
-
-	session, err := h.hlsManager.GetOrCreateSession(sessionID, fullPath, sp.startTime, sp.quality, string(codec), params)
+	sessionID := sp.sessionID
+	session, err := h.hlsManager.GetOrCreateSession(sessionID, claims.UserID, fullPath, sp.startTime, sp.quality, string(codec), params)
 	if err != nil {
 		log.Printf("[stream] failed to start transcoding: %v", err)
 		jsonError(w, "failed to start transcoding", http.StatusInternalServerError)
@@ -196,6 +206,10 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	playlistPath := filepath.Join(session.OutputDir, "playlist.m3u8")
 	ready := false
 	for i := 0; i < 100; i++ {
+		if h.hlsManager.SessionFailure(sessionID) != "" {
+			jsonError(w, "동영상 변환에 실패했습니다", http.StatusBadGateway)
+			return
+		}
 		data, err := os.ReadFile(playlistPath)
 		if err == nil {
 			segCount := 0
@@ -210,7 +224,11 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 				break
 			}
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 
 	if !ready {
@@ -226,12 +244,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	}
 
 	token := r.URL.Query().Get("token")
-	pathParts := strings.Split(videoPath, "/")
-	encodedParts := make([]string, len(pathParts))
-	for i, p := range pathParts {
-		encodedParts[i] = url.PathEscape(p)
-	}
-	encodedVideoPath := strings.Join(encodedParts, "/")
+	encodedVideoPath := escapeMediaPath(videoPath)
 
 	content := string(data)
 	lines := strings.Split(content, "\n")
@@ -244,7 +257,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 			uriEnd := strings.LastIndex(trimmed, `"`)
 			if uriStart >= 0 && uriEnd > uriStart {
 				segName := trimmed[uriStart+1 : uriEnd]
-				segURL := buildSegmentURL(encodedVideoPath, segName, token, sp.quality, string(codec), sp.audioStreamIdx, sp.startTime)
+				segURL := buildSegmentURL(encodedVideoPath, segName, token, sessionID)
 				lines[i] = fmt.Sprintf(`#EXT-X-MAP:URI="%s"`, segURL)
 			}
 			continue
@@ -252,7 +265,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 
 		// Handle segment lines (.ts, .m4s, .mp4)
 		if strings.HasSuffix(trimmed, ".ts") || strings.HasSuffix(trimmed, ".m4s") || strings.HasSuffix(trimmed, ".mp4") {
-			lines[i] = buildSegmentURL(encodedVideoPath, trimmed, token, sp.quality, string(codec), sp.audioStreamIdx, sp.startTime)
+			lines[i] = buildSegmentURL(encodedVideoPath, trimmed, token, sessionID)
 		}
 	}
 
@@ -263,8 +276,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 }
 
 func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, rawPath string) {
-	path, _ := url.PathUnescape(rawPath)
-	parts := strings.Split(path, "/")
+	parts := strings.Split(rawPath, "/")
 	if len(parts) < 2 {
 		jsonError(w, "invalid segment path", http.StatusBadRequest)
 		return
@@ -272,13 +284,17 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 
 	segmentName := parts[len(parts)-1]
 	// Validate segment name — must be a simple filename (no path separators or traversal)
-	if strings.ContainsAny(segmentName, "/\\") || segmentName == ".." || segmentName == "." {
+	if !segmentNamePattern.MatchString(segmentName) {
 		jsonError(w, "invalid segment name", http.StatusBadRequest)
 		return
 	}
-	videoPath := strings.Join(parts[:len(parts)-1], "/")
 	sp := parseStreamParams(r)
-	sessionID := generateSessionID(videoPath, sp.quality, sp.startTime, sp.codec, sp.audioStreamIdx)
+	sessionID := sp.sessionID
+	if !h.ownsSession(r, sessionID) {
+		jsonError(w, "session not found", http.StatusNotFound)
+		return
+	}
+	h.hlsManager.Heartbeat(sessionID)
 
 	sessionDir := h.hlsManager.GetSessionDir(sessionID)
 	segmentPath, err := storage.ResolveWithinBase(sessionDir, segmentName)
@@ -289,10 +305,18 @@ func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, raw
 
 	// Wait for segment to be ready
 	for i := 0; i < 150; i++ {
+		if h.hlsManager.SessionFailure(sessionID) != "" {
+			jsonError(w, "동영상 변환에 실패했습니다", http.StatusBadGateway)
+			return
+		}
 		if info, err := os.Stat(segmentPath); err == nil && info.Size() > 0 {
 			break
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 
 	if _, err := os.Stat(segmentPath); os.IsNotExist(err) {
@@ -370,6 +394,7 @@ func parseCodecParams(r *http.Request) (ffmpeg.Codec, *ffmpeg.EncoderInfo, ffmpe
 }
 
 type streamParams struct {
+	sessionID      string
 	quality        string
 	codec          string
 	startTime      float64
@@ -378,8 +403,9 @@ type streamParams struct {
 
 func parseStreamParams(r *http.Request) streamParams {
 	p := streamParams{
-		quality: r.URL.Query().Get("quality"),
-		codec:   r.URL.Query().Get("codec"),
+		sessionID: r.URL.Query().Get("session"),
+		quality:   r.URL.Query().Get("quality"),
+		codec:     r.URL.Query().Get("codec"),
 	}
 	if p.quality == "" {
 		p.quality = "720p"
@@ -388,32 +414,45 @@ func parseStreamParams(r *http.Request) streamParams {
 		p.codec = "h264"
 	}
 	if st := r.URL.Query().Get("start"); st != "" {
-		fmt.Sscanf(st, "%f", &p.startTime)
+		var err error
+		p.startTime, err = strconv.ParseFloat(st, 64)
+		if err != nil {
+			p.startTime = math.NaN()
+		}
 	}
 	if audioStr := r.URL.Query().Get("audio"); audioStr != "" {
-		fmt.Sscanf(audioStr, "%d", &p.audioStreamIdx)
+		var err error
+		p.audioStreamIdx, err = strconv.Atoi(audioStr)
+		if err != nil {
+			p.audioStreamIdx = -1
+		}
 	}
 	return p
 }
 
-func buildSegmentURL(encodedVideoPath, segName, token, quality, codec string, audioStreamIdx int, startTime float64) string {
+func buildSegmentURL(encodedVideoPath, segName, token, sessionID string) string {
 	params := url.Values{}
-	params.Set("quality", quality)
-	params.Set("codec", codec)
-	params.Set("audio", fmt.Sprintf("%d", audioStreamIdx))
+	params.Set("session", sessionID)
 	if token != "" {
 		params.Set("token", token)
-	}
-	if startTime > 0 {
-		params.Set("start", fmt.Sprintf("%.0f", startTime))
 	}
 	return fmt.Sprintf("/api/stream/hls/%s/%s?%s", encodedVideoPath, segName, params.Encode())
 }
 
-func generateSessionID(path, quality string, startTime float64, codec string, audioStreamIdx int) string {
-	key := fmt.Sprintf("%s|%s|%.0f|%s|%d", path, quality, startTime, codec, audioStreamIdx)
-	h := sha256.Sum256([]byte(key))
-	return fmt.Sprintf("%x", h[:8])
+var sessionIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+var segmentNamePattern = regexp.MustCompile(`^(init\.mp4|seg_[0-9]+\.(ts|m4s))$`)
+
+func escapeMediaPath(path string) string {
+	parts := strings.Split(path, "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	return strings.Join(parts, "/")
+}
+
+func (h *StreamHandler) ownsSession(r *http.Request, sessionID string) bool {
+	claims := middleware.GetClaims(r)
+	return claims != nil && h.hlsManager.OwnsSession(sessionID, claims.UserID)
 }
 
 // HeartbeatHandler updates the last heartbeat time for a session.
@@ -425,7 +464,7 @@ func (h *StreamHandler) HeartbeatHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if h.hlsManager.Heartbeat(sessionID) {
+	if h.ownsSession(r, sessionID) && h.hlsManager.Heartbeat(sessionID) {
 		w.WriteHeader(http.StatusNoContent)
 	} else {
 		jsonError(w, "session not found", http.StatusNotFound)
@@ -441,7 +480,7 @@ func (h *StreamHandler) PauseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.hlsManager.PauseSession(sessionID) {
+	if h.ownsSession(r, sessionID) && h.hlsManager.PauseSession(sessionID) {
 		w.WriteHeader(http.StatusNoContent)
 	} else {
 		jsonError(w, "session not found or already paused", http.StatusNotFound)
@@ -457,7 +496,7 @@ func (h *StreamHandler) ResumeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.hlsManager.ResumeSession(sessionID) {
+	if h.ownsSession(r, sessionID) && h.hlsManager.ResumeSession(sessionID) {
 		w.WriteHeader(http.StatusNoContent)
 	} else {
 		jsonError(w, "session not found or not paused", http.StatusNotFound)
@@ -473,6 +512,10 @@ func (h *StreamHandler) StopSessionHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if !h.ownsSession(r, sessionID) {
+		jsonError(w, "session not found", http.StatusNotFound)
+		return
+	}
 	h.hlsManager.StopSession(sessionID)
 	w.WriteHeader(http.StatusNoContent)
 }

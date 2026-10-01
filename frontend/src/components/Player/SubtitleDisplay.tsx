@@ -14,55 +14,7 @@ interface SubtitleDisplayProps {
   path: string
 }
 
-function parseVTT(vttText: string): SubtitleCue[] {
-  const cues: SubtitleCue[] = []
-  const blocks = vttText.split(/\n\n+/)
-
-  for (const block of blocks) {
-    const lines = block.trim().split('\n')
-    let timestampLine = -1
-
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].includes('-->')) {
-        timestampLine = i
-        break
-      }
-    }
-
-    if (timestampLine === -1) continue
-
-    const match = lines[timestampLine].match(
-      /(\d{1,2}:)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{1,2}:)?(\d{2}):(\d{2})[.,](\d{3})/
-    )
-    if (!match) continue
-
-    const startH = match[1] ? parseInt(match[1]) : 0
-    const startM = parseInt(match[2])
-    const startS = parseInt(match[3])
-    const startMs = parseInt(match[4])
-    const endH = match[5] ? parseInt(match[5]) : 0
-    const endM = parseInt(match[6])
-    const endS = parseInt(match[7])
-    const endMs = parseInt(match[8])
-
-    const start = startH * 3600 + startM * 60 + startS + startMs / 1000
-    const end = endH * 3600 + endM * 60 + endS + endMs / 1000
-
-    const textLines = lines.slice(timestampLine + 1)
-    // Strip basic HTML tags but keep line breaks
-    const text = textLines
-      .join('\n')
-      .replace(/<[^>]+>/g, '')
-      .trim()
-
-    if (text) {
-      cues.push({ start, end, text })
-    }
-  }
-
-  return cues
-}
-
+import { parseVTT } from '@/utils/subtitles'
 export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps) {
   const { activeSubtitle, secondarySubtitle, subtitleVisible, currentTime } = usePlayerStore()
   const { syncOffset, fontSize, fontFamily, textColor, bgOpacity } = useSubtitleSettings()
@@ -71,34 +23,42 @@ export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps
 
   // Fetch and parse primary subtitle
   useEffect(() => {
+    const controller = new AbortController()
+    setCues([])
     if (!activeSubtitle) {
       setCues([])
       return
     }
 
     const url = getSubtitleUrl(path, activeSubtitle)
-    fetch(url)
-      .then((res) => res.text())
+    fetch(url, { signal: controller.signal, cache: 'no-cache' })
+      .then((res) => { if (!res.ok) throw new Error('자막 요청 실패'); return res.text() })
       .then((text) => {
+        if (controller.signal.aborted) return
         setCues(parseVTT(text))
       })
-      .catch(() => setCues([]))
+      .catch(() => { if (!controller.signal.aborted) setCues([]) })
+    return () => controller.abort()
   }, [activeSubtitle, path])
 
   // Fetch and parse secondary subtitle
   useEffect(() => {
+    const controller = new AbortController()
+    setSecondaryCues([])
     if (!secondarySubtitle) {
       setSecondaryCues([])
       return
     }
 
     const url = getSubtitleUrl(path, secondarySubtitle)
-    fetch(url)
-      .then((res) => res.text())
+    fetch(url, { signal: controller.signal, cache: 'no-cache' })
+      .then((res) => { if (!res.ok) throw new Error('자막 요청 실패'); return res.text() })
       .then((text) => {
+        if (controller.signal.aborted) return
         setSecondaryCues(parseVTT(text))
       })
-      .catch(() => setSecondaryCues([]))
+      .catch(() => { if (!controller.signal.aborted) setSecondaryCues([]) })
+    return () => controller.abort()
   }, [secondarySubtitle, path])
 
   if (!subtitleVisible) return null
@@ -106,10 +66,10 @@ export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps
 
   const adjustedTime = currentTime + syncOffset
   const activePrimary = activeSubtitle
-    ? cues.filter((c) => adjustedTime >= c.start && adjustedTime <= c.end)
+    ? cues.filter((c) => adjustedTime >= c.start && adjustedTime < c.end)
     : []
   const activeSecondary = secondarySubtitle
-    ? secondaryCues.filter((c) => adjustedTime >= c.start && adjustedTime <= c.end)
+    ? secondaryCues.filter((c) => adjustedTime >= c.start && adjustedTime < c.end)
     : []
 
   if (activePrimary.length === 0 && activeSecondary.length === 0) return null

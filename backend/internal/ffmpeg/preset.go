@@ -167,7 +167,7 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 	// Same-resolution transcode option (useful when source codec isn't browser-compatible)
 	// Uses actual source height (e.g. "1608p") instead of closest tier to avoid
 	// dedup collision when the source height doesn't match a standard tier exactly.
-	if srcHeight >= 720 {
+	if srcHeight > 0 {
 		// Use standard tier label if exact match (e.g. 1440→"1440p", 2160→"4K"),
 		// otherwise use actual height (e.g. 1608→"1608p")
 		srcLabel := fmt.Sprintf("%dp", srcHeight)

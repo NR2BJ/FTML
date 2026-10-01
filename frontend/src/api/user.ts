@@ -1,3 +1,4 @@
+import { encodeMediaPath } from '@/utils/mediaPath'
 import client from './client'
 
 export interface WatchHistoryEntry {
@@ -8,16 +9,16 @@ export interface WatchHistoryEntry {
 }
 
 export const saveWatchPosition = (path: string, position: number, duration: number) =>
-  client.put(`/user/history/${path}`, { position, duration })
+  client.put(`/user/history/${encodeMediaPath(path)}`, { position, duration })
 
 export const getWatchPosition = (path: string) =>
-  client.get<{ position: number }>(`/user/history/${path}`)
+  client.get<{ position: number }>(`/user/history/${encodeMediaPath(path)}`)
 
 export const listWatchHistory = () =>
   client.get<WatchHistoryEntry[]>('/user/history')
 
 export const deleteWatchHistory = (path: string) =>
-  client.delete(`/user/history/${path}`)
+  client.delete(`/user/history/${encodeMediaPath(path)}`)
 
 export const changePassword = (currentPassword: string, newPassword: string) =>
   client.put('/user/password', { current_password: currentPassword, new_password: newPassword })

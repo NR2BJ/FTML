@@ -1,3 +1,4 @@
+import { encodeMediaPath } from '@/utils/mediaPath'
 import client from './client'
 export type { Job } from './job'
 
@@ -24,24 +25,24 @@ export interface TranslateParams {
 }
 
 export const listSubtitles = (path: string) =>
-  client.get<SubtitleEntry[]>(`/subtitle/list/${path}`)
+  client.get<SubtitleEntry[]>(`/subtitle/list/${encodeMediaPath(path)}`)
 
 export const getSubtitleUrl = (videoPath: string, subtitleId: string) =>
-  `/api/subtitle/content/${videoPath}?id=${encodeURIComponent(subtitleId)}`
+  `/api/subtitle/content/${encodeMediaPath(videoPath)}?id=${encodeURIComponent(subtitleId)}`
 
 export const generateSubtitle = (path: string, params: GenerateParams) =>
-  client.post<{ job_id: string }>(`/subtitle/generate/${path}`, params)
+  client.post<{ job_id: string }>(`/subtitle/generate/${encodeMediaPath(path)}`, params)
 
 export const translateSubtitle = (path: string, params: TranslateParams) =>
-  client.post<{ job_id: string }>(`/subtitle/translate/${path}`, params)
+  client.post<{ job_id: string }>(`/subtitle/translate/${encodeMediaPath(path)}`, params)
 
 export const deleteSubtitle = (path: string, subtitleId: string) =>
-  client.delete(`/subtitle/delete/${path}?id=${encodeURIComponent(subtitleId)}`)
+  client.delete(`/subtitle/delete/${encodeMediaPath(path)}?id=${encodeURIComponent(subtitleId)}`)
 
 export const uploadSubtitle = (videoPath: string, file: File) => {
   const formData = new FormData()
   formData.append('file', file)
-  return client.post(`/subtitle/upload/${videoPath}`, formData, {
+  return client.post(`/subtitle/upload/${encodeMediaPath(videoPath)}`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
@@ -105,14 +106,14 @@ export interface DeleteRequest {
 }
 
 export const requestSubtitleDelete = (videoPath: string, data: { subtitle_id: string; subtitle_label: string; reason: string }) =>
-  client.post(`/subtitle/delete-request/${videoPath}`, data)
+  client.post(`/subtitle/delete-request/${encodeMediaPath(videoPath)}`, data)
 
 export const listMyDeleteRequests = () =>
   client.get<DeleteRequest[]>('/subtitle/my-delete-requests')
 
 // Subtitle format conversion — downloads as file
 export const convertSubtitle = async (videoPath: string, subtitleId: string, targetFormat: string) => {
-  const response = await client.post(`/subtitle/convert/${videoPath}`, {
+  const response = await client.post(`/subtitle/convert/${encodeMediaPath(videoPath)}`, {
     subtitle_id: subtitleId,
     target_format: targetFormat,
   }, {

@@ -1,3 +1,4 @@
+import { encodeMediaPath } from '@/utils/mediaPath'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
@@ -124,9 +125,9 @@ export default function Header() {
     setShowResults(false)
     setQuery('')
     if (entry.is_dir) {
-      navigate(`/browse/${entry.path}`)
+      navigate(`/browse/${encodeMediaPath(entry.path)}`)
     } else {
-      navigate(`/watch/${entry.path}`)
+      navigate(`/watch/${encodeMediaPath(entry.path)}`)
     }
   }
 

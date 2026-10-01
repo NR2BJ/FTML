@@ -1,3 +1,4 @@
+import { encodeMediaPath } from '@/utils/mediaPath'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getTree, getThumbnailUrl, batchFileInfo, type FileEntry, type MediaInfo, uploadFile, deleteFile, moveFile, createFolder } from '@/api/files'
@@ -412,16 +413,16 @@ export default function Browse() {
 
   const handleClick = (entry: FileEntry) => {
     if (entry.is_dir) {
-      navigate(`/browse/${entry.path}`)
+      navigate(`/browse/${encodeMediaPath(entry.path)}`)
     } else if (isVideoFile(entry.name)) {
-      navigate(`/watch/${entry.path}`)
+      navigate(`/watch/${encodeMediaPath(entry.path)}`)
     }
   }
 
   const goUp = () => {
     const parts = path.split('/')
     parts.pop()
-    navigate(parts.length > 0 ? `/browse/${parts.join('/')}` : '/')
+    navigate(parts.length > 0 ? `/browse/${encodeMediaPath(parts.join('/'))}` : '/')
   }
 
   const handleContextMenu = useCallback((e: React.MouseEvent, contextEntries: FileEntry[]) => {
@@ -495,7 +496,7 @@ export default function Browse() {
                     <span className="text-sm font-medium text-white truncate">{seg}</span>
                   ) : (
                     <button
-                      onClick={() => navigate(`/browse/${segPath}`)}
+                      onClick={() => navigate(`/browse/${encodeMediaPath(segPath)}`)}
                       className="text-sm text-gray-400 hover:text-white transition-colors truncate"
                     >
                       {seg}

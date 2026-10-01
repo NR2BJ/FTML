@@ -38,23 +38,30 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
   } = usePlayerStore()
   const addToast = useToastStore((s) => s.addToast)
   const [dragging, setDragging] = useState(false)
+  const [previewTime, setPreviewTime] = useState<number | null>(null)
+  const pendingSeek = useRef<number | null>(null)
   const progressBarRef = useRef<HTMLDivElement>(null)
 
-  const progress = duration > 0 ? (currentTime / duration) * 100 : 0
+  const progress = duration > 0 ? ((previewTime ?? currentTime) / duration) * 100 : 0
+
+  const previewSeek = (time: number) => {
+    pendingSeek.current = time
+    setPreviewTime(time)
+  }
 
   const handleProgressDown = (e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault()
     setDragging(true)
     const rect = e.currentTarget.getBoundingClientRect()
     const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-    onSeek(percent * duration)
+    previewSeek(percent * duration)
   }
 
   const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
     setDragging(true)
     const rect = e.currentTarget.getBoundingClientRect()
     const percent = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width))
-    onSeek(percent * duration)
+    previewSeek(percent * duration)
   }
 
   // Drag-to-seek: window-level listeners
@@ -65,15 +72,20 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
       if (!bar) return
       const rect = bar.getBoundingClientRect()
       const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-      onSeek(percent * duration)
+      previewSeek(percent * duration)
     }
     const handleTouchMove = (e: TouchEvent) => {
       if (!bar) return
       const rect = bar.getBoundingClientRect()
       const percent = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width))
-      onSeek(percent * duration)
+      previewSeek(percent * duration)
     }
-    const handleUp = () => setDragging(false)
+    const handleUp = () => {
+      if (pendingSeek.current !== null) onSeek(pendingSeek.current)
+      pendingSeek.current = null
+      setPreviewTime(null)
+      setDragging(false)
+    }
     window.addEventListener('mousemove', handleMove)
     window.addEventListener('mouseup', handleUp)
     window.addEventListener('touchmove', handleTouchMove)

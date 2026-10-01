@@ -1,6 +1,7 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import Player from '@/components/Player/Player'
+import { encodeMediaPath } from '@/utils/mediaPath'
 
 export default function Watch() {
   const params = useParams()
@@ -11,7 +12,7 @@ export default function Watch() {
     const parts = path.split('/')
     parts.pop() // remove filename
     const parentPath = parts.join('/')
-    navigate(parentPath ? `/browse/${parentPath}` : '/')
+    navigate(parentPath ? `/browse/${encodeMediaPath(parentPath)}` : '/')
   }
 
   if (!path) {
@@ -40,7 +41,7 @@ export default function Watch() {
         </div>
       </div>
       <div className="flex-1 min-h-0">
-        <Player path={path} />
+        <Player key={path} path={path} />
       </div>
     </div>
   )

@@ -5,7 +5,7 @@ import { getFileInfo } from '@/api/files'
 import { saveWatchPosition, getWatchPosition } from '@/api/user'
 import { listSubtitles } from '@/api/subtitle'
 import { detectBrowserCodecs } from '@/utils/codec'
-import { computeSessionID } from '@/utils/session'
+import { createSessionID, normalizeSeekTime } from '@/utils/session'
 import { getStoredAuthToken } from '@/utils/authToken'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useToastStore } from '@/stores/toastStore'
@@ -36,7 +36,11 @@ export default function Player({ path }: PlayerProps) {
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const sessionIDRef = useRef<string | null>(null)
   const startRequestSeqRef = useRef(0)
+  const playbackIntentRef = useRef(true)
+  const sourceChangingRef = useRef(false)
   const [useHLS, setUseHLS] = useState(true)
+  const [presetsReady, setPresetsReady] = useState(false)
+  const [ended, setEnded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [gestureText, setGestureText] = useState<string | null>(null)
   const gestureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -125,6 +129,9 @@ export default function Player({ path }: PlayerProps) {
 
   // Helper to start HLS playback from a given time
   const startHLS = useCallback((videoEl: HTMLVideoElement, filePath: string, q: string, startTime: number = 0, autoPlay: boolean = false) => {
+    sourceChangingRef.current = true
+    playbackIntentRef.current = autoPlay
+    stopCurrentSession()
     const requestSeq = startRequestSeqRef.current + 1
     startRequestSeqRef.current = requestSeq
 
@@ -137,23 +144,22 @@ export default function Player({ path }: PlayerProps) {
       hlsRef.current = null
     }
 
+    startTime = normalizeSeekTime(startTime)
     hlsStartTimeRef.current = startTime
+    absTimeRef.current = startTime
+    setEnded(false)
 
     // Get the current negotiated codec and audio track from the store
     const { negotiatedCodec: storeCodec, audioTrack: storeAudioTrack } = usePlayerStore.getState()
     const codec = storeCodec || undefined
 
-    // Compute session ID and start heartbeat
-    // The backend uses fullPath (mediaPath + videoPath) for the session ID,
-    // but generateSessionID uses videoPath (relative). We match that here.
-    computeSessionID(filePath, q, startTime, codec || 'h264', storeAudioTrack).then((sid) => {
-      if (startRequestSeqRef.current !== requestSeq) return
-      startHeartbeat(sid)
-    })
+    const sid = createSessionID()
+    startHeartbeat(sid)
 
     if (Hls.isSupported()) {
       const token = getStoredAuthToken()
       const hls = new Hls({
+        startPosition: 0,
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
         maxBufferHole: 0.5,
@@ -164,16 +170,22 @@ export default function Player({ path }: PlayerProps) {
         },
       })
       hlsRef.current = hls
-      hls.loadSource(getHLSUrl(filePath, q, startTime, codec, storeAudioTrack))
+      hls.loadSource(getHLSUrl(filePath, sid, q, startTime, codec, storeAudioTrack))
       hls.attachMedia(videoEl)
       let mediaRecoveryAttempts = 0
+      let networkRecoveryAttempts = 0
       hls.on(Hls.Events.ERROR, (_, data) => {
+        if (startRequestSeqRef.current !== requestSeq) return
         if (!data.fatal) return
 
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
-            hls.startLoad()
-            return
+            if (networkRecoveryAttempts < 2) {
+              networkRecoveryAttempts += 1
+              hls.startLoad()
+              return
+            }
+            break
           case Hls.ErrorTypes.MEDIA_ERROR:
             if (mediaRecoveryAttempts < 2) {
               mediaRecoveryAttempts += 1
@@ -184,20 +196,23 @@ export default function Player({ path }: PlayerProps) {
         }
 
         stopCurrentSession()
+        hls.destroy()
         setError(`Playback error: ${data.type}`)
       })
       if (autoPlay) {
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          videoEl.play()
+          videoEl.play().catch(() => {})
         })
       }
       setUseHLS(true)
     } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS
-      videoEl.src = getHLSUrl(filePath, q, startTime, codec, storeAudioTrack)
+      videoEl.src = getHLSUrl(filePath, sid, q, startTime, codec, storeAudioTrack)
       setUseHLS(true)
       if (autoPlay) {
-        videoEl.addEventListener('canplay', () => videoEl.play(), { once: true })
+        videoEl.addEventListener('canplay', () => {
+          if (startRequestSeqRef.current === requestSeq) videoEl.play().catch(() => {})
+        }, { once: true })
       }
     } else {
       setError('HLS is not supported in this browser')
@@ -211,6 +226,7 @@ export default function Player({ path }: PlayerProps) {
 
     const fullDur = probeDurationRef.current || duration
     const clampedTime = Math.max(0, Math.min(absTime, fullDur))
+    setEnded(false)
 
     // For direct play (not HLS), just seek directly
     if (!useHLS) {
@@ -235,12 +251,13 @@ export default function Player({ path }: PlayerProps) {
     }
 
     // Beyond the buffered range: restart HLS from the new position
-    const wasPlaying = !video.paused
-    startHLS(video, path, quality, clampedTime, wasPlaying)
+    const wasPlaying = playbackIntentRef.current
+    startHLS(video, path, quality === 'original' ? 'passthrough' : quality, clampedTime, wasPlaying)
   }, [path, quality, duration, useHLS, startHLS])
 
   // Reset state and fetch file info when path changes
   useEffect(() => {
+    let cancelled = false
     // Reset all player state for new video
     setCurrentTime(0)
     setDuration(0)
@@ -253,13 +270,20 @@ export default function Player({ path }: PlayerProps) {
     usePlayerStore.getState().setSecondarySubtitle(null)
     usePlayerStore.getState().clearABLoop()
     usePlayerStore.getState().setChapters([])
+    usePlayerStore.getState().setAudioTrack(0)
+    setQualityPresets([])
+    setCurrentFile(path)
+    setPresetsReady(false)
+    setEnded(false)
     probeDurationRef.current = 0
     lastSavedTimeRef.current = 0
     hlsStartTimeRef.current = 0
+    absTimeRef.current = 0
 
     // Fetch real duration and media info from FFprobe
     getFileInfo(path)
       .then(({ data }) => {
+        if (cancelled) return
         setMediaInfo(data)
         if (data.duration) {
           const dur = parseFloat(data.duration)
@@ -276,6 +300,7 @@ export default function Player({ path }: PlayerProps) {
     // Fetch saved watch position for resume
     getWatchPosition(path)
       .then(({ data }) => {
+        if (cancelled) return
         if (data.position && data.position > 0) {
           setResumePosition(data.position)
         }
@@ -285,6 +310,7 @@ export default function Player({ path }: PlayerProps) {
     // Fetch available subtitles and auto-select based on preferences
     listSubtitles(path)
       .then(({ data }) => {
+        if (cancelled) return
         if (data && data.length > 0) {
           setSubtitles(data)
           // Auto-select subtitle based on saved preferences
@@ -304,19 +330,24 @@ export default function Player({ path }: PlayerProps) {
       })
       .catch(() => {})
 
-  }, [path, setCurrentTime, setDuration, setPlaying, setResumePosition, setHasResumed, setMediaInfo, setSubtitles, setActiveSubtitle])
+    return () => { cancelled = true }
+  }, [path, setCurrentTime, setDuration, setPlaying, setResumePosition, setHasResumed, setMediaInfo, setSubtitles, setActiveSubtitle, setQualityPresets, setCurrentFile])
 
   // Fetch quality presets — waits for codec negotiation to complete so that
   // passthrough/original options are correctly generated based on browser capabilities.
   // Without codec info, the backend can't determine if passthrough is safe.
   useEffect(() => {
     if (!path || !negotiatedCodec) return
+    let cancelled = false
+    setPresetsReady(false)
 
     const { browserCodecs: bc } = usePlayerStore.getState()
     getPresets(path, negotiatedCodec, bc || undefined)
       .then((res) => {
+        if (cancelled) return
         const presets = res.data
         if (presets && presets.length > 0) {
+          setPresetsReady(true)
           // Keep all presets - QualitySelector handles disabling original when audio incompatible
           setQualityPresets(presets)
           // If current quality isn't available or not usable, select the best alternative
@@ -359,7 +390,8 @@ export default function Player({ path }: PlayerProps) {
           }
         }
       })
-      .catch(() => {})
+      .catch(() => { if (!cancelled) setError('재생 정보를 불러오지 못했습니다. 화면을 새로고침해 주세요.') })
+    return () => { cancelled = true }
   }, [path, negotiatedCodec, setQualityPresets, setQuality])
 
   // Resume playback from saved position after media is ready
@@ -422,7 +454,7 @@ export default function Player({ path }: PlayerProps) {
     // Wait for quality presets to load before starting any playback.
     // This prevents direct play with "original" from localStorage before
     // preset validation has a chance to redirect to a compatible quality.
-    if (qualityPresets.length === 0) return
+    if (!presetsReady || qualityPresets.length === 0) return
 
     // Wait for codec negotiation to complete before starting HLS
     // (original quality uses direct play, doesn't need codec negotiation)
@@ -434,7 +466,7 @@ export default function Player({ path }: PlayerProps) {
     // Save current absolute time for quality/audio-track switches (not new videos)
     // Use absTimeRef which survives HLS destroy from the cleanup of the previous effect run
     const savedAbsTime = absTimeRef.current
-    const wasPlaying = !video.paused
+    const wasPlaying = playbackIntentRef.current
 
     // Cleanup previous HLS instance
     if (hlsRef.current) {
@@ -443,39 +475,49 @@ export default function Player({ path }: PlayerProps) {
     }
 
     // Direct play only when user explicitly selects "original" quality
-    if (quality === 'original') {
+    if (quality === 'original' && audioTrack === 0) {
+      sourceChangingRef.current = true
       // Stop the HLS session on server when switching to original
       stopCurrentSession()
       video.src = getDirectUrl(path)
       setUseHLS(false)
       hlsStartTimeRef.current = 0
       // Seek back if quality switch
-      if (savedAbsTime > 0) {
-        video.addEventListener('loadedmetadata', () => {
+      const restorePosition = () => {
+        if (savedAbsTime > 0) {
           video.currentTime = savedAbsTime
-          if (wasPlaying) video.play()
-        }, { once: true })
+        }
+        if (wasPlaying) video.play().catch(() => {})
       }
-      return
+      video.addEventListener('loadedmetadata', restorePosition, { once: true })
+      return () => {
+        sourceChangingRef.current = true
+        video.removeEventListener('loadedmetadata', restorePosition)
+        video.pause()
+        video.removeAttribute('src')
+        video.load()
+      }
     }
 
     // Use HLS for all transcode qualities
     // For quality switch, start from the saved position
+    const effectiveQuality = quality === 'original' ? 'passthrough' : quality
     if (savedAbsTime > 0) {
-      startHLS(video, path, quality, savedAbsTime, wasPlaying)
+      startHLS(video, path, effectiveQuality, savedAbsTime, wasPlaying)
     } else {
-      startHLS(video, path, quality, 0, true)
+      startHLS(video, path, effectiveQuality, 0, true)
     }
 
     return () => {
+      sourceChangingRef.current = true
+      stopCurrentSession()
       if (hlsRef.current) {
         hlsRef.current.destroy()
         hlsRef.current = null
       }
       // Stop session on unmount or when dependencies change (quality switch)
-      stopCurrentSession()
     }
-  }, [path, quality, qualityPresets, audioTrack, negotiatedCodec, setCurrentFile, startHLS, stopCurrentSession])
+  }, [path, quality, qualityPresets, presetsReady, audioTrack, negotiatedCodec, setCurrentFile, startHLS, stopCurrentSession])
 
   // Sync volume/muted/playbackRate
   useEffect(() => {
@@ -487,6 +529,7 @@ export default function Player({ path }: PlayerProps) {
   }, [volume, muted, playbackRate])
 
   const handleTimeUpdate = useCallback(() => {
+    if (sourceChangingRef.current) return
     const video = videoRef.current
     if (video) {
       // Report absolute time (HLS video.currentTime is relative to transcode start)
@@ -503,6 +546,7 @@ export default function Player({ path }: PlayerProps) {
   }, [setCurrentTime, seek])
 
   const handleLoadedMetadata = useCallback(() => {
+    sourceChangingRef.current = false
     const video = videoRef.current
     if (video && isFinite(video.duration) && video.duration > 0) {
       // For direct play, use the video's reported duration
@@ -514,6 +558,8 @@ export default function Player({ path }: PlayerProps) {
   }, [setDuration, useHLS])
 
   const handlePlay = useCallback(() => {
+    playbackIntentRef.current = true
+    setEnded(false)
     setPlaying(true)
     // Resume the frozen FFmpeg process and restart heartbeat
     if (sessionIDRef.current) {
@@ -525,6 +571,8 @@ export default function Player({ path }: PlayerProps) {
   }, [setPlaying, startHeartbeat])
 
   const handlePause = useCallback(() => {
+    if (sourceChangingRef.current) return
+    playbackIntentRef.current = false
     setPlaying(false)
     // Freeze the FFmpeg process immediately (SIGSTOP) to release GPU
     if (sessionIDRef.current) {
@@ -572,6 +620,7 @@ export default function Player({ path }: PlayerProps) {
     let startY = 0
     let direction: 'none' | 'horizontal' | 'vertical' = 'none'
     let startTime = 0
+    let pendingTouchSeek: number | null = null
     let startVolume = 0
 
     const showGesture = (text: string) => {
@@ -586,6 +635,7 @@ export default function Player({ path }: PlayerProps) {
       startX = touch.clientX
       startY = touch.clientY
       direction = 'none'
+      pendingTouchSeek = null
       startTime = video.currentTime + hlsStartTimeRef.current
       startVolume = video.volume
     }
@@ -617,7 +667,7 @@ export default function Player({ path }: PlayerProps) {
         const absTarget = startTime + seekSeconds
         const sign = seekSeconds >= 0 ? '+' : ''
         showGesture(`${sign}${Math.round(seekSeconds)}s`)
-        seek(absTarget)
+        pendingTouchSeek = absTarget
       } else if (direction === 'vertical') {
         // Vertical swipe on right side → volume
         const rect = container.getBoundingClientRect()
@@ -633,6 +683,8 @@ export default function Player({ path }: PlayerProps) {
     }
 
     const handleTouchEnd = () => {
+      if (pendingTouchSeek !== null) seek(pendingTouchSeek)
+      pendingTouchSeek = null
       direction = 'none'
     }
 
@@ -785,6 +837,7 @@ export default function Player({ path }: PlayerProps) {
         onLoadedMetadata={handleLoadedMetadata}
         onPlay={handlePlay}
         onPause={handlePause}
+        onEnded={() => { setEnded(true); setPlaying(false) }}
       />
       {/* Gesture feedback overlay */}
       {gestureText && (
@@ -795,7 +848,7 @@ export default function Player({ path }: PlayerProps) {
         </div>
       )}
       <SubtitleDisplay videoRef={videoRef} path={path} />
-      <NextEpisodeOverlay path={path} />
+      <NextEpisodeOverlay path={path} ended={ended} />
       <PlaybackStats videoRef={videoRef} hlsRef={hlsRef} />
       <Controls
         videoRef={videoRef}

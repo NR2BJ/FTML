@@ -1,3 +1,4 @@
+import { encodeMediaPath } from '@/utils/mediaPath'
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { getTree, type FileEntry } from '@/api/files'
@@ -17,7 +18,7 @@ function TreeNode({ entry, level = 0, onNavigate }: { entry: FileEntry; level?: 
   const handleToggle = async () => {
     if (!entry.is_dir) {
       if (isVideoFile(entry.name)) {
-        navigate(`/watch/${entry.path}`)
+        navigate(`/watch/${encodeMediaPath(entry.path)}`)
         onNavigate?.()
       }
       return

@@ -17,7 +17,6 @@ import (
 const (
 	vaapiFailThreshold        = 5 * time.Second  // fast-fail detection for VAAPI/hybrid fallback
 	cleanupInterval           = 15 * time.Second // session cleanup ticker
-	maxSessionAge             = 30 * time.Minute // hard limit for any session
 	heartbeatTimeout          = 2 * time.Minute  // no heartbeat → kill
 	pauseMaxDuration          = 5 * time.Minute  // paused too long without heartbeat
 	pauseHeartbeatThreshold   = 90 * time.Second // heartbeat freshness for long-paused sessions
@@ -30,6 +29,9 @@ const (
 
 type HLSSession struct {
 	ID            string
+	OwnerID       int64
+	StartTime     float64
+	AudioTrack    int
 	InputPath     string
 	Quality       string
 	Codec         string // "h264", "hevc", "av1", "vp9"
@@ -42,6 +44,7 @@ type HLSSession struct {
 	Paused        bool      // true when FFmpeg is frozen via SIGSTOP
 	PausedAt      time.Time // when the session was paused
 	FFmpegDone    bool      // true after FFmpeg process exits (all segments written)
+	Failure       string
 }
 
 type HLSManager struct {
@@ -97,11 +100,17 @@ func NewHLSManager(baseDir string) *HLSManager {
 	return m
 }
 
-func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime float64, quality, codec string, params *TranscodeParams) (*HLSSession, error) {
+func (m *HLSManager) GetOrCreateSession(sessionID string, ownerID int64, inputPath string, startTime float64, quality, codec string, params *TranscodeParams) (*HLSSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if s, ok := m.sessions[sessionID]; ok {
+		if s.OwnerID != ownerID || s.InputPath != inputPath || s.StartTime != startTime || s.Quality != quality || s.Codec != codec || (params != nil && s.AudioTrack != params.AudioStreamIndex) {
+			return nil, fmt.Errorf("재생 작업이 다른 요청에 사용 중입니다")
+		}
+		if s.Failure != "" {
+			return nil, fmt.Errorf("변환 작업 실패: %s", s.Failure)
+		}
 		return s, nil
 	}
 
@@ -180,6 +189,9 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 	now := time.Now()
 	session := &HLSSession{
 		ID:            sessionID,
+		OwnerID:       ownerID,
+		StartTime:     startTime,
+		AudioTrack:    params.AudioStreamIndex,
 		InputPath:     inputPath,
 		Quality:       quality,
 		Codec:         codec,
@@ -211,6 +223,8 @@ func (m *HLSManager) GetOrCreateSession(sessionID, inputPath string, startTime f
 				m.retryWithHybrid(sessionID, inputPath, outputDir, startTime, quality, codec, params)
 			} else if wasStopped {
 				log.Printf("[HLS] Session was intentionally stopped, skipping SW fallback: session=%s", sessionID)
+			} else {
+				m.markFailed(sessionID, err)
 			}
 		} else {
 			log.Printf("[HLS] FFmpeg completed: session=%s", sessionID)
@@ -262,7 +276,7 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 
 	// Seek before input for fast seeking
 	if startTime > 0 {
-		args = append(args, "-ss", fmt.Sprintf("%.2f", startTime))
+		args = append(args, "-ss", fmt.Sprintf("%.3f", startTime))
 	}
 
 	// Audio stream mapping: use the specified audio stream index
@@ -466,6 +480,12 @@ func appendSoftwareArgs(args []string, params *TranscodeParams) []string {
 // (CPU decode + GPU encode). This is tried before full software fallback
 // because GPU encoding is much faster than CPU encoding.
 func (m *HLSManager) retryWithHybrid(sessionID, inputPath, outputDir string, startTime float64, quality, codec string, origParams *TranscodeParams) {
+	m.mu.Lock()
+	session, exists := m.sessions[sessionID]
+	if !exists || session.Stopped {
+		m.mu.Unlock()
+		return
+	}
 	resetOutputDir(outputDir)
 
 	// Build hybrid params: keep VAAPI encoder + device, clear hwaccel decode
@@ -488,6 +508,7 @@ func (m *HLSManager) retryWithHybrid(sessionID, inputPath, outputDir string, sta
 	log.Printf("[HLS] Retrying with hybrid (CPU decode + GPU encode): session=%s encoder=%s", sessionID, hybridParams.Encoder)
 
 	if err := cmd.Start(); err != nil {
+		m.mu.Unlock()
 		cancel()
 		if logFile != nil {
 			logFile.Close()
@@ -498,7 +519,6 @@ func (m *HLSManager) retryWithHybrid(sessionID, inputPath, outputDir string, sta
 	}
 
 	// Update the session in-place and register in fallback cache
-	m.mu.Lock()
 	if s, ok := m.sessions[sessionID]; ok {
 		s.Cmd = cmd
 		s.Cancel = cancel
@@ -524,6 +544,7 @@ func (m *HLSManager) retryWithHybrid(sessionID, inputPath, outputDir string, sta
 			} else {
 				log.Printf("[HLS] Hybrid fallback failed: session=%s err=%v elapsed=%v", sessionID, err, elapsed)
 				logFFmpegTail(outputDir, sessionID)
+				m.markFailed(sessionID, err)
 			}
 		} else {
 			log.Printf("[HLS] Hybrid fallback completed: session=%s encoder=%s", sessionID, hybridParams.Encoder)
@@ -548,6 +569,13 @@ func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, s
 	fallback, ok := swEncoder[origParams.Encoder]
 	if !ok {
 		log.Printf("[HLS] No software fallback for encoder %s", origParams.Encoder)
+		m.markFailed(sessionID, fmt.Errorf("사용 가능한 대체 인코더가 없습니다"))
+		return
+	}
+	m.mu.Lock()
+	session, exists := m.sessions[sessionID]
+	if !exists || session.Stopped {
+		m.mu.Unlock()
 		return
 	}
 
@@ -573,16 +601,17 @@ func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, s
 	log.Printf("[HLS] Retrying with software: session=%s encoder=%s", sessionID, fallback)
 
 	if err := cmd.Start(); err != nil {
+		m.mu.Unlock()
 		cancel()
 		if logFile != nil {
 			logFile.Close()
 		}
 		log.Printf("[HLS] Software fallback failed to start: session=%s err=%v", sessionID, err)
+		m.markFailed(sessionID, err)
 		return
 	}
 
 	// Update the session in-place and register in fallback cache
-	m.mu.Lock()
 	if s, ok := m.sessions[sessionID]; ok {
 		s.Cmd = cmd
 		s.Cancel = cancel
@@ -605,6 +634,7 @@ func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, s
 			} else {
 				log.Printf("[HLS] Software fallback also failed: session=%s err=%v", sessionID, err)
 				logFFmpegTail(outputDir, sessionID)
+				m.markFailed(sessionID, err)
 			}
 		} else {
 			log.Printf("[HLS] Software fallback completed: session=%s encoder=%s", sessionID, fallback)
@@ -619,6 +649,30 @@ func (m *HLSManager) retryWithSoftware(sessionID, inputPath, outputDir string, s
 
 func (m *HLSManager) GetSessionDir(sessionID string) string {
 	return filepath.Join(m.baseDir, sessionID)
+}
+
+func (m *HLSManager) OwnsSession(sessionID string, ownerID int64) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	s, ok := m.sessions[sessionID]
+	return ok && !s.Stopped && s.OwnerID == ownerID
+}
+
+func (m *HLSManager) markFailed(sessionID string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.sessions[sessionID]; ok && !s.Stopped {
+		s.Failure = err.Error()
+	}
+}
+
+func (m *HLSManager) SessionFailure(sessionID string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if s, ok := m.sessions[sessionID]; ok {
+		return s.Failure
+	}
+	return "재생 작업이 종료되었습니다"
 }
 
 // SessionInfo is a snapshot of an active HLS session for API responses.
@@ -719,30 +773,6 @@ func (m *HLSManager) StopSession(sessionID string) {
 	}
 }
 
-// StopSessionsForPath stops all sessions for a given video file, quality, and codec
-// except the one with the given excludeID. Used when seeking to a new position.
-func (m *HLSManager) StopSessionsForPath(inputPath, quality, codec, excludeID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for id, s := range m.sessions {
-		if id != excludeID && s.InputPath == inputPath && s.Quality == quality && s.Codec == codec {
-			s.Stopped = true
-			// SIGCONT first if paused so kill signal can be delivered
-			if s.Paused && s.Cmd != nil && s.Cmd.Process != nil {
-				s.Cmd.Process.Signal(syscall.SIGCONT)
-			}
-			s.Cancel()
-			os.RemoveAll(s.OutputDir)
-			delete(m.sessions, id)
-			// Clean fallback cache on explicit stop (seek to new position)
-			delete(m.fallbackCache, id)
-			delete(m.fallbackCacheTime, id)
-			log.Printf("[HLS] Stopped old session: %s (replaced by seek)", id)
-		}
-	}
-}
-
 // Heartbeat updates the last heartbeat time for a session.
 // Returns true if the session exists, false otherwise.
 func (m *HLSManager) Heartbeat(sessionID string) bool {
@@ -760,63 +790,54 @@ func (m *HLSManager) cleanup() {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		m.mu.Lock()
-		now := time.Now()
-		for id, s := range m.sessions {
-			// Hard limit: max session age (applies to all sessions)
-			if now.Sub(s.CreatedAt) > maxSessionAge {
+	for now := range ticker.C {
+		m.cleanupAt(now)
+	}
+}
+
+func (m *HLSManager) cleanupAt(now time.Time) {
+	m.mu.Lock()
+	for id, s := range m.sessions {
+		// Paused sessions: keep alive as long as client sends heartbeats (60s interval).
+		// Default 5-minute timeout if no heartbeats received.
+		if s.Paused {
+			pausedDur := now.Sub(s.PausedAt)
+			heartbeatAge := now.Sub(s.LastHeartbeat)
+			// Kill if no heartbeat for too long, or paused too long without refresh
+			if heartbeatAge > heartbeatTimeout || (pausedDur > pauseMaxDuration && heartbeatAge > pauseHeartbeatThreshold) {
 				s.Stopped = true
-				if s.Paused && s.Cmd != nil && s.Cmd.Process != nil {
+				if s.Cmd != nil && s.Cmd.Process != nil {
 					s.Cmd.Process.Signal(syscall.SIGCONT)
 				}
 				s.Cancel()
 				os.RemoveAll(s.OutputDir)
 				delete(m.sessions, id)
-				log.Printf("[HLS] Stopped session: %s (max age %v)", id, maxSessionAge)
-				continue
+				log.Printf("[HLS] Stopped paused session: %s (paused %.0fs, last heartbeat %.0fs ago)", id, pausedDur.Seconds(), heartbeatAge.Seconds())
 			}
-			// Paused sessions: keep alive as long as client sends heartbeats (60s interval).
-			// Default 5-minute timeout if no heartbeats received.
-			if s.Paused {
-				pausedDur := now.Sub(s.PausedAt)
-				heartbeatAge := now.Sub(s.LastHeartbeat)
-				// Kill if no heartbeat for too long, or paused too long without refresh
-				if heartbeatAge > heartbeatTimeout || (pausedDur > pauseMaxDuration && heartbeatAge > pauseHeartbeatThreshold) {
-					s.Stopped = true
-					if s.Cmd != nil && s.Cmd.Process != nil {
-						s.Cmd.Process.Signal(syscall.SIGCONT)
-					}
-					s.Cancel()
-					os.RemoveAll(s.OutputDir)
-					delete(m.sessions, id)
-					log.Printf("[HLS] Stopped paused session: %s (paused %.0fs, last heartbeat %.0fs ago)", id, pausedDur.Seconds(), heartbeatAge.Seconds())
-				}
-				continue // skip active heartbeat check for paused sessions
-			}
-			// Active sessions: idle timeout depends on FFmpeg state.
-			// If FFmpeg already finished (all segments written), use 5-minute timeout
-			// so viewers can watch the remaining buffered content.
-			// If FFmpeg is still running, use 45s timeout.
-			activeTimeout := activeHeartbeatTimeout
-			if s.FFmpegDone {
-				activeTimeout = completedHeartbeatTimeout
-			}
-			if now.Sub(s.LastHeartbeat) > activeTimeout {
-				s.Stopped = true
-				s.Cancel()
-				os.RemoveAll(s.OutputDir)
-				delete(m.sessions, id)
-				log.Printf("[HLS] Stopped session: %s (heartbeat timeout %.0fs)", id, activeTimeout.Seconds())
-			}
+			continue // skip active heartbeat check for paused sessions
 		}
-		// Purge stale fallback cache entries
-		for id, t := range m.fallbackCacheTime {
-			if now.Sub(t) > fallbackCacheTTL {
-				delete(m.fallbackCache, id)
-				delete(m.fallbackCacheTime, id)
-			}
+		// Active sessions: idle timeout depends on FFmpeg state.
+		// If FFmpeg already finished (all segments written), use 5-minute timeout
+		// so viewers can watch the remaining buffered content.
+		// If FFmpeg is still running, use 45s timeout.
+		activeTimeout := activeHeartbeatTimeout
+		if s.FFmpegDone {
+			activeTimeout = completedHeartbeatTimeout
 		}
-		m.mu.Unlock()
+		if now.Sub(s.LastHeartbeat) > activeTimeout {
+			s.Stopped = true
+			s.Cancel()
+			os.RemoveAll(s.OutputDir)
+			delete(m.sessions, id)
+			log.Printf("[HLS] Stopped session: %s (heartbeat timeout %.0fs)", id, activeTimeout.Seconds())
+		}
 	}
+	// Purge stale fallback cache entries
+	for id, t := range m.fallbackCacheTime {
+		if now.Sub(t) > fallbackCacheTTL {
+			delete(m.fallbackCache, id)
+			delete(m.fallbackCacheTime, id)
+		}
+	}
+	m.mu.Unlock()
 }

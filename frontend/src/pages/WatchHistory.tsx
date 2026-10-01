@@ -1,3 +1,4 @@
+import { encodeMediaPath } from '@/utils/mediaPath'
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Clock, Trash2, Play } from 'lucide-react'
@@ -72,7 +73,7 @@ export default function WatchHistory() {
               >
                 <div className="flex items-center gap-4">
                   <button
-                    onClick={() => navigate(`/watch/${entry.file_path}`)}
+                    onClick={() => navigate(`/watch/${encodeMediaPath(entry.file_path)}`)}
                     className="flex-1 text-left min-w-0"
                   >
                     <div className="flex items-center gap-2 mb-2">

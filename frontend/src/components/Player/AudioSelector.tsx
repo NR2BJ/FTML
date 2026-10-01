@@ -87,6 +87,9 @@ export default function AudioSelector() {
               <button
                 key={stream.stream_index}
                 onClick={() => {
+                  if (usePlayerStore.getState().quality === 'original' && stream.stream_index !== 0) {
+                    usePlayerStore.getState().setQuality('passthrough')
+                  }
                   setAudioTrack(stream.stream_index)
                   setOpen(false)
                 }}

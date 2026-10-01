@@ -3,29 +3,33 @@ import { useNavigate } from 'react-router-dom'
 import { SkipForward, X } from 'lucide-react'
 import { getSiblings } from '@/api/files'
 import { usePlayerStore } from '@/stores/playerStore'
+import { encodeMediaPath } from '@/utils/mediaPath'
 
 interface NextEpisodeOverlayProps {
   path: string
+  ended: boolean
 }
 
-export default function NextEpisodeOverlay({ path }: NextEpisodeOverlayProps) {
+export default function NextEpisodeOverlay({ path, ended }: NextEpisodeOverlayProps) {
   const navigate = useNavigate()
   const { currentTime, duration } = usePlayerStore()
   const [nextFile, setNextFile] = useState<string | null>(null)
   const [nextPath, setNextPath] = useState<string | null>(null)
-  const [showOverlay, setShowOverlay] = useState(false)
   const [countdown, setCountdown] = useState(10)
   const [dismissed, setDismissed] = useState(false)
+  const showOverlay = !!nextFile && !dismissed && duration > 0 && (ended || duration - currentTime <= 30)
 
   // Fetch siblings and determine next file
   useEffect(() => {
+    let cancelled = false
     setNextFile(null)
     setNextPath(null)
     setDismissed(false)
-    setShowOverlay(false)
+    setCountdown(10)
 
     getSiblings(path)
       .then(({ data }) => {
+        if (cancelled) return
         const { current, dir, files } = data
         if (!files || files.length === 0) return
         const idx = files.indexOf(current)
@@ -36,46 +40,31 @@ export default function NextEpisodeOverlay({ path }: NextEpisodeOverlayProps) {
         }
       })
       .catch(() => {})
+    return () => { cancelled = true }
   }, [path])
 
-  // Show overlay when near end
+  // Automatic navigation starts only after the media element actually ends.
   useEffect(() => {
-    if (!nextFile || dismissed || duration <= 0) return
-
-    const timeRemaining = duration - currentTime
-    if (timeRemaining <= 30 && timeRemaining > 0) {
-      if (!showOverlay) {
-        setShowOverlay(true)
-        setCountdown(10)
-      }
-    }
-  }, [currentTime, duration, nextFile, dismissed, showOverlay])
-
-  // Countdown timer
-  useEffect(() => {
-    if (!showOverlay || dismissed) return
+    if (!ended) { setCountdown(10); return }
+    if (!nextPath || dismissed) return
 
     const timer = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          // Auto-play next
-          if (nextPath) navigate(`/watch/${nextPath}`)
-          return 0
-        }
-        return prev - 1
-      })
+      setCountdown((prev) => Math.max(0, prev - 1))
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [showOverlay, dismissed, nextPath, navigate])
+  }, [ended, dismissed, nextPath])
+
+  useEffect(() => {
+    if (ended && !dismissed && countdown === 0 && nextPath) navigate(`/watch/${encodeMediaPath(nextPath)}`)
+  }, [ended, dismissed, countdown, nextPath, navigate])
 
   const playNow = useCallback(() => {
-    if (nextPath) navigate(`/watch/${nextPath}`)
+    if (nextPath) navigate(`/watch/${encodeMediaPath(nextPath)}`)
   }, [nextPath, navigate])
 
   const dismiss = useCallback(() => {
     setDismissed(true)
-    setShowOverlay(false)
   }, [])
 
   if (!showOverlay || !nextFile || dismissed) return null
@@ -100,14 +89,14 @@ export default function NextEpisodeOverlay({ path }: NextEpisodeOverlayProps) {
           Play Now
         </button>
         <span className="text-xs text-gray-500 tabular-nums shrink-0">
-          {countdown}s
+          {ended ? `${countdown}s` : '종료 후 이동'}
         </span>
       </div>
       {/* Countdown progress bar */}
       <div className="h-0.5 bg-dark-700 rounded-full mt-2 overflow-hidden">
         <div
           className="h-full bg-primary-500 transition-all duration-1000 ease-linear"
-          style={{ width: `${(countdown / 10) * 100}%` }}
+          style={{ width: ended ? `${(countdown / 10) * 100}%` : '0%' }}
         />
       </div>
     </div>

@@ -24,9 +24,12 @@ import (
 // extractPath extracts and URL-decodes the wildcard path from chi router
 func extractPath(r *http.Request) string {
 	path := chi.URLParam(r, "*")
-	decoded, err := url.PathUnescape(path)
-	if err != nil {
-		return path
+	decoded := path
+	// chi routes on RawPath when present, otherwise URL.Path is already decoded.
+	if r.URL.RawPath != "" {
+		if value, err := url.PathUnescape(path); err == nil {
+			decoded = value
+		}
 	}
 	// Clean any double slashes or trailing slashes
 	decoded = strings.TrimPrefix(decoded, "/")
