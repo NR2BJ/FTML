@@ -7,6 +7,8 @@ data/
 
 # Build
 backend/server
+*.tsbuildinfo
+.syncthing.*.tmp
 
 # OS
 .DS_Store
@@ -22,3 +24,4 @@ backend/server
 
 # Env
 .env
+worklog.md
