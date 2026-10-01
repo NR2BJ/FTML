@@ -32,6 +32,7 @@ interface PlayerState {
   // Quality
   quality: string
   qualityPresets: QualityOption[]
+  compatibilityMode: boolean
   // Audio track
   audioTrack: number  // audio-only stream index (0-based)
   // Codec (Phase 3)
@@ -63,6 +64,7 @@ interface PlayerState {
   setSubtitleVisible: (v: boolean) => void
   setQuality: (q: string) => void
   setQualityPresets: (presets: QualityOption[]) => void
+  setCompatibilityMode: (enabled: boolean) => void
   setAudioTrack: (idx: number) => void
   setNegotiatedCodec: (codec: string, encoder: string, hwaccel: string) => void
   setBrowserCodecs: (caps: BrowserCodecSupport) => void
@@ -91,6 +93,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   subtitleVisible: true,
   quality: localStorage.getItem('ftml-quality') || '720p',
   qualityPresets: [],
+  compatibilityMode: false,
   audioTrack: 0,
   negotiatedCodec: null,
   negotiatedEncoder: null,
@@ -117,9 +120,10 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   setSubtitleVisible: (v) => set({ subtitleVisible: v }),
   setQuality: (q) => {
     localStorage.setItem('ftml-quality', q)
-    set({ quality: q })
+    set({ quality: q, compatibilityMode: false })
   },
   setQualityPresets: (presets) => set({ qualityPresets: presets }),
+  setCompatibilityMode: (enabled) => set({ compatibilityMode: enabled }),
   setAudioTrack: (idx) => set({ audioTrack: idx }),
   setNegotiatedCodec: (codec, encoder, hwaccel) => set({
     negotiatedCodec: codec,

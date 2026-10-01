@@ -34,14 +34,15 @@ func NewStreamHandler(mediaPath string, hlsManager *ffmpeg.HLSManager) *StreamHa
 // Query params: ?h264=true&hevc=true&av1=true&vp9=true
 func (h *StreamHandler) CapabilitiesHandler(w http.ResponseWriter, r *http.Request) {
 	browser := ffmpeg.BrowserCodecs{
-		H264: r.URL.Query().Get("h264") == "true",
-		HEVC: r.URL.Query().Get("hevc") == "true",
-		AV1:  r.URL.Query().Get("av1") == "true",
-		VP9:  r.URL.Query().Get("vp9") == "true",
-		AAC:  r.URL.Query().Get("aac") != "false", // default true for AAC
-		Opus: r.URL.Query().Get("opus") == "true",
-		FLAC: r.URL.Query().Get("flac") == "true",
-		AC3:  r.URL.Query().Get("ac3") == "true",
+		H264:   r.URL.Query().Get("h264") == "true",
+		HEVC:   r.URL.Query().Get("hevc") == "true",
+		HEVC10: r.URL.Query().Get("hevc10") == "true",
+		AV1:    r.URL.Query().Get("av1") == "true",
+		VP9:    r.URL.Query().Get("vp9") == "true",
+		AAC:    r.URL.Query().Get("aac") != "false", // default true for AAC
+		Opus:   r.URL.Query().Get("opus") == "true",
+		FLAC:   r.URL.Query().Get("flac") == "true",
+		AC3:    r.URL.Query().Get("ac3") == "true",
 	}
 
 	caps := ffmpeg.GetCapabilities()
@@ -363,10 +364,11 @@ func (h *StreamHandler) DirectPlay(w http.ResponseWriter, r *http.Request) {
 func parseCodecParams(r *http.Request) (ffmpeg.Codec, *ffmpeg.EncoderInfo, ffmpeg.BrowserCodecs) {
 	browser := ffmpeg.BrowserCodecs{
 		// Video
-		H264: r.URL.Query().Get("h264") != "false", // default true for h264
-		HEVC: r.URL.Query().Get("hevc") == "true",
-		AV1:  r.URL.Query().Get("av1") == "true",
-		VP9:  r.URL.Query().Get("vp9") == "true",
+		H264:   r.URL.Query().Get("h264") != "false", // default true for h264
+		HEVC:   r.URL.Query().Get("hevc") == "true",
+		HEVC10: r.URL.Query().Get("hevc10") == "true",
+		AV1:    r.URL.Query().Get("av1") == "true",
+		VP9:    r.URL.Query().Get("vp9") == "true",
 		// Audio
 		AAC:  r.URL.Query().Get("aac") != "false", // default true for AAC
 		Opus: r.URL.Query().Get("opus") == "true",

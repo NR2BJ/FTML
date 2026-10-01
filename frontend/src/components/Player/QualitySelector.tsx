@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { usePlayerStore } from '@/stores/playerStore'
+import { compatibleQuality } from '@/utils/playback'
 
 export default function QualitySelector() {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const { quality, qualityPresets, setQuality, negotiatedCodec } = usePlayerStore()
+  const { quality, qualityPresets, setQuality, negotiatedCodec, compatibilityMode } = usePlayerStore()
 
   // Close menu on outside click
   useEffect(() => {
@@ -18,9 +19,10 @@ export default function QualitySelector() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [open])
 
-  const currentPreset = qualityPresets.find((q) => q.value === quality)
+  const effectiveQuality = compatibilityMode ? compatibleQuality(quality, qualityPresets) : quality
+  const currentPreset = qualityPresets.find((q) => q.value === effectiveQuality)
   const currentLabel = currentPreset?.label || quality
-  const codecBadge = negotiatedCodec ? negotiatedCodec.toUpperCase() : null
+  const codecBadge = compatibilityMode ? 'H264' : negotiatedCodec ? negotiatedCodec.toUpperCase() : null
 
   // Don't render if no presets loaded yet
   if (qualityPresets.length === 0) return null
@@ -47,7 +49,8 @@ export default function QualitySelector() {
         title="Quality"
       >
         {currentLabel}
-        {codecBadge && quality !== 'original' && quality !== 'passthrough' && (
+        {compatibilityMode && <span className="ml-1 text-xs text-yellow-400">호환 변환</span>}
+        {codecBadge && effectiveQuality !== 'original' && effectiveQuality !== 'passthrough' && (
           <span className="ml-1 text-[10px] text-primary-400 font-semibold">{codecBadge}</span>
         )}
       </button>
@@ -89,8 +92,8 @@ export default function QualitySelector() {
                 {isAudioIncompat && (
                   <span className="text-[10px] text-yellow-500/70 ml-1">(audio convert)</span>
                 )}
-                {codecBadge && opt.value !== 'original' && opt.value !== 'passthrough' && (
-                  <span className="text-[10px] text-primary-400 font-semibold ml-1">{codecBadge}</span>
+                {negotiatedCodec && opt.value !== 'original' && opt.value !== 'passthrough' && (
+                  <span className="text-[10px] text-primary-400 font-semibold ml-1">{negotiatedCodec.toUpperCase()}</span>
                 )}
                 <span className="text-xs text-gray-500 ml-2">{opt.desc}</span>
               </button>

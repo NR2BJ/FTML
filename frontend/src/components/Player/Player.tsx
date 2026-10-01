@@ -6,6 +6,7 @@ import { saveWatchPosition, getWatchPosition } from '@/api/user'
 import { listSubtitles } from '@/api/subtitle'
 import { detectBrowserCodecs } from '@/utils/codec'
 import { createSessionID, normalizeSeekTime } from '@/utils/session'
+import { compatibleQuality, canTryCompatibility } from '@/utils/playback'
 import { getStoredAuthToken } from '@/utils/authToken'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useToastStore } from '@/stores/toastStore'
@@ -42,6 +43,7 @@ export default function Player({ path }: PlayerProps) {
   const [presetsReady, setPresetsReady] = useState(false)
   const [ended, setEnded] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
   const [gestureText, setGestureText] = useState<string | null>(null)
   const gestureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -57,6 +59,7 @@ export default function Player({ path }: PlayerProps) {
     subtitleVisible,
     quality,
     qualityPresets,
+    compatibilityMode,
     audioTrack,
     duration,
     negotiatedCodec,
@@ -108,13 +111,33 @@ export default function Player({ path }: PlayerProps) {
     }
   }, [stopHeartbeat])
 
+  const tryCompatibilityPlayback = useCallback((requestedQuality: string, codec?: string) => {
+    const state = usePlayerStore.getState()
+    if (!canTryCompatibility(requestedQuality, codec, state.compatibilityMode)) return false
+
+    // Preserve user intent and absolute time while replacing the failed source.
+    sourceChangingRef.current = true
+    stopCurrentSession()
+    hlsRef.current?.destroy()
+    hlsRef.current = null
+    state.setCompatibilityMode(true)
+    useToastStore.getState().addToast({
+      type: 'warning',
+      message: '브라우저 재생 오류로 H.264 호환 변환을 사용합니다. 저장된 화질 설정은 유지됩니다.',
+      duration: 7000,
+    })
+    return true
+  }, [stopCurrentSession])
+
   // One-time codec negotiation on mount
   useEffect(() => {
+    let cancelled = false
     const codecs = detectBrowserCodecs()
     setBrowserCodecs(codecs)
 
     getCapabilities(codecs)
       .then(({ data }) => {
+        if (cancelled) return
         setNegotiatedCodec(
           data.selected_codec,
           data.selected_encoder,
@@ -122,9 +145,11 @@ export default function Player({ path }: PlayerProps) {
         )
       })
       .catch(() => {
+        if (cancelled) return
         // Fallback to h264
         setNegotiatedCodec('h264', 'libx264', 'none')
       })
+    return () => { cancelled = true }
   }, [setBrowserCodecs, setNegotiatedCodec])
 
   // Helper to start HLS playback from a given time
@@ -134,9 +159,6 @@ export default function Player({ path }: PlayerProps) {
     stopCurrentSession()
     const requestSeq = startRequestSeqRef.current + 1
     startRequestSeqRef.current = requestSeq
-
-    // Stop previous session's heartbeat (but don't kill the server session - seek creates a new one)
-    stopHeartbeat()
 
     // Cleanup previous HLS instance
     if (hlsRef.current) {
@@ -150,8 +172,9 @@ export default function Player({ path }: PlayerProps) {
     setEnded(false)
 
     // Get the current negotiated codec and audio track from the store
-    const { negotiatedCodec: storeCodec, audioTrack: storeAudioTrack } = usePlayerStore.getState()
-    const codec = storeCodec || undefined
+    const { negotiatedCodec: storeCodec, audioTrack: storeAudioTrack, compatibilityMode: compatible, qualityPresets: presets } = usePlayerStore.getState()
+    const codec = compatible ? 'h264' : storeCodec || undefined
+    if (compatible) q = compatibleQuality(q, presets)
 
     const sid = createSessionID()
     startHeartbeat(sid)
@@ -178,6 +201,9 @@ export default function Player({ path }: PlayerProps) {
         if (startRequestSeqRef.current !== requestSeq) return
         if (!data.fatal) return
 
+        const detail = `${data.type} / ${data.details} / media=${videoEl.error?.code ?? 0}`
+        console.warn('[재생 오류]', { session: sid, quality: q, codec, detail })
+
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
             if (networkRecoveryAttempts < 2) {
@@ -189,19 +215,24 @@ export default function Player({ path }: PlayerProps) {
           case Hls.ErrorTypes.MEDIA_ERROR:
             if (mediaRecoveryAttempts < 2) {
               mediaRecoveryAttempts += 1
+              sourceChangingRef.current = true
               hls.recoverMediaError()
               return
             }
+            if (tryCompatibilityPlayback(q, codec)) return
             break
         }
 
+        sourceChangingRef.current = true
         stopCurrentSession()
         hls.destroy()
-        setError(`Playback error: ${data.type}`)
+        hlsRef.current = null
+        usePlayerStore.getState().setPlaying(false)
+        setError(`재생에 실패했습니다. ${detail}`)
       })
       if (autoPlay) {
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          videoEl.play().catch(() => {})
+          if (startRequestSeqRef.current === requestSeq && playbackIntentRef.current) videoEl.play().catch(() => {})
         })
       }
       setUseHLS(true)
@@ -215,9 +246,10 @@ export default function Player({ path }: PlayerProps) {
         }, { once: true })
       }
     } else {
-      setError('HLS is not supported in this browser')
+      stopCurrentSession()
+      setError('이 브라우저는 HLS 재생을 지원하지 않습니다.')
     }
-  }, [startHeartbeat, stopCurrentSession, stopHeartbeat])
+  }, [startHeartbeat, stopCurrentSession, tryCompatibilityPlayback])
 
   // Seek to absolute time. If beyond buffered range in HLS, restart transcoding.
   const seek = useCallback((absTime: number) => {
@@ -227,6 +259,9 @@ export default function Player({ path }: PlayerProps) {
     const fullDur = probeDurationRef.current || duration
     const clampedTime = Math.max(0, Math.min(absTime, fullDur))
     setEnded(false)
+    // 탐색 직후 디코딩이 실패해도 이전 위치가 아닌 사용자가 고른 위치에서 복구한다.
+    absTimeRef.current = clampedTime
+    setCurrentTime(clampedTime)
 
     // For direct play (not HLS), just seek directly
     if (!useHLS) {
@@ -253,7 +288,7 @@ export default function Player({ path }: PlayerProps) {
     // Beyond the buffered range: restart HLS from the new position
     const wasPlaying = playbackIntentRef.current
     startHLS(video, path, quality === 'original' ? 'passthrough' : quality, clampedTime, wasPlaying)
-  }, [path, quality, duration, useHLS, startHLS])
+  }, [path, quality, duration, useHLS, startHLS, setCurrentTime])
 
   // Reset state and fetch file info when path changes
   useEffect(() => {
@@ -272,6 +307,7 @@ export default function Player({ path }: PlayerProps) {
     usePlayerStore.getState().setChapters([])
     usePlayerStore.getState().setAudioTrack(0)
     setQualityPresets([])
+    usePlayerStore.getState().setCompatibilityMode(false)
     setCurrentFile(path)
     setPresetsReady(false)
     setEnded(false)
@@ -475,7 +511,7 @@ export default function Player({ path }: PlayerProps) {
     }
 
     // Direct play only when user explicitly selects "original" quality
-    if (quality === 'original' && audioTrack === 0) {
+    if (quality === 'original' && audioTrack === 0 && !compatibilityMode) {
       sourceChangingRef.current = true
       // Stop the HLS session on server when switching to original
       stopCurrentSession()
@@ -502,11 +538,7 @@ export default function Player({ path }: PlayerProps) {
     // Use HLS for all transcode qualities
     // For quality switch, start from the saved position
     const effectiveQuality = quality === 'original' ? 'passthrough' : quality
-    if (savedAbsTime > 0) {
-      startHLS(video, path, effectiveQuality, savedAbsTime, wasPlaying)
-    } else {
-      startHLS(video, path, effectiveQuality, 0, true)
-    }
+    startHLS(video, path, effectiveQuality, savedAbsTime, wasPlaying)
 
     return () => {
       sourceChangingRef.current = true
@@ -517,7 +549,7 @@ export default function Player({ path }: PlayerProps) {
       }
       // Stop session on unmount or when dependencies change (quality switch)
     }
-  }, [path, quality, qualityPresets, presetsReady, audioTrack, negotiatedCodec, setCurrentFile, startHLS, stopCurrentSession])
+  }, [path, quality, qualityPresets, presetsReady, audioTrack, negotiatedCodec, compatibilityMode, retryCount, setCurrentFile, startHLS, stopCurrentSession])
 
   // Sync volume/muted/playbackRate
   useEffect(() => {
@@ -531,7 +563,7 @@ export default function Player({ path }: PlayerProps) {
   const handleTimeUpdate = useCallback(() => {
     if (sourceChangingRef.current) return
     const video = videoRef.current
-    if (video) {
+    if (video && !video.error) {
       // Report absolute time (HLS video.currentTime is relative to transcode start)
       const abs = video.currentTime + hlsStartTimeRef.current
       absTimeRef.current = abs
@@ -571,7 +603,7 @@ export default function Player({ path }: PlayerProps) {
   }, [setPlaying, startHeartbeat])
 
   const handlePause = useCallback(() => {
-    if (sourceChangingRef.current) return
+    if (sourceChangingRef.current || videoRef.current?.error) return
     playbackIntentRef.current = false
     setPlaying(false)
     // Freeze the FFmpeg process immediately (SIGSTOP) to release GPU
@@ -589,6 +621,23 @@ export default function Player({ path }: PlayerProps) {
       }, NEXT_EP_HEARTBEAT_INTERVAL_MS)
     }
   }, [setPlaying, stopHeartbeat])
+
+  const handleMediaError = useCallback(() => {
+    const mediaError = videoRef.current?.error
+    if (!mediaError || (sourceChangingRef.current && !videoRef.current?.currentSrc)) return
+    const decodeFailure = mediaError.code === 3 || mediaError.code === 4
+    // 브라우저 디코더 오류는 hls.js의 fatal 오류로 전달되지 않을 수도 있다.
+    if (hlsRef.current && !decodeFailure) return
+    console.warn('[재생 오류]', { session: sessionIDRef.current, quality, mediaCode: mediaError.code })
+    if (decodeFailure &&
+        tryCompatibilityPlayback(quality, negotiatedCodec || undefined)) return
+    sourceChangingRef.current = true
+    stopCurrentSession()
+    hlsRef.current?.destroy()
+    hlsRef.current = null
+    setPlaying(false)
+    setError(`브라우저에서 영상을 재생하지 못했습니다. media=${mediaError.code}`)
+  }, [quality, negotiatedCodec, tryCompatibilityPlayback, stopCurrentSession, setPlaying])
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current
@@ -813,17 +862,6 @@ export default function Player({ path }: PlayerProps) {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [togglePlay, toggleFullscreen, seek, showStats, setShowStats, subtitleVisible, setSubtitleVisible, playbackRate, setPlaybackRate, duration])
 
-  if (error) {
-    return (
-      <div className="flex items-center justify-center h-full bg-black rounded-lg">
-        <div className="text-red-400 text-center">
-          <p className="text-lg mb-2">Playback Error</p>
-          <p className="text-sm text-gray-500">{error}</p>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div
       ref={containerRef}
@@ -837,8 +875,19 @@ export default function Player({ path }: PlayerProps) {
         onLoadedMetadata={handleLoadedMetadata}
         onPlay={handlePlay}
         onPause={handlePause}
+        onError={handleMediaError}
         onEnded={() => { setEnded(true); setPlaying(false) }}
       />
+      {error && (
+        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-black/95 p-6 text-center">
+          <p className="text-lg text-red-400">재생 오류</p>
+          <p className="text-sm text-gray-400">{error}</p>
+          <button className="rounded bg-gray-700 px-4 py-2 text-white" onClick={() => {
+            setError(null)
+            setRetryCount(n => n + 1)
+          }}>다시 시도</button>
+        </div>
+      )}
       {/* Gesture feedback overlay */}
       {gestureText && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">

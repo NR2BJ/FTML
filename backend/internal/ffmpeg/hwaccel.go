@@ -214,10 +214,11 @@ func testSoftwareEncoder(encoder string) bool {
 // BrowserCodecs holds browser codec support flags (video + audio).
 type BrowserCodecs struct {
 	// Video
-	H264 bool `json:"h264"`
-	HEVC bool `json:"hevc"`
-	AV1  bool `json:"av1"`
-	VP9  bool `json:"vp9"`
+	H264   bool `json:"h264"`
+	HEVC   bool `json:"hevc"`
+	HEVC10 bool `json:"hevc10"`
+	AV1    bool `json:"av1"`
+	VP9    bool `json:"vp9"`
 	// Audio
 	AAC  bool `json:"aac"`
 	Opus bool `json:"opus"`

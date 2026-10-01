@@ -12,6 +12,45 @@ async function loadSource(path) {
 const { parseVTT } = await loadSource('../src/utils/subtitles.ts')
 const { encodeMediaPath } = await loadSource('../src/utils/mediaPath.ts')
 const { createSessionID, normalizeSeekTime } = await loadSource('../src/utils/session.ts')
+const { compatibleQuality, canTryCompatibility } = await loadSource('../src/utils/playback.ts')
+const { detectBrowserCodecs } = await loadSource('../src/utils/codec.ts')
+
+test('HLS 코덱은 MP4 MSE와 HEVC Main 10을 따로 검사한다', t => {
+  const checked = []
+  const originals = Object.fromEntries(['document', 'MediaSource'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
+  t.after(() => {
+    for (const [key, descriptor] of Object.entries(originals)) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+      else delete globalThis[key]
+    }
+  })
+  Object.defineProperty(globalThis, 'document', {configurable:true, value:{createElement:() => ({canPlayType:() => 'probably'})}})
+  Object.defineProperty(globalThis, 'MediaSource', {configurable:true, value:{isTypeSupported:mime => {
+    checked.push(mime)
+    return mime.includes('hvc1.1.') || mime.includes('avc1.')
+  }}})
+  const codecs = detectBrowserCodecs()
+  assert.equal(codecs.hevc, true)
+  assert.equal(codecs.hevc10, false)
+  assert.equal(codecs.av1, false, '원본 파일 지원으로 MSE 미지원을 덮어쓰지 않는다')
+  assert.equal(codecs.vp9, false)
+  assert.ok(checked.includes('video/mp4; codecs="vp09.00.10.08"'))
+  delete globalThis.MediaSource
+  assert.equal(detectBrowserCodecs().hevc10, true, 'MSE가 없으면 네이티브 지원 여부를 사용한다')
+})
+
+test('호환 변환은 원본 전송 대신 같은 해상도를 선택하고 한 번만 시도한다', () => {
+  const presets = [{value:'1080p',height:1080}, {value:'original',height:2160}, {value:'passthrough',height:2160}, {value:'720p',height:720}]
+  assert.equal(compatibleQuality('passthrough', presets), '1080p')
+  assert.equal(compatibleQuality('original', presets), '1080p')
+  assert.equal(compatibleQuality('720p', presets), '720p')
+  assert.equal(compatibleQuality('passthrough', []), '720p')
+  assert.equal(canTryCompatibility('passthrough', 'h264', false), true)
+  assert.equal(canTryCompatibility('original', 'h264', false), true)
+  assert.equal(canTryCompatibility('1080p', 'av1', false), true)
+  assert.equal(canTryCompatibility('1080p', 'h264', false), false)
+  assert.equal(canTryCompatibility('passthrough', 'av1', true), false)
+})
 
 test('Windows 줄바꿈과 BOM이 있는 자막을 분리한다', () => {
   const cues = parseVTT('\uFEFFWEBVTT\r\n\r\n1\r\n00:00:01.000 --> 00:00:02.000\r\n첫째\r\n\r\n2\r\n00:00:03.000 --> 00:00:04.000\r\n둘째\r\n')

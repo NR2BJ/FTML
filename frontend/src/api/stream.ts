@@ -41,6 +41,7 @@ export const getCapabilities = (browserCodecs: BrowserCodecSupport) =>
     params: {
       h264: browserCodecs.h264,
       hevc: browserCodecs.hevc,
+      hevc10: browserCodecs.hevc10,
       av1: browserCodecs.av1,
       vp9: browserCodecs.vp9,
       aac: browserCodecs.aac,
@@ -56,6 +57,7 @@ export const getPresets = (path: string, codec?: string, browserCodecs?: Browser
   if (browserCodecs) {
     params.h264 = String(browserCodecs.h264)
     params.hevc = String(browserCodecs.hevc)
+    params.hevc10 = String(browserCodecs.hevc10)
     params.av1 = String(browserCodecs.av1)
     params.vp9 = String(browserCodecs.vp9)
     params.aac = String(browserCodecs.aac)

@@ -19,7 +19,7 @@ interface RuntimeStats {
 }
 
 export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) {
-  const { showStats, mediaInfo, currentTime, duration, quality, negotiatedCodec, negotiatedEncoder, hwaccel } = usePlayerStore()
+  const { showStats, mediaInfo, currentTime, duration, quality, negotiatedCodec, negotiatedEncoder, hwaccel, compatibilityMode } = usePlayerStore()
   const [stats, setStats] = useState<RuntimeStats>({
     playResolution: '',
     playBitrate: 0,
@@ -154,8 +154,8 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
     ? `${mediaInfo.width}x${mediaInfo.height}`
     : 'N/A'
   const audioStream = mediaInfo?.streams?.find((s: any) => s.codec_type === 'audio')
-  const isOriginal = quality === 'original'
-  const isPassthrough = quality === 'passthrough'
+  const isOriginal = quality === 'original' && !compatibilityMode
+  const isPassthrough = quality === 'passthrough' && !compatibilityMode
   const isHLS = !!hlsRef.current
 
   return (
@@ -173,10 +173,10 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
           <>
             <div>Codec: {isPassthrough
               ? `${(mediaInfo?.video_codec || 'N/A').toUpperCase()} (Copy) + AAC`
-              : `${(negotiatedCodec || 'h264').toUpperCase()} + AAC`
+              : `${(compatibilityMode ? 'h264' : negotiatedCodec || 'h264').toUpperCase()} + AAC`
             }</div>
             {!isPassthrough && (
-              <div>Encoder: {negotiatedEncoder || 'N/A'}{hwaccel && hwaccel !== 'none' ? ` (${hwaccel})` : ''}</div>
+              <div>Encoder: {compatibilityMode ? 'H.264 (서버 자동 선택)' : `${negotiatedEncoder || 'N/A'}${hwaccel && hwaccel !== 'none' ? ` (${hwaccel})` : ''}`}</div>
             )}
           </>
         )}

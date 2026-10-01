@@ -4,6 +4,7 @@ export interface BrowserCodecSupport {
   // Video
   h264: boolean
   hevc: boolean
+  hevc10: boolean
   av1: boolean
   vp9: boolean
   // Audio
@@ -40,21 +41,18 @@ export function detectBrowserCodecs(): BrowserCodecSupport {
     }
   }
 
-  const check = (mime: string): boolean => {
-    return checkMSE(mime) || checkVideo(mime)
-  }
+  // HLS uses MSE when available; direct-play support cannot substitute for it.
+  const check = (mime: string): boolean =>
+    typeof MediaSource !== 'undefined' ? checkMSE(mime) : checkVideo(mime)
 
   return {
     // Video codecs
     h264: check('video/mp4; codecs="avc1.640028"'),
-    // HEVC: MSE support only. canPlayType() is unreliable for HEVC —
-    // Linux Firefox returns 'maybe', macOS Firefox returns 'probably' via
-    // VideoToolbox, but neither can actually play MKV HEVC or use MSE HEVC.
-    // Only browsers with real MSE HEVC support (Safari, Chrome w/ HW) should
-    // report hevc=true, which controls original playback and codec negotiation.
-    hevc: checkMSE('video/mp4; codecs="hev1.1.6.L93.B0"'),
+    // FFmpeg emits hvc1. Main and Main 10 support must be checked separately.
+    hevc: check('video/mp4; codecs="hvc1.1.6.L93.B0"'),
+    hevc10: check('video/mp4; codecs="hvc1.2.4.L120.B0"'),
     av1: check('video/mp4; codecs="av01.0.08M.08"'),
-    vp9: check('video/webm; codecs="vp09.00.10.08"'),
+    vp9: check('video/mp4; codecs="vp09.00.10.08"'),
     // Audio codecs
     aac: check('audio/mp4; codecs="mp4a.40.2"'),
     opus: check('audio/webm; codecs="opus"') || checkVideo('audio/ogg; codecs="opus"'),

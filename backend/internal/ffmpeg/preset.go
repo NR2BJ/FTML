@@ -9,8 +9,8 @@ import (
 
 // TranscodeParams holds the computed transcode parameters for a specific quality level.
 type TranscodeParams struct {
-	Label      string `json:"label"`       // e.g. "720p", "1080p"
-	Height     int    `json:"height"`      // target height (0 = original)
+	Label      string `json:"label"`  // e.g. "720p", "1080p"
+	Height     int    `json:"height"` // target height (0 = original)
 	CRF        int    `json:"crf"`
 	MaxBitrate string `json:"max_bitrate"` // e.g. "12M"
 	BufSize    string `json:"buf_size"`    // e.g. "24M"
@@ -28,19 +28,19 @@ type TranscodeParams struct {
 
 // QualityOption is returned to the frontend for the quality selector.
 type QualityOption struct {
-	Value            string `json:"value"`                            // "720p", "1080p", "original", "passthrough"
-	Label            string `json:"label"`                            // "720p", "1080p", "Original"
-	Desc             string `json:"desc"`                             // "~8 Mbps", "Direct play"
+	Value            string `json:"value"` // "720p", "1080p", "original", "passthrough"
+	Label            string `json:"label"` // "720p", "1080p", "Original"
+	Desc             string `json:"desc"`  // "~8 Mbps", "Direct play"
 	Height           int    `json:"height"`
 	CRF              int    `json:"crf"`
 	MaxBitrate       string `json:"max_bitrate"`
 	BufSize          string `json:"buf_size"`
-	VideoCodec       string `json:"video_codec"`                     // "h264", "hevc", "av1"
-	AudioCodec       string `json:"audio_codec"`                     // "aac", "opus"
-	CanOriginal      bool   `json:"can_original,omitempty"`          // Whether browser can play full original (video+audio)
-	CanOriginalVideo bool   `json:"can_original_video,omitempty"`    // Whether browser can play original video codec
-	CanOriginalAudio bool   `json:"can_original_audio,omitempty"`    // Whether browser can play original audio codec
-	SourceAudioCodec string `json:"-"`                               // internal: source audio codec for passthrough copy decision
+	VideoCodec       string `json:"video_codec"`                  // "h264", "hevc", "av1"
+	AudioCodec       string `json:"audio_codec"`                  // "aac", "opus"
+	CanOriginal      bool   `json:"can_original,omitempty"`       // Whether browser can play full original (video+audio)
+	CanOriginalVideo bool   `json:"can_original_video,omitempty"` // Whether browser can play original video codec
+	CanOriginalAudio bool   `json:"can_original_audio,omitempty"` // Whether browser can play original audio codec
+	SourceAudioCodec string `json:"-"`                            // internal: source audio codec for passthrough copy decision
 }
 
 // Standard resolution tiers
@@ -209,7 +209,8 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 
 	// Original direct play: requires both codec AND container support.
 	// MKV files can never be direct-played by browsers.
-	canDirectPlayVideo := canBrowserDirectPlay(info.VideoCodec, info.Container, browser)
+	canDecodeVideo := canBrowserDecodeMedia(info, browser)
+	canDirectPlayVideo := canDecodeVideo && canBrowserDirectPlay(info.VideoCodec, info.Container, browser)
 	canDirectPlayAudio := CanBrowserPlayAudio(info.AudioCodec, browser)
 	canOriginal := canDirectPlayVideo && canDirectPlayAudio
 
@@ -233,13 +234,6 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 	// Generated when:
 	//  1. Browser can decode the video codec but audio is incompatible, OR
 	//  2. Browser can decode both but container is incompatible (e.g. MKV HEVC)
-	canDecodeVideo := canBrowserDecodeCodec(info.VideoCodec, browser)
-
-	// 10bit H.264 is not decodable via MSE in any browser — disable passthrough
-	if canDecodeVideo && NormalizeCodecName(info.VideoCodec) == "h264" && Is10bit(info.PixFmt) {
-		canDecodeVideo = false
-	}
-
 	needsPassthrough := canDecodeVideo && (!canDirectPlayAudio || !canDirectPlayVideo)
 	if needsPassthrough {
 		// Determine the right segment format for the video codec
@@ -277,6 +271,19 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 	}
 
 	return options
+}
+
+func canBrowserDecodeMedia(info *MediaInfo, browser BrowserCodecs) bool {
+	codec := NormalizeCodecName(info.VideoCodec)
+	if Is10bit(info.PixFmt) {
+		switch codec {
+		case "h264":
+			return false
+		case "hevc":
+			return browser.HEVC10
+		}
+	}
+	return canBrowserDecodeCodec(info.VideoCodec, browser)
 }
 
 // canBrowserDecodeCodec checks if the browser can decode the given video codec.
@@ -515,15 +522,15 @@ func defaultPresets(codec Codec, encoder *EncoderInfo) []QualityOption {
 	return []QualityOption{
 		{
 			Value: "720p", Label: "720p",
-			Desc:       fmt.Sprintf("~%s", formatBitrateHuman(br720)),
-			Height:     720, CRF: crfMap[720],
+			Desc:   fmt.Sprintf("~%s", formatBitrateHuman(br720)),
+			Height: 720, CRF: crfMap[720],
 			MaxBitrate: formatBitrateM(br720), BufSize: formatBitrateM(br720 * 2),
 			VideoCodec: string(codec), AudioCodec: audioCodec,
 		},
 		{
 			Value: "1080p", Label: "1080p",
-			Desc:       fmt.Sprintf("~%s", formatBitrateHuman(br1080)),
-			Height:     1080, CRF: crfMap[1080],
+			Desc:   fmt.Sprintf("~%s", formatBitrateHuman(br1080)),
+			Height: 1080, CRF: crfMap[1080],
 			MaxBitrate: formatBitrateM(br1080), BufSize: formatBitrateM(br1080 * 2),
 			VideoCodec: string(codec), AudioCodec: audioCodec,
 		},

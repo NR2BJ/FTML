@@ -41,6 +41,15 @@ func TestRejectInvalidPlaybackParameters(t *testing.T) {
 	}
 }
 
+func TestHEVCMain10CapabilityIsExplicit(t *testing.T) {
+	for _, query := range []string{"hevc=true", "hevc=true&hevc10=false", "hevc=true&hevc10=true"} {
+		_, _, browser := parseCodecParams(httptest.NewRequest("GET", "/presets/video.mkv?"+query, nil))
+		if !browser.HEVC || browser.HEVC10 != strings.Contains(query, "hevc10=true") {
+			t.Fatalf("wrong profile support for %s: %+v", query, browser)
+		}
+	}
+}
+
 func TestHLSPlaylistAndOwnedSegments(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg unavailable")
