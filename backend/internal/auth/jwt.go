@@ -8,9 +8,10 @@ import (
 )
 
 type Claims struct {
-	UserID   int64  `json:"user_id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
+	UserID      int64  `json:"user_id"`
+	Username    string `json:"username"`
+	Role        string `json:"role"`
+	AuthVersion int64  `json:"auth_version"`
 	jwt.RegisteredClaims
 }
 
@@ -22,11 +23,12 @@ func NewJWTService(secret string) *JWTService {
 	return &JWTService{secret: []byte(secret)}
 }
 
-func (s *JWTService) GenerateToken(userID int64, username, role string) (string, error) {
+func (s *JWTService) GenerateToken(userID int64, username, role string, authVersion int64) (string, error) {
 	claims := Claims{
-		UserID:   userID,
-		Username: username,
-		Role:     role,
+		UserID:      userID,
+		Username:    username,
+		Role:        role,
+		AuthVersion: authVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

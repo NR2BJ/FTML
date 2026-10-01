@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/video-stream/backend/internal/api/middleware"
 	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/ffmpeg"
@@ -308,6 +308,7 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "failed to parse upload", http.StatusBadRequest)
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
@@ -331,18 +332,12 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	destPath := filepath.Join(absDir, filename)
 
-	// Create destination file
-	dst, err := os.Create(destPath)
+	written, err := storage.WriteNewFile(destPath, file)
 	if err != nil {
-		log.Printf("[files] failed to create file %s: %v", destPath, err)
-		jsonError(w, "failed to create file", http.StatusInternalServerError)
-		return
-	}
-	defer dst.Close()
-
-	written, err := io.Copy(dst, file)
-	if err != nil {
-		os.Remove(destPath) // cleanup on failure
+		if os.IsExist(err) {
+			jsonError(w, "destination already exists", http.StatusConflict)
+			return
+		}
 		log.Printf("[files] failed to write file %s: %v", destPath, err)
 		jsonError(w, "failed to write file", http.StatusInternalServerError)
 		return
@@ -392,7 +387,7 @@ func (h *FilesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	baseName := filepath.Base(absPath)
 	timestamp := time.Now().Format("20060102_150405")
-	trashName := fmt.Sprintf("%s_%s", timestamp, baseName)
+	trashName := fmt.Sprintf("%s_%s_%s", timestamp, uuid.NewString(), baseName)
 	trashPath := filepath.Join(trashDir, trashName)
 
 	// Write metadata
@@ -409,10 +404,13 @@ func (h *FilesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	metaPath := trashPath + ".meta.json"
 	if err := os.WriteFile(metaPath, metaBytes, 0644); err != nil {
 		log.Printf("[files] failed to write trash metadata: %v", err)
+		jsonError(w, "failed to save trash metadata", http.StatusInternalServerError)
+		return
 	}
 
 	// Move file/directory to trash
-	if err := os.Rename(absPath, trashPath); err != nil {
+	if err := storage.MoveNoReplace(absPath, trashPath); err != nil {
+		os.Remove(metaPath)
 		log.Printf("[files] failed to move to trash %s: %v", absPath, err)
 		jsonError(w, "failed to move to trash", http.StatusInternalServerError)
 		return
@@ -464,7 +462,11 @@ func (h *FilesHandler) Move(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.Rename(absSrc, absDst); err != nil {
+	if err := storage.MoveNoReplace(absSrc, absDst); err != nil {
+		if os.IsExist(err) {
+			jsonError(w, "destination already exists", http.StatusConflict)
+			return
+		}
 		log.Printf("[files] failed to move %s → %s: %v", absSrc, absDst, err)
 		jsonError(w, "failed to move", http.StatusInternalServerError)
 		return
@@ -582,6 +584,10 @@ func (h *FilesHandler) RestoreTrash(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "name is required", http.StatusBadRequest)
 		return
 	}
+	if !validTrashName(req.Name) {
+		jsonError(w, "invalid trash name", http.StatusBadRequest)
+		return
+	}
 
 	trashDir := h.trashDir()
 	trashPath := filepath.Join(trashDir, req.Name)
@@ -626,7 +632,11 @@ func (h *FilesHandler) RestoreTrash(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Move back
-	if err := os.Rename(trashPath, destPath); err != nil {
+	if err := storage.MoveNoReplace(trashPath, destPath); err != nil {
+		if os.IsExist(err) {
+			jsonError(w, "destination already exists", http.StatusConflict)
+			return
+		}
 		log.Printf("[files] failed to restore from trash: %v", err)
 		jsonError(w, "failed to restore file", http.StatusInternalServerError)
 		return
@@ -643,7 +653,7 @@ func (h *FilesHandler) RestoreTrash(w http.ResponseWriter, r *http.Request) {
 // PermanentDelete permanently removes an item from trash
 func (h *FilesHandler) PermanentDelete(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	if name == "" {
+	if !validTrashName(name) {
 		jsonError(w, "name is required", http.StatusBadRequest)
 		return
 	}
@@ -655,6 +665,10 @@ func (h *FilesHandler) PermanentDelete(w http.ResponseWriter, r *http.Request) {
 	info, err := os.Lstat(trashPath)
 	if os.IsNotExist(err) {
 		jsonError(w, "item not found in trash", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		jsonError(w, "failed to inspect trash item", http.StatusInternalServerError)
 		return
 	}
 
@@ -677,6 +691,10 @@ func (h *FilesHandler) PermanentDelete(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[files] Permanently deleted from trash: %s", name)
 	h.logFileOp(r, "permanent_delete", name, "permanently deleted from trash")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func validTrashName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, `/\`)
 }
 
 // EmptyTrash permanently removes all items from trash

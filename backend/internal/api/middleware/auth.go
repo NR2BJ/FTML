@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/video-stream/backend/internal/auth"
+	"github.com/video-stream/backend/internal/db"
 )
 
 type contextKey string
@@ -13,7 +14,7 @@ type contextKey string
 const UserClaimsKey contextKey = "user_claims"
 const authTokenCookieName = "ftml_token"
 
-func AuthMiddleware(jwtService *auth.JWTService) func(http.Handler) http.Handler {
+func AuthMiddleware(jwtService *auth.JWTService, database *db.Database) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var tokenStr string
@@ -50,6 +51,11 @@ func AuthMiddleware(jwtService *auth.JWTService) func(http.Handler) http.Handler
 				return
 			}
 
+			user, err := database.GetUserByID(claims.UserID)
+			if err != nil || user.AuthVersion != claims.AuthVersion || user.Role != claims.Role || user.Username != claims.Username {
+				http.Error(w, `{"error":"session revoked"}`, http.StatusUnauthorized)
+				return
+			}
 			ctx := context.WithValue(r.Context(), UserClaimsKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

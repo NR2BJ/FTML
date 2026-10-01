@@ -33,6 +33,7 @@ func (d *Database) migrate() error {
 		username TEXT UNIQUE NOT NULL,
 		password TEXT NOT NULL,
 		role TEXT NOT NULL DEFAULT 'user',
+		auth_version INTEGER NOT NULL DEFAULT 0,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
@@ -136,10 +137,40 @@ func (d *Database) migrate() error {
 	if _, err := d.db.Exec(schema); err != nil {
 		return err
 	}
+	if err := d.ensureAuthVersion(); err != nil {
+		return err
+	}
 	d.migrateWhisperBackends()
 	// Migrate legacy roles: viewer/editor → user
 	d.db.Exec("UPDATE users SET role = 'user' WHERE role IN ('viewer', 'editor')")
 	return nil
+}
+
+func (d *Database) ensureAuthVersion() error {
+	rows, err := d.db.Query("PRAGMA table_info(users)")
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid, required, primary int
+		var name, kind string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &kind, &required, &defaultValue, &primary); err != nil {
+			rows.Close()
+			return err
+		}
+		found = found || name == "auth_version"
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if !found {
+		_, err = d.db.Exec("ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0")
+	}
+	return err
 }
 
 func (d *Database) EnsureAdmin(username, password string) error {
@@ -165,9 +196,9 @@ func (d *Database) EnsureAdmin(username, password string) error {
 func (d *Database) GetUserByUsername(username string) (*models.User, error) {
 	u := &models.User{}
 	err := d.db.QueryRow(
-		"SELECT id, username, password, role, created_at, updated_at FROM users WHERE username = ?",
+		"SELECT id, username, password, role, created_at, updated_at, auth_version FROM users WHERE username = ?",
 		username,
-	).Scan(&u.ID, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.UpdatedAt)
+	).Scan(&u.ID, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.UpdatedAt, &u.AuthVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -177,9 +208,9 @@ func (d *Database) GetUserByUsername(username string) (*models.User, error) {
 func (d *Database) GetUserByID(id int64) (*models.User, error) {
 	u := &models.User{}
 	err := d.db.QueryRow(
-		"SELECT id, username, password, role, created_at, updated_at FROM users WHERE id = ?",
+		"SELECT id, username, password, role, created_at, updated_at, auth_version FROM users WHERE id = ?",
 		id,
-	).Scan(&u.ID, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.UpdatedAt)
+	).Scan(&u.ID, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.UpdatedAt, &u.AuthVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +461,7 @@ func (d *Database) CreateUser(username, hashedPassword, role string) (int64, err
 // UpdateUser updates username and role for a user
 func (d *Database) UpdateUser(id int64, username, role string) error {
 	_, err := d.db.Exec(
-		"UPDATE users SET username = ?, role = ?, updated_at = ? WHERE id = ?",
+		"UPDATE users SET username = ?, role = ?, updated_at = ?, auth_version = auth_version + 1 WHERE id = ?",
 		username, role, time.Now(), id,
 	)
 	return err
@@ -439,7 +470,7 @@ func (d *Database) UpdateUser(id int64, username, role string) error {
 // UpdateUserPassword updates a user's password
 func (d *Database) UpdateUserPassword(id int64, hashedPassword string) error {
 	_, err := d.db.Exec(
-		"UPDATE users SET password = ?, updated_at = ? WHERE id = ?",
+		"UPDATE users SET password = ?, updated_at = ?, auth_version = auth_version + 1 WHERE id = ?",
 		hashedPassword, time.Now(), id,
 	)
 	return err

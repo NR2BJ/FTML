@@ -33,7 +33,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	r.Use(cors.Handler(middleware.CORSHandler(cfg.CORSOrigins)))
 
 	// JSON body size limit (1MB) for all non-upload routes
-	r.Use(middleware.MaxBodySize(1 << 20))
+	r.Use(middleware.RequestBodyLimit)
 
 	// Handlers
 	authHandler := handlers.NewAuthHandler(database, jwtService)
@@ -97,7 +97,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 
 		// Protected routes — all authenticated users (viewer, editor, admin)
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.AuthMiddleware(jwtService))
+			r.Use(middleware.AuthMiddleware(jwtService, database))
 
 			// Auth
 			r.Get("/auth/me", authHandler.Me)
