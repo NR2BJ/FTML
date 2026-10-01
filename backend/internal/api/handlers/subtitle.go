@@ -289,7 +289,7 @@ func (h *SubtitleHandler) serveEmbeddedSubtitle(w http.ResponseWriter, videoPath
 	}
 
 	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-	w.Header().Set("Cache-Control", "max-age=3600")
+	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Write(output)
 }
 
@@ -309,7 +309,7 @@ func (h *SubtitleHandler) serveExternalSubtitle(w http.ResponseWriter, videoPath
 
 	ext := strings.ToLower(filepath.Ext(filename))
 
-	w.Header().Set("Cache-Control", "max-age=3600")
+	w.Header().Set("Cache-Control", "private, no-cache")
 
 	switch ext {
 	case ".vtt":
@@ -392,7 +392,7 @@ func (h *SubtitleHandler) serveGeneratedSubtitle(w http.ResponseWriter, videoPat
 
 	ext := strings.ToLower(filepath.Ext(filename))
 
-	w.Header().Set("Cache-Control", "max-age=3600")
+	w.Header().Set("Cache-Control", "private, no-cache")
 
 	switch ext {
 	case ".vtt":

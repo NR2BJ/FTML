@@ -117,14 +117,14 @@ func (o *OpenAITranslator) Translate(ctx context.Context, cues []SubtitleCue, op
 
 func (o *OpenAITranslator) translateBatch(ctx context.Context, cues []SubtitleCue, systemPrompt string) ([]SubtitleCue, error) {
 	var userPrompt strings.Builder
-	userPrompt.WriteString("Translate the following subtitle cues. Return ONLY a JSON array with the translated text for each cue, maintaining the same order and count.\n\n")
+	userPrompt.WriteString("Translate the following subtitle cues, maintaining the same order and count.\n\n")
 	userPrompt.WriteString("Input cues:\n")
 
 	for _, cue := range cues {
 		userPrompt.WriteString(fmt.Sprintf("[%d] %s\n", cue.Index, cue.Text))
 	}
 
-	userPrompt.WriteString(fmt.Sprintf("\nReturn exactly %d translations as a JSON array of strings.", len(cues)))
+	userPrompt.WriteString(fmt.Sprintf("\nReturn a JSON object with the key translations containing exactly %d strings in the input order.", len(cues)))
 
 	reqBody := map[string]interface{}{
 		"model": "gpt-4o-mini",
@@ -167,7 +167,8 @@ func (o *OpenAITranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 
 	var chatResp struct {
 		Choices []struct {
-			Message struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
@@ -180,6 +181,9 @@ func (o *OpenAITranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 	if len(chatResp.Choices) == 0 {
 		return nil, fmt.Errorf("empty OpenAI response")
 	}
+	if reason := chatResp.Choices[0].FinishReason; reason != "" && reason != "stop" {
+		return nil, fmt.Errorf("%w: OpenAI finish_reason=%s", errInvalidTranslation, reason)
+	}
 
 	content := chatResp.Choices[0].Message.Content
 	// LLMs sometimes return ASS-style \N (line break) which is invalid JSON escape
@@ -191,40 +195,14 @@ func (o *OpenAITranslator) translateBatch(ctx context.Context, cues []SubtitleCu
 	// Try direct array first
 	if err := json.Unmarshal([]byte(content), &translations); err != nil {
 		// Try object with translations field
-		var wrapped map[string]json.RawMessage
-		if err2 := json.Unmarshal([]byte(content), &wrapped); err2 == nil {
-			for _, v := range wrapped {
-				if err3 := json.Unmarshal(v, &translations); err3 == nil {
-					break
-				}
-			}
+		var wrapped struct {
+			Translations []string `json:"translations"`
 		}
-		if translations == nil {
-			// Try to extract JSON array from content
-			start := strings.Index(content, "[")
-			end := strings.LastIndex(content, "]")
-			if start >= 0 && end > start {
-				json.Unmarshal([]byte(content[start:end+1]), &translations)
-			}
+		if err := json.Unmarshal([]byte(content), &wrapped); err != nil || wrapped.Translations == nil {
+			return nil, fmt.Errorf("%w: OpenAI JSON 형식 오류", errInvalidTranslation)
 		}
-		if translations == nil {
-			return nil, fmt.Errorf("parse translations from OpenAI: %s", content)
-		}
+		translations = wrapped.Translations
 	}
 
-	result := make([]SubtitleCue, len(cues))
-	for i, cue := range cues {
-		result[i] = SubtitleCue{
-			Index: cue.Index,
-			Start: cue.Start,
-			End:   cue.End,
-		}
-		if i < len(translations) {
-			result[i].Text = translations[i]
-		} else {
-			result[i].Text = cue.Text
-		}
-	}
-
-	return result, nil
+	return mapTranslations(cues, translations)
 }

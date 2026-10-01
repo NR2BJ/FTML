@@ -64,7 +64,7 @@ func main() {
 	// Initialize translation service and register with job queue
 	// Gemini model is resolved dynamically from DB so changes take effect immediately
 	geminiModelResolver := func() string {
-		return database.GetSetting("gemini_model", "gemini-2.0-flash")
+		return database.GetSetting("gemini_model", "")
 	}
 	translateSvc := translate.NewService(cfg.MediaPath, cfg.SubtitlePath, database, geminiModelResolver)
 	jobQueue.RegisterHandler(job.JobTranslate, translateSvc.HandleJob)

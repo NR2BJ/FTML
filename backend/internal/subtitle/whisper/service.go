@@ -121,15 +121,20 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 	// Save VTT to subtitle output directory
 	hash := videoHash(j.FilePath)
 	outDir := filepath.Join(s.subtitlePath, hash)
-	os.MkdirAll(outDir, 0755)
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return fmt.Errorf("자막 폴더 생성 실패: %w", err)
+	}
 
 	lang := result.Language
 	if lang == "" || lang == "auto" {
 		lang = "auto"
 	}
+	if !storage.ValidFilenamePart(lang) {
+		return fmt.Errorf("자막 언어가 올바르지 않습니다")
+	}
 	outFile := filepath.Join(outDir, fmt.Sprintf("whisper_%s.vtt", lang))
 
-	if err := os.WriteFile(outFile, []byte(result.VTT), 0644); err != nil {
+	if err := storage.WriteVersionedFile(ctx, outFile, strings.NewReader(result.VTT)); err != nil {
 		return fmt.Errorf("save subtitle: %w", err)
 	}
 

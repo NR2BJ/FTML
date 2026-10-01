@@ -163,21 +163,11 @@ func (d *DeepLTranslator) translateBatch(ctx context.Context, cues []SubtitleCue
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
 
-	result := make([]SubtitleCue, len(cues))
-	for i, cue := range cues {
-		result[i] = SubtitleCue{
-			Index: cue.Index,
-			Start: cue.Start,
-			End:   cue.End,
-		}
-		if i < len(deeplResp.Translations) {
-			result[i].Text = deeplResp.Translations[i].Text
-		} else {
-			result[i].Text = cue.Text
-		}
+	translations := make([]string, len(deeplResp.Translations))
+	for i, translation := range deeplResp.Translations {
+		translations[i] = translation.Text
 	}
-
-	return result, nil
+	return mapTranslations(cues, translations)
 }
 
 // deeplLangCode converts ISO 639-1 codes to DeepL format

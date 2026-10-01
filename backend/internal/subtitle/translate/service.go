@@ -67,6 +67,9 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 	if err := json.Unmarshal(j.Params, &params); err != nil {
 		return fmt.Errorf("unmarshal params: %w", err)
 	}
+	if !storage.ValidFilenamePart(params.TargetLang) || !storage.ValidFilenamePart(params.Engine) {
+		return fmt.Errorf("번역 언어 또는 번역기 이름이 올바르지 않습니다")
+	}
 
 	engine, err := s.resolveEngine(params.Engine)
 	if err != nil {
@@ -124,6 +127,9 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 	if err != nil {
 		return fmt.Errorf("translate: %w", err)
 	}
+	if err := validateTranslatedCues(textCues, translatedText); err != nil {
+		return err
+	}
 
 	// Merge skipped cues back with translated results
 	var translated []SubtitleCue
@@ -140,12 +146,14 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 	// Save translated VTT
 	hash := videoHash(j.FilePath)
 	outDir := filepath.Join(s.subtitlePath, hash)
-	os.MkdirAll(outDir, 0755)
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return fmt.Errorf("자막 폴더 생성 실패: %w", err)
+	}
 
 	outFile := filepath.Join(outDir, fmt.Sprintf("translate_%s_%s.vtt", params.TargetLang, params.Engine))
 	vtt := CuesToVTT(translated)
 
-	if err := os.WriteFile(outFile, []byte(vtt), 0644); err != nil {
+	if err := storage.WriteVersionedFile(ctx, outFile, strings.NewReader(vtt)); err != nil {
 		return fmt.Errorf("save translated subtitle: %w", err)
 	}
 
