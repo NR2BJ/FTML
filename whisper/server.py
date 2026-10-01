@@ -19,7 +19,6 @@ import gc
 import io
 import os
 import logging
-import re
 import time
 import wave
 from contextlib import asynccontextmanager
@@ -28,9 +27,11 @@ import threading
 import numpy as np
 import librosa
 import uvicorn
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel
+from inference_runtime import ModelGate
+from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,12 +52,13 @@ CHUNK_OVERLAP_S = int(os.environ.get("CHUNK_OVERLAP_S", "5"))  # overlap to prot
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle for FastAPI."""
     mid = os.environ.get("MODEL_ID", DEFAULT_MODEL_ID)
-    load_model_by_id(mid)
+    await asyncio.to_thread(load_model_by_id, mid)
     if IDLE_TIMEOUT > 0:
         log.info(f"VRAM auto-release enabled: model unloads after {IDLE_TIMEOUT}s idle")
     else:
         log.info("VRAM auto-release disabled (IDLE_TIMEOUT=0)")
     yield
+    await asyncio.to_thread(gate.close)
 
 
 # ---------------------------------------------------------------------------
@@ -65,20 +67,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="FTML Whisper Server", lifespan=lifespan)
 pipeline = None
 model_id_str = None
-model_lock = threading.Lock()
 loading_model = False
 
 # VRAM auto-release: unload model after idle timeout to free GPU memory.
 # The model is automatically reloaded on the next inference request.
 IDLE_TIMEOUT = int(os.environ.get("IDLE_TIMEOUT", "120"))  # seconds (0 = disabled)
-_last_inference_time = 0.0
-_idle_timer = None
-_idle_timer_lock = threading.Lock()
+gate = ModelGate(IDLE_TIMEOUT)
+model_lock = gate.lock
+if not 0 <= CHUNK_OVERLAP_S < CHUNK_DURATION_S:
+    raise ValueError("CHUNK_OVERLAP_S must be nonnegative and smaller than CHUNK_DURATION_S")
 
 # ---------------------------------------------------------------------------
 # Model loading / unloading
 # ---------------------------------------------------------------------------
 
+@gate.operation
 def load_model_by_id(mid: str, is_swap: bool = False):
     """Load a WhisperPipeline for the given HuggingFace model ID.
 
@@ -103,7 +106,7 @@ def load_model_by_id(mid: str, is_swap: bool = False):
 
     try:
         log.info(f"Loading model: {mid} on device: {device}")
-        model_path = snapshot_download(mid)
+        model_path = snapshot_download(mid, revision=os.environ.get("MODEL_REVISION") or None)
         log.info(f"Model path: {model_path}")
         new_pipeline = openvino_genai.WhisperPipeline(str(model_path), device)
         with model_lock:
@@ -134,6 +137,9 @@ def unload_model():
     log.info("Model unloaded from GPU (VRAM released)")
 
 
+gate.on_idle = unload_model
+
+
 def ensure_model_loaded():
     """Ensure the model is loaded, reloading if it was unloaded for VRAM release."""
     global pipeline
@@ -142,91 +148,6 @@ def ensure_model_loaded():
     mid = model_id_str or os.environ.get("MODEL_ID", DEFAULT_MODEL_ID)
     log.info(f"Reloading model for inference: {mid}")
     load_model_by_id(mid)
-
-
-def _schedule_idle_unload():
-    """Schedule model unload after IDLE_TIMEOUT seconds of inactivity."""
-    global _idle_timer, _last_inference_time
-    if IDLE_TIMEOUT <= 0:
-        return
-
-    with _idle_timer_lock:
-        if _idle_timer is not None:
-            _idle_timer.cancel()
-        _last_inference_time = time.time()
-        _idle_timer = threading.Timer(IDLE_TIMEOUT, _check_and_unload)
-        _idle_timer.daemon = True
-        _idle_timer.start()
-
-
-def _check_and_unload():
-    """Check if idle timeout has elapsed and unload model if so."""
-    global _idle_timer
-    elapsed = time.time() - _last_inference_time
-    if elapsed >= IDLE_TIMEOUT - 1:  # 1s tolerance
-        log.info(f"Idle for {elapsed:.0f}s (timeout={IDLE_TIMEOUT}s), unloading model to free VRAM")
-        unload_model()
-    with _idle_timer_lock:
-        _idle_timer = None
-
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def format_ts(seconds: float) -> str:
-    """Format seconds as HH:MM:SS.mmm for VTT."""
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    ms = int((seconds % 1) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
-
-
-def chunks_to_vtt(chunks) -> str:
-    """Convert WhisperPipeline chunks to WebVTT format with hallucination filtering."""
-    lines = ["WEBVTT", ""]
-    idx = 1
-    prev_text = ""
-    repeat_count = 0
-
-    for chunk in chunks:
-        text = chunk.text.strip() if hasattr(chunk, 'text') else chunk.get('text', '').strip()
-        if not text:
-            continue
-
-        start_ts = chunk.start_ts if hasattr(chunk, 'start_ts') else chunk['start_ts']
-        end_ts = chunk.end_ts if hasattr(chunk, 'end_ts') else chunk['end_ts']
-        duration = end_ts - start_ts
-
-        # Skip chunks spanning an entire 30s window (likely hallucination)
-        if duration >= 29.0:
-            log.debug(f"Filtered 29s+ chunk: [{format_ts(start_ts)}→{format_ts(end_ts)}] {text[:50]}")
-            continue
-
-        # Skip 3+ consecutive identical texts (repetition hallucination)
-        if text == prev_text:
-            repeat_count += 1
-            if repeat_count >= 2:
-                continue
-        else:
-            repeat_count = 0
-        prev_text = text
-
-        # Skip known hallucination patterns
-        if is_hallucination(text, duration):
-            continue
-
-        start = format_ts(start_ts)
-        end = format_ts(end_ts)
-        lines.append(str(idx))
-        lines.append(f"{start} --> {end}")
-        lines.append(text)
-        lines.append("")
-        idx += 1
-
-    return "\n".join(lines)
 
 
 def decode_audio(audio_bytes: bytes) -> np.ndarray:
@@ -244,416 +165,138 @@ def wav_frames_to_audio(frames: bytes, channels: int) -> np.ndarray:
     return (audio.astype(np.float32) / 32768.0)
 
 
-# ---------------------------------------------------------------------------
-# Hallucination filtering
-# ---------------------------------------------------------------------------
-
-# Known Whisper hallucination phrases (exact match)
-_HALLUCINATION_EXACT = {
-    # Japanese
-    "ご視聴ありがとうございました", "ご視聴ありがとうございます",
-    "お疲れ様でした", "おやすみなさい", "では、また", "それでは、また",
-    # English
-    "thank you for watching", "thanks for watching",
-    "please subscribe", "like and subscribe", "see you next time",
-    # Korean
-    "시청해 주셔서 감사합니다", "구독과 좋아요 부탁드립니다",
-    # Chinese
-    "谢谢观看", "感谢收看",
-    # Generic
-    "...", "…",
-}
-
-# Regex patterns for hallucination artifacts
-_HALLUCINATION_PATTERNS = [
-    re.compile(r'^by\s+\w\.?$', re.IGNORECASE),   # "by H.", "by A."
-    re.compile(r'^[\.…\s]+$'),                      # dots/ellipsis only
-    re.compile(r'^[\s\W]+$'),                        # whitespace/punctuation only
-    re.compile(r'^[a-zA-Z]{1,2}$'),                   # 1-2 ASCII chars: "me", "a", "I"
-]
+GAP_THRESHOLD_S = float(os.environ.get("GAP_THRESHOLD_S", "15"))
+GAP_MAX_RETRY_S = float(os.environ.get("GAP_MAX_RETRY_S", "300"))
 
 
-def is_hallucination(text: str, duration: float) -> bool:
-    """Detect common Whisper hallucination patterns.
-
-    Args:
-        text: transcribed text (already stripped)
-        duration: chunk duration in seconds
-    Returns:
-        True if this is likely a hallucination to be discarded
-    """
-    if not text:
-        return True
-    t = text.strip()
-    if not t:
-        return True
-
-    # Exact match against known hallucination phrases
-    if t in _HALLUCINATION_EXACT or t.lower() in _HALLUCINATION_EXACT:
-        return True
-
-    # Regex pattern match
-    for pattern in _HALLUCINATION_PATTERNS:
-        if pattern.match(t):
-            return True
-
-    # Ultra-short ASCII fragments are still usually decode noise.
-    if duration < 0.12 and t.isascii():
-        return True
-
-    return False
+def check_cancelled(cancel):
+    if cancel is not None and cancel.is_set():
+        raise InterruptedError("Transcription cancelled")
 
 
-# ---------------------------------------------------------------------------
-# Inference
-# ---------------------------------------------------------------------------
-
-GAP_THRESHOLD_S = float(os.environ.get("GAP_THRESHOLD_S", "15"))  # 2nd-pass gap recovery threshold
-
-
-def _recover_gaps(audio_getter, all_chunks, config, total_duration, sr=16000):
-    """2nd pass: re-infer segments where subtitle gap > GAP_THRESHOLD_S.
-
-    Args:
-        audio_getter: callable(start_sample, end_sample) -> np.ndarray
-        all_chunks: list of {'text', 'start_ts', 'end_ts'} from 1st pass
-        config: WhisperGenerationConfig
-        total_duration: total audio duration in seconds
-        sr: sample rate
-    Returns:
-        updated all_chunks (sorted)
-    """
-    if GAP_THRESHOLD_S <= 0 or not all_chunks:
-        return all_chunks
-
-    gaps = []
-    prev_end = 0.0
-    for c in all_chunks:
-        if c['start_ts'] - prev_end > GAP_THRESHOLD_S:
-            gaps.append((prev_end, c['start_ts']))
-        prev_end = c['end_ts']
-    if total_duration - prev_end > GAP_THRESHOLD_S:
-        gaps.append((prev_end, total_duration))
-
-    if not gaps:
-        return all_chunks
-
-    log.info(f"Gap recovery: {len(gaps)} gaps > {GAP_THRESHOLD_S}s found")
-    recovered = 0
-
-    for gap_start, gap_end in gaps:
-        pad = 2.0
-        seg_start = max(0, int((gap_start - pad) * sr))
-        seg_end = min(int(total_duration * sr), int((gap_end + pad) * sr))
-        segment = audio_getter(seg_start, seg_end)
-        offset_s = seg_start / sr
-
-        t0 = time.time()
-        result = pipeline.generate(segment, config)
-        elapsed = time.time() - t0
-
-        chunks = getattr(result, "chunks", [])
-        added = 0
-        for c in chunks:
-            text = c.text.strip()
-            if not text:
-                continue
-            abs_start = c.start_ts + offset_s
-            abs_end = c.end_ts + offset_s
-            duration = abs_end - abs_start
-            if is_hallucination(text, duration):
-                continue
-            if abs_start >= gap_start - 1 and abs_end <= gap_end + 1:
-                all_chunks.append({'text': text, 'start_ts': abs_start, 'end_ts': abs_end})
-                added += 1
-
-        recovered += added
-        log.info(f"  Gap [{gap_start:.0f}s-{gap_end:.0f}s] ({elapsed:.1f}s): {added} cues recovered")
-
-    if recovered:
-        all_chunks.sort(key=lambda c: c['start_ts'])
-        log.info(f"Gap recovery: total {recovered} cues added")
-
-    return all_chunks
+def _recover_gaps(audio_getter, chunks, config, total_duration, sr=16000, cancel=None):
+    if GAP_THRESHOLD_S <= 0 or GAP_MAX_RETRY_S <= 0:
+        return chunks
+    budget = GAP_MAX_RETRY_S
+    for start, end in find_gaps(chunks, total_duration, GAP_THRESHOLD_S):
+        # Limit both peak memory and total retry work for very long silent gaps.
+        while start < end and budget > 0:
+            check_cancelled(cancel)
+            window_end = min(end, start + 30, start + budget)
+            begin_sample = max(0, int((start-2) * sr))
+            end_sample = min(int(total_duration * sr), int((window_end+2) * sr))
+            audio = audio_getter(begin_sample, end_sample)
+            budget -= window_end-start
+            # Only skip digital silence, not quiet speech; this is not VAD.
+            if audio.size and np.any(audio):
+                result = pipeline.generate(audio, config)
+                check_cancelled(cancel)
+                recovered = normalize_chunks(getattr(result, "chunks", []), begin_sample/sr, total_duration)
+                recovered = [cue for cue in recovered if cue["start_ts"] >= start-1 and cue["end_ts"] <= window_end+1]
+                chunks = merge_chunks(chunks, recovered)
+            start = window_end
+    return chunks
 
 
-def run_inference(audio: np.ndarray, language: str = ""):
-    """Run Whisper inference on audio, with 5-min chunking for VRAM management.
-
-    Short audio (<= CHUNK_DURATION_S) is processed in a single pass.
-    Longer audio is split into overlapping chunks, each processed independently,
-    with timestamps remapped to absolute positions.
-    """
+def _transcribe(audio_getter, total_duration, language, cancel=None):
+    check_cancelled(cancel)
     ensure_model_loaded()
-
     config = pipeline.get_generation_config()
     config.return_timestamps = True
     config.task = "transcribe"
-    if language and language != "auto":
-        config.language = f"<|{language}|>"
-
-    sr = 16000
+    config.language = f"<|{language}|>" if language and language != "auto" else ""
+    started = time.monotonic()
+    sr, position, chunks = 16000, 0, []
+    total_samples = int(round(total_duration * sr))
     chunk_samples = CHUNK_DURATION_S * sr
-    total_duration = len(audio) / sr
-
-    # Short audio: single pass
-    if len(audio) <= chunk_samples:
-        log.info(f"Inference: {total_duration:.1f}s, "
-                 f"model={model_id_str}, language={language or 'auto'}")
-
-        t0 = time.time()
-        result = pipeline.generate(audio, config)
-        elapsed = time.time() - t0
-
-        chunks = getattr(result, "chunks", [])
-        full_text = "".join(c.text for c in chunks).strip() if chunks else str(result)
-
-        log.info(f"Done: {len(chunks)} chunks, {len(full_text)} chars in {elapsed:.1f}s")
-
-        _schedule_idle_unload()
-        return chunks, full_text, elapsed
-
-    # Long audio: chunked processing
     overlap_samples = CHUNK_OVERLAP_S * sr
-    num_chunks = 1 + max(0, int(np.ceil((len(audio) - chunk_samples) / (chunk_samples - overlap_samples))))
-    log.info(f"Chunked inference: {total_duration:.1f}s → {num_chunks} chunks of {CHUNK_DURATION_S}s, "
-             f"model={model_id_str}, language={language or 'auto'}")
-
-    all_chunks = []
-    total_elapsed = 0.0
-    pos = 0
-    chunk_idx = 0
-
-    while pos < len(audio):
-        end = min(pos + chunk_samples, len(audio))
-        segment = audio[pos:end]
-        offset_s = pos / sr
-        seg_duration = len(segment) / sr
-
-        t0 = time.time()
-        result = pipeline.generate(segment, config)
-        elapsed = time.time() - t0
-        total_elapsed += elapsed
-
-        chunks = getattr(result, "chunks", [])
-        added = 0
-
-        for c in chunks:
-            text = c.text.strip()
-            if not text:
-                continue
-
-            abs_start = c.start_ts + offset_s
-            abs_end = c.end_ts + offset_s
-            duration = abs_end - abs_start
-
-            if is_hallucination(text, duration):
-                continue
-
-            # Deduplicate overlap region
-            if all_chunks:
-                last = all_chunks[-1]
-                if abs_start < last['end_ts']:
-                    if text == last['text'] or abs_end <= last['end_ts']:
-                        continue
-                # Near-boundary identical text dedup (within 3s)
-                if (abs_start - last['end_ts']) < 3.0 and text == last['text']:
-                    continue
-
-            all_chunks.append({'text': text, 'start_ts': abs_start, 'end_ts': abs_end})
-            added += 1
-
-        log.info(f"  Chunk {chunk_idx + 1}/{num_chunks} "
-                 f"[{offset_s:.0f}s-{offset_s + seg_duration:.0f}s] "
-                 f"({elapsed:.1f}s): {added} cues")
-
-        # Advance position: subtract overlap unless this is the last chunk
-        if end < len(audio):
-            pos = end - overlap_samples
-        else:
+    while position < total_samples:
+        check_cancelled(cancel)
+        end = min(position + chunk_samples, total_samples)
+        result = pipeline.generate(audio_getter(position, end), config)
+        check_cancelled(cancel)
+        incoming = normalize_chunks(getattr(result, "chunks", []), position/sr, total_duration)
+        chunks = merge_chunks(chunks, incoming)
+        log.info("Transcribed %.1f/%.1fs, %d cues", end/sr, total_duration, len(chunks))
+        if end == total_samples:
             break
-        chunk_idx += 1
-
-    # 2nd pass: recover gaps
-    all_chunks = _recover_gaps(
-        lambda s, e: audio[s:e], all_chunks, config, total_duration, sr
-    )
-
-    full_text = " ".join(c['text'] for c in all_chunks)
-    log.info(f"Done: {len(all_chunks)} chunks, {len(full_text)} chars in {total_elapsed:.1f}s")
-
-    _schedule_idle_unload()
-    return all_chunks, full_text, total_elapsed
+        position = end - overlap_samples
+    chunks = _recover_gaps(audio_getter, chunks, config, total_duration, sr, cancel)
+    check_cancelled(cancel)
+    return chunks, " ".join(cue["text"] for cue in chunks), time.monotonic()-started, total_duration
 
 
-def run_inference_wav(file_obj, language: str = ""):
-    """Run inference directly from a PCM16 16kHz WAV file-like object."""
-    ensure_model_loaded()
+@gate.operation
+def run_inference(audio, language="", cancel=None):
+    return _transcribe(lambda start, end: audio[start:end], len(audio)/16000, language, cancel)
 
-    config = pipeline.get_generation_config()
-    config.return_timestamps = True
-    config.task = "transcribe"
-    if language and language != "auto":
-        config.language = f"<|{language}|>"
 
+@gate.operation
+def run_inference_wav(file_obj, language="", cancel=None):
+    check_cancelled(cancel)
     file_obj.seek(0)
-    with wave.open(file_obj, "rb") as wav_file:
-        sr = wav_file.getframerate()
-        channels = wav_file.getnchannels()
-        sample_width = wav_file.getsampwidth()
-        total_frames = wav_file.getnframes()
-
-        if sr != 16000 or sample_width != 2:
-            raise wave.Error(f"unsupported WAV format: sr={sr}, sample_width={sample_width}")
-
-        chunk_frames = CHUNK_DURATION_S * sr
-        overlap_frames = CHUNK_OVERLAP_S * sr
-        total_duration = total_frames / sr
-
-        if total_frames <= chunk_frames:
-            log.info(f"Inference: {total_duration:.1f}s, model={model_id_str}, language={language or 'auto'}")
-            wav_file.rewind()
-            audio = wav_frames_to_audio(wav_file.readframes(total_frames), channels)
-
-            t0 = time.time()
-            result = pipeline.generate(audio, config)
-            elapsed = time.time() - t0
-
-            chunks = getattr(result, "chunks", [])
-            full_text = "".join(c.text for c in chunks).strip() if chunks else str(result)
-            log.info(f"Done: {len(chunks)} chunks, {len(full_text)} chars in {elapsed:.1f}s")
-
-            _schedule_idle_unload()
-            return chunks, full_text, elapsed
-
-        num_chunks = 1 + max(0, int(np.ceil((total_frames - chunk_frames) / (chunk_frames - overlap_frames))))
-        log.info(f"Chunked inference: {total_duration:.1f}s -> {num_chunks} chunks of {CHUNK_DURATION_S}s, "
-                 f"model={model_id_str}, language={language or 'auto'}")
-
-        all_chunks = []
-        total_elapsed = 0.0
-        pos = 0
-        chunk_idx = 0
-
-        while pos < total_frames:
-            end = min(pos + chunk_frames, total_frames)
-            wav_file.setpos(pos)
-            segment = wav_frames_to_audio(wav_file.readframes(end - pos), channels)
-            offset_s = pos / sr
-            seg_duration = len(segment) / sr
-
-            t0 = time.time()
-            result = pipeline.generate(segment, config)
-            elapsed = time.time() - t0
-            total_elapsed += elapsed
-
-            chunks = getattr(result, "chunks", [])
-            added = 0
-
-            for c in chunks:
-                text = c.text.strip()
-                if not text:
-                    continue
-
-                abs_start = c.start_ts + offset_s
-                abs_end = c.end_ts + offset_s
-                duration = abs_end - abs_start
-
-                if is_hallucination(text, duration):
-                    continue
-
-                if all_chunks:
-                    last = all_chunks[-1]
-                    if abs_start < last['end_ts']:
-                        if text == last['text'] or abs_end <= last['end_ts']:
-                            continue
-                    if (abs_start - last['end_ts']) < 3.0 and text == last['text']:
-                        continue
-
-                all_chunks.append({'text': text, 'start_ts': abs_start, 'end_ts': abs_end})
-                added += 1
-
-            log.info(f"  Chunk {chunk_idx + 1}/{num_chunks} "
-                     f"[{offset_s:.0f}s-{offset_s + seg_duration:.0f}s] "
-                     f"({elapsed:.1f}s): {added} cues")
-
-            if end < total_frames:
-                pos = end - overlap_frames
-            else:
-                break
-            chunk_idx += 1
-
-        # 2nd pass: recover gaps (still inside wave.open context)
-        def _wav_getter(s, e):
-            wav_file.setpos(s)
-            return wav_frames_to_audio(wav_file.readframes(e - s), channels)
-
-        all_chunks = _recover_gaps(
-            _wav_getter, all_chunks, config, total_duration, sr
-        )
-
-    full_text = " ".join(c['text'] for c in all_chunks)
-    log.info(f"Done: {len(all_chunks)} chunks, {len(full_text)} chars in {total_elapsed:.1f}s")
-
-    _schedule_idle_unload()
-    return all_chunks, full_text, total_elapsed
+    with wave.open(file_obj, "rb") as wav:
+        if wav.getframerate() != 16000 or wav.getsampwidth() != 2:
+            raise wave.Error("Expected 16kHz PCM16 WAV")
+        channels = wav.getnchannels()
+        def read_audio(start, end):
+            wav.setpos(start)
+            return wav_frames_to_audio(wav.readframes(end-start), channels)
+        return _transcribe(read_audio, wav.getnframes()/16000, language, cancel)
 
 
-# ---------------------------------------------------------------------------
-# OpenAI-compatible endpoint
-# ---------------------------------------------------------------------------
+def _run_upload(file_obj, language, cancel):
+    try:
+        return run_inference_wav(file_obj, language, cancel)
+    except (wave.Error, EOFError):
+        check_cancelled(cancel)
+        file_obj.seek(0)
+        audio, _ = librosa.load(file_obj, sr=16000, mono=True)
+        return run_inference(audio.astype(np.float32), language, cancel)
+
 
 @app.post("/v1/audio/transcriptions")
 async def transcribe_openai(
+    request: Request,
     file: UploadFile = File(...),
     language: str = Form(default=""),
     response_format: str = Form(default="vtt"),
 ):
-    if loading_model:
-        raise HTTPException(503, "Model is loading, please wait")
-
+    cancel = threading.Event()
+    await file.seek(0)
+    future = asyncio.get_running_loop().run_in_executor(None, _run_upload, file.file, language, cancel)
     try:
-        loop = asyncio.get_running_loop()
-        await file.seek(0)
+        while not future.done():
+            await asyncio.wait([future], timeout=0.25)
+            if await request.is_disconnected():
+                cancel.set()
+        chunks, text, elapsed, duration = await asyncio.shield(future)
+    except asyncio.CancelledError:
+        cancel.set()
+        # Keep the upload alive until the GPU call/thread has released it.
         try:
-            chunks, full_text, elapsed = await loop.run_in_executor(
-                None, run_inference_wav, file.file, language
-            )
-        except wave.Error:
-            await file.seek(0)
-            audio_bytes = await file.read()
-            log.info(f"Received: {file.filename} ({len(audio_bytes)} bytes)")
-            audio = decode_audio(audio_bytes)
-            log.info(f"Audio: {len(audio)/16000:.1f}s, {len(audio)} samples")
-            chunks, full_text, elapsed = await loop.run_in_executor(
-                None, run_inference, audio, language
-            )
-    except Exception as e:
-        log.error(f"Inference failed: {e}")
-        raise HTTPException(500, f"Inference failed: {e}")
-
-    log.info(f"Done: {len(chunks)} chunks, {len(full_text)} chars in {elapsed:.1f}s")
-
+            await asyncio.shield(future)
+        except Exception:
+            pass
+        raise
+    except InterruptedError as exc:
+        raise HTTPException(499, str(exc)) from exc
+    except Exception as exc:
+        log.exception("Inference failed")
+        raise HTTPException(500, "Transcription failed; inspect server logs") from exc
+    finally:
+        cancel.set()
+    if not chunks:
+        raise HTTPException(422, "No valid timed speech found; no subtitle was saved")
+    log.info("Completed %d cues in %.1fs", len(chunks), elapsed)
     if response_format == "vtt":
-        vtt = chunks_to_vtt(chunks) if chunks else f"WEBVTT\n\n1\n00:00:00.000 --> 99:59:59.999\n{full_text}\n"
-        return PlainTextResponse(vtt, media_type="text/vtt")
-    elif response_format == "verbose_json":
-        if chunks:
-            segments = []
-            for c in chunks:
-                if hasattr(c, 'start_ts'):
-                    segments.append({"start": c.start_ts, "end": c.end_ts, "text": c.text.strip()})
-                else:
-                    segments.append({"start": c['start_ts'], "end": c['end_ts'], "text": c['text'].strip()})
-        else:
-            segments = []
-        duration = 0.0
-        if chunks:
-            last = chunks[-1]
-            duration = last.end_ts if hasattr(last, 'end_ts') else last['end_ts']
-        return JSONResponse({"text": full_text, "language": language or "auto", "duration": duration, "segments": segments})
-    else:
-        return JSONResponse({"text": full_text})
+        return PlainTextResponse(chunks_to_vtt(chunks), media_type="text/vtt")
+    if response_format == "verbose_json":
+        return JSONResponse({"text": text, "language": language or "auto", "duration": duration, "segments": [
+            {"id": index, "start": cue["start_ts"], "end": cue["end_ts"], "text": cue["text"]}
+            for index, cue in enumerate(chunks)
+        ]})
+    return JSONResponse({"text": text})
 
 
 # ---------------------------------------------------------------------------
@@ -671,7 +314,7 @@ async def load_new_model(req: ModelLoadRequest):
     if req.model_id == model_id_str and pipeline is not None:
         return {"status": "ok", "model": model_id_str, "message": "already loaded"}
     try:
-        load_model_by_id(req.model_id, is_swap=True)
+        await asyncio.to_thread(load_model_by_id, req.model_id, True)
     except Exception as e:
         log.error(f"Failed to load model {req.model_id}: {e}")
         raise HTTPException(500, f"Failed to load model: {e}")
@@ -682,7 +325,7 @@ async def unload_model_endpoint():
     """Manually unload the model to free VRAM immediately."""
     if pipeline is None:
         return {"status": "ok", "message": "model already unloaded"}
-    unload_model()
+    await asyncio.to_thread(unload_model)
     return {"status": "ok", "message": "model unloaded, VRAM released"}
 
 @app.get("/v1/model/info")
@@ -691,6 +334,7 @@ async def model_info():
     return {
         "model": model_id_str,
         "status": "loading" if loading_model else ("loaded" if pipeline else "unloaded"),
+        "busy": gate.active > 0,
         "idle_timeout": IDLE_TIMEOUT,
         "vram_held": pipeline is not None,
     }

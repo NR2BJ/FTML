@@ -91,7 +91,7 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 	if ovc, ok := engine.(*OpenVINOGenAIClient); ok {
 		activeModel := s.database.GetSetting("whisper_model_id", "")
 		if activeModel != "" {
-			if err := ovc.EnsureModel(activeModel); err != nil {
+			if err := ovc.EnsureModel(ctx, activeModel); err != nil {
 				return fmt.Errorf("ensure model: %w", err)
 			}
 		}

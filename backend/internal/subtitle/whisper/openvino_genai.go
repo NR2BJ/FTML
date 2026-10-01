@@ -37,17 +37,21 @@ func (c *OpenVINOGenAIClient) Name() string {
 // EnsureModel checks if the whisper server has the expected model loaded,
 // and loads it if not. This handles server restarts where the server falls
 // back to its default MODEL_ID env var instead of the DB-configured model.
-func (c *OpenVINOGenAIClient) EnsureModel(expectedModelID string) error {
+func (c *OpenVINOGenAIClient) EnsureModel(ctx context.Context, expectedModelID string) error {
 	if expectedModelID == "" {
 		return nil
 	}
 
 	// Check current model via /v1/model/info
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(c.baseURL + "/v1/model/info")
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/model/info", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(request)
 	if err != nil {
 		log.Printf("[openvino-genai] cannot check model info: %v", err)
-		return nil // non-fatal, will fail later if server is truly down
+		return fmt.Errorf("check whisper model: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -56,7 +60,7 @@ func (c *OpenVINOGenAIClient) EnsureModel(expectedModelID string) error {
 		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil
+		return fmt.Errorf("parse whisper model info: %w", err)
 	}
 
 	if info.Model == expectedModelID {
@@ -65,9 +69,17 @@ func (c *OpenVINOGenAIClient) EnsureModel(expectedModelID string) error {
 
 	log.Printf("[openvino-genai] model mismatch: server has %q, expected %q — loading correct model", info.Model, expectedModelID)
 	loadURL := c.baseURL + "/v1/model/load"
-	body := fmt.Sprintf(`{"model_id":"%s"}`, expectedModelID)
+	body, err := json.Marshal(map[string]string{"model_id": expectedModelID})
+	if err != nil {
+		return err
+	}
 	loadClient := &http.Client{Timeout: 10 * time.Minute}
-	loadResp, err := loadClient.Post(loadURL, "application/json", strings.NewReader(body))
+	loadRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, loadURL, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	loadRequest.Header.Set("Content-Type", "application/json")
+	loadResp, err := loadClient.Do(loadRequest)
 	if err != nil {
 		return fmt.Errorf("failed to load model %s: %w", expectedModelID, err)
 	}
@@ -151,6 +163,7 @@ func (c *OpenVINOGenAIClient) doSend(ctx context.Context, audioPath, language st
 	defer audioFile.Close()
 
 	pipeReader, pipeWriter := io.Pipe()
+	defer pipeReader.Close()
 	writer := multipart.NewWriter(pipeWriter)
 
 	go func() {
@@ -209,17 +222,13 @@ func (c *OpenVINOGenAIClient) doSend(ctx context.Context, audioPath, language st
 		if isOOMError(bodyStr) {
 			return nil, fmt.Errorf("GPU out of memory (status %d): %s", resp.StatusCode, bodyStr)
 		}
-		if isRetryableError(resp.StatusCode, nil) {
-			return nil, fmt.Errorf("openvino-genai server request: status %d: %s", resp.StatusCode, bodyStr)
-		}
-		return nil, fmt.Errorf("openvino-genai server error (status %d): %s", resp.StatusCode, bodyStr)
+		return nil, &serverResponseError{Status: resp.StatusCode, Body: bodyStr}
 	}
 
 	vtt := string(body)
 
-	// Ensure VTT header
-	if !strings.HasPrefix(strings.TrimSpace(vtt), "WEBVTT") {
-		vtt = "WEBVTT\n\n" + vtt
+	if !strings.HasPrefix(strings.TrimSpace(vtt), "WEBVTT") || !strings.Contains(vtt, "-->") {
+		return nil, fmt.Errorf("whisper returned no valid timed subtitles")
 	}
 
 	updateProgress(0.95)

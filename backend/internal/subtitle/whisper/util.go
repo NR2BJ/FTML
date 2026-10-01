@@ -2,6 +2,7 @@ package whisper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,7 +25,7 @@ func extractAudio(ctx context.Context, videoPath string) (string, error) {
 		"-af", "pan=mono|c0=0.5*FC+0.25*FL+0.25*FR,loudnorm=I=-16:TP=-1.5:LRA=11,acompressor=threshold=-25dB:ratio=3:attack=5:release=50",
 		"-acodec", "pcm_s16le",
 		"-ar", "16000", // 16kHz
-		"-y",           // overwrite
+		"-y", // overwrite
 		tmpFile.Name(),
 	)
 
@@ -49,6 +50,11 @@ func isOOMError(body string) bool {
 
 // isRetryableError checks if an HTTP error is transient and worth retrying
 func isRetryableError(statusCode int, err error) bool {
+	var responseError *serverResponseError
+	if errors.As(err, &responseError) {
+		statusCode = responseError.Status
+		return statusCode == 502 || statusCode == 503 || statusCode == 504 || statusCode == 409
+	}
 	if err != nil {
 		errStr := err.Error()
 		return strings.Contains(errStr, "connection refused") ||
@@ -57,4 +63,13 @@ func isRetryableError(statusCode int, err error) bool {
 			strings.Contains(errStr, "timeout")
 	}
 	return statusCode == 502 || statusCode == 503 || statusCode == 504
+}
+
+type serverResponseError struct {
+	Status int
+	Body   string
+}
+
+func (e *serverResponseError) Error() string {
+	return fmt.Sprintf("whisper server status %d: %s", e.Status, e.Body)
 }

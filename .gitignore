@@ -9,6 +9,8 @@ data/
 backend/server
 *.tsbuildinfo
 .syncthing.*.tmp
+__pycache__/
+*.pyc
 
 # OS
 .DS_Store

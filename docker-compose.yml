@@ -58,6 +58,12 @@ services:
       dockerfile: Dockerfile.openvino-genai
     environment:
       - DEVICE=${WHISPER_DEVICE:-GPU}
+      - CHUNK_DURATION_S=${WHISPER_CHUNK_SECONDS:-300}
+      - CHUNK_OVERLAP_S=${WHISPER_OVERLAP_SECONDS:-5}
+      - GAP_THRESHOLD_S=${WHISPER_GAP_SECONDS:-15}
+      - GAP_MAX_RETRY_S=${WHISPER_GAP_RETRY_SECONDS:-300}
+      - IDLE_TIMEOUT=${WHISPER_IDLE_SECONDS:-120}
+      - MODEL_REVISION=${WHISPER_MODEL_REVISION:-}
     volumes:
       - whisper_models:/root/.cache/huggingface
       - ${MEDIA_PATH:-/mnt/storage/video}:/media:ro

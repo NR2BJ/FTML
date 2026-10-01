@@ -44,7 +44,7 @@ func NewWhisperModelsHandler(database *db.Database) *WhisperModelsHandler {
 	}
 }
 
-const defaultModelID = "OpenVINO/distil-whisper-large-v3-int8-ov"
+const defaultModelID = "OpenVINO/whisper-large-v3-int8-ov"
 
 // ListModels fetches OpenVINO whisper models from HuggingFace API
 func (h *WhisperModelsHandler) ListModels(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +124,7 @@ func (h *WhisperModelsHandler) getModels() ([]OVWhisperModel, error) {
 		}
 
 		// Parse english-only (.en models)
-		englishOnly := strings.Contains(m.ModelID, ".en")
+		englishOnly := strings.Contains(m.ModelID, ".en") || strings.Contains(m.ModelID, "/distil-whisper-large-v2") || strings.Contains(m.ModelID, "/distil-whisper-large-v3")
 
 		// Parse model size
 		size := parseModelSize(m.ModelID)
@@ -149,8 +149,9 @@ func (h *WhisperModelsHandler) getModels() ([]OVWhisperModel, error) {
 
 // parseModelSize extracts the model size from HuggingFace model ID
 // e.g. "OpenVINO/whisper-large-v3-int8-ov" → "large-v3"
-//      "OpenVINO/distil-whisper-large-v3-int8-ov" → "distil-large-v3"
-//      "OpenVINO/whisper-tiny.en-int8-ov" → "tiny"
+//
+//	"OpenVINO/distil-whisper-large-v3-int8-ov" → "distil-large-v3"
+//	"OpenVINO/whisper-tiny.en-int8-ov" → "tiny"
 func parseModelSize(modelID string) string {
 	name := strings.TrimPrefix(modelID, "OpenVINO/")
 	name = strings.TrimSuffix(name, "-ov")
