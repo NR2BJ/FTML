@@ -7,6 +7,7 @@ import { listSubtitles } from '@/api/subtitle'
 import { detectBrowserCodecs } from '@/utils/codec'
 import { createSessionID, normalizeSeekTime } from '@/utils/session'
 import { compatibleQuality, canTryCompatibility } from '@/utils/playback'
+import { PlaybackStartupWatch } from '@/utils/playbackStartup'
 import { getStoredAuthToken } from '@/utils/authToken'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useToastStore } from '@/stores/toastStore'
@@ -193,8 +194,40 @@ export default function Player({ path }: PlayerProps) {
         },
       })
       hlsRef.current = hls
-      hls.loadSource(getHLSUrl(filePath, sid, q, startTime, codec, storeAudioTrack))
-      hls.attachMedia(videoEl)
+      let startupTimer: ReturnType<typeof setInterval> | null = null
+      let startupFinished = false
+      const clearStartupTimer = () => {
+        if (startupTimer !== null) clearInterval(startupTimer)
+        startupTimer = null
+      }
+      hls.on(Hls.Events.DESTROYING, clearStartupTimer)
+      hls.on(Hls.Events.MEDIA_DETACHING, clearStartupTimer)
+      hls.on(Hls.Events.BUFFER_APPENDED, (_, data) => {
+        if (data.frag.sn === 'initSegment' || data.type === 'audio' || startupTimer !== null || startupFinished) return
+        // 일부 HEVC 디코더는 append 성공 후에도 프레임을 버리고 오류를 보내지 않는다.
+        const watch = new PlaybackStartupWatch()
+        watch.check(performance.now(), videoEl.readyState, !document.hidden)
+        startupTimer = setInterval(() => {
+          if (startRequestSeqRef.current !== requestSeq || videoEl.error) {
+            clearStartupTimer()
+            return
+          }
+          const result = watch.check(performance.now(), videoEl.readyState, !document.hidden)
+          if (result === 'waiting') return
+          startupFinished = true
+          clearStartupTimer()
+          if (result === 'ready') return
+
+          console.warn('[재생 시작 지연]', { session: sid, quality: q, codec, readyState: videoEl.readyState })
+          if (tryCompatibilityPlayback(q, codec)) return
+          sourceChangingRef.current = true
+          stopCurrentSession()
+          hls.destroy()
+          hlsRef.current = null
+          usePlayerStore.getState().setPlaying(false)
+          setError('영상 데이터를 받았지만 브라우저가 재생을 시작하지 못했습니다. 다시 시도해 주세요.')
+        }, 500)
+      })
       let mediaRecoveryAttempts = 0
       let networkRecoveryAttempts = 0
       hls.on(Hls.Events.ERROR, (_, data) => {
@@ -235,6 +268,8 @@ export default function Player({ path }: PlayerProps) {
           if (startRequestSeqRef.current === requestSeq && playbackIntentRef.current) videoEl.play().catch(() => {})
         })
       }
+      hls.loadSource(getHLSUrl(filePath, sid, q, startTime, codec, storeAudioTrack))
+      hls.attachMedia(videoEl)
       setUseHLS(true)
     } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS

@@ -14,6 +14,26 @@ const { encodeMediaPath } = await loadSource('../src/utils/mediaPath.ts')
 const { createSessionID, normalizeSeekTime } = await loadSource('../src/utils/session.ts')
 const { compatibleQuality, canTryCompatibility } = await loadSource('../src/utils/playback.ts')
 const { detectBrowserCodecs } = await loadSource('../src/utils/codec.ts')
+const { PlaybackStartupWatch } = await loadSource('../src/utils/playbackStartup.ts')
+
+test('재생 시작 감시는 영상 준비를 기다리고 오류 없는 멈춤을 구분한다', () => {
+  const watch = new PlaybackStartupWatch()
+  assert.equal(watch.check(100000, 1, true), 'waiting', '첫 영상 도착 전 대기는 포함하지 않는다')
+  for (let t = 100500; t < 108000; t += 500) assert.equal(watch.check(t, 1, true), 'waiting')
+  assert.equal(watch.check(108000, 1, true), 'stalled')
+  assert.equal(watch.check(108500, 2, true), 'ready', '일시정지 상태라도 첫 화면이 준비되면 정상이다')
+})
+
+test('숨겨진 탭과 절전 시간은 재생 실패로 세지 않는다', () => {
+  const watch = new PlaybackStartupWatch()
+  for (let t = 0; t <= 7000; t += 500) assert.equal(watch.check(t, 1, true), 'waiting')
+  assert.equal(watch.check(7500, 1, false), 'waiting')
+  assert.equal(watch.check(8000, 1, true), 'waiting')
+  assert.equal(watch.check(60000, 1, true), 'waiting')
+  for (let t = 60500; t < 68000; t += 500) assert.equal(watch.check(t, 1, true), 'waiting')
+  assert.equal(watch.check(68000, 1, true), 'stalled')
+  assert.equal(watch.check(68500, 3, false), 'ready')
+})
 
 test('HLS 코덱은 MP4 MSE와 HEVC Main 10을 따로 검사한다', t => {
   const checked = []

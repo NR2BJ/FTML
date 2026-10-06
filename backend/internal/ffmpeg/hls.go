@@ -299,7 +299,14 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 		// Reset video PTS/DTS to 0-based. MKV files often have non-zero first PTS (5-10s offset).
 		// In copy mode, -output_ts_offset alone doesn't work because packets keep original PTS.
 		// The setts bitstream filter rewrites PTS/DTS at the packet level before muxing.
-		args = append(args, "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS")
+		videoBSF := "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS"
+		if params.SourceVideoCodec == "hevc" {
+			// 열린 GOP의 CRA로 시작할 때 그보다 먼저 표시되는 RASL은 앞 GOP를
+			// 참조할 수 없다. 첫 PTS 이전 패킷만 제외하고 이후 GOP는 보존한다.
+			// amount=0은 패킷 바이트 변경을 금지한다. PTS가 없는 패킷도 보존한다.
+			videoBSF = "noise=amount=0:drop='not(eq(pts,nopts))*lt(pts,startpts)'," + videoBSF
+		}
+		args = append(args, "-bsf:v", videoBSF)
 
 		// Audio handling: copy AAC directly, re-encode others to AAC.
 		// Both paths reset audio PTS/DTS to 0-based to match the video setts filter.
@@ -355,8 +362,11 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 		)
 	}
 
+	// 원본 전송은 열린 GOP일 수 있으므로 조각의 독립 재생을 보장하지 않는다.
+	if !isPassthrough {
+		args = append(args, "-hls_flags", "independent_segments")
+	}
 	args = append(args,
-		"-hls_flags", "independent_segments",
 		"-hls_playlist_type", "event",
 		"-hls_init_time", "1",
 		filepath.Join(outputDir, "playlist.m3u8"),
