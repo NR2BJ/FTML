@@ -20,6 +20,8 @@ const fontOptions = [
 export default function SubtitleSettings({ onClose }: SubtitleSettingsProps) {
   const {
     syncOffset,
+    plainText,
+    setPlainText,
     fontSize,
     fontFamily,
     textColor,
@@ -48,6 +50,11 @@ export default function SubtitleSettings({ onClose }: SubtitleSettingsProps) {
         </button>
       </div>
 
+      <label className="flex items-center gap-2 text-sm text-white mb-2">
+        <input type="checkbox" checked={plainText} onChange={e => setPlainText(e.target.checked)} />
+        일반 자막으로 보기
+      </label>
+      <p className="text-xs text-gray-400 mb-3">끄면 ASS의 원래 위치·효과를 표시합니다. 아래 글꼴 설정은 일반 표시에 적용됩니다.</p>
       {/* Sync Offset */}
       <div className="mb-3">
         <label className="text-xs text-gray-400 block mb-1">Sync Offset</label>

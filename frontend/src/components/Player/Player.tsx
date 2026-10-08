@@ -987,7 +987,10 @@ export default function Player({ path }: PlayerProps) {
           </div>
         </div>
       )}
-      <SubtitleDisplay videoRef={videoRef} path={path} />
+      <SubtitleDisplay videoRef={videoRef} path={path} getTime={() => {
+        const video = videoRef.current
+        return sourceChangingRef.current || !video || video.readyState < 2 ? null : video.currentTime + hlsStartTimeRef.current
+      }} />
       <NextEpisodeOverlay path={path} ended={ended} />
       <PlaybackStats videoRef={videoRef} hlsRef={hlsRef} />
       <Controls

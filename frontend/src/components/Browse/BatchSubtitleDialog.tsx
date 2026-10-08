@@ -30,8 +30,6 @@ import { isVideoFile } from '@/utils/format'
 
 const ENGINES_TRANSLATE = [
   { value: 'gemini', label: 'Gemini' },
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'deepl', label: 'DeepL' },
 ]
 
 const PRESETS = [

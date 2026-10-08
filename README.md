@@ -230,6 +230,12 @@ Fallback results are cached per session — subsequent session recreation skips 
 | 0–9 | Jump to 0%–90% |
 | I | Playback stats overlay |
 
+## 자막 처리
+
+자막 추출·ASS 효과·번역 보존·배포 후 확인은 [자막 처리 안내](docs/subtitles.md)를 참고하세요.
+
 ## License
 
 MIT
+
+포함된 ASS 렌더러와 글꼴에는 각각의 라이선스가 적용됩니다. libass-wasm의 저작권 고지는 배포 파일의 `ass-renderer/4.1.0/COPYRIGHT`에 함께 제공됩니다.

@@ -1,7 +1,9 @@
-import { useEffect, useState, RefObject } from 'react'
+import { useEffect, useState, useRef, RefObject } from 'react'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useSubtitleSettings } from '@/stores/subtitleSettingsStore'
 import { getSubtitleUrl } from '@/api/subtitle'
+import ASSDisplay from './ASSDisplay'
+import { useToastStore } from '@/stores/toastStore'
 
 interface SubtitleCue {
   start: number
@@ -12,12 +14,36 @@ interface SubtitleCue {
 interface SubtitleDisplayProps {
   videoRef: RefObject<HTMLVideoElement | null>
   path: string
+  getTime?: () => number | null
 }
 
 import { parseVTT } from '@/utils/subtitles'
-export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps) {
+export default function SubtitleDisplay({ videoRef, path, getTime }: SubtitleDisplayProps) {
   const { activeSubtitle, secondarySubtitle, subtitleVisible, currentTime, subtitles } = usePlayerStore()
-  const { syncOffset, fontSize, fontFamily, textColor, bgOpacity } = useSubtitleSettings()
+  const { syncOffset, fontSize, fontFamily, textColor, bgOpacity, plainText } = useSubtitleSettings()
+  const [assFailed, setASSFailed] = useState(false)
+  const format = subtitles.find(s => s.id === activeSubtitle)?.format.toLowerCase()
+  const nativeASS = !plainText && !assFailed && (format === 'ass' || format === 'ssa')
+  const [frameTime, setFrameTime] = useState<number | null>(currentTime)
+  const clockRef = useRef(getTime)
+  clockRef.current = getTime
+  const hasClock = !!getTime
+  useEffect(() => { setASSFailed(false) }, [activeSubtitle, path, subtitles, plainText, subtitleVisible])
+  useEffect(() => {
+    if (!hasClock || !subtitleVisible || nativeASS && !secondarySubtitle) return
+    let frame = 0
+    let previous: number | null | undefined
+    const tick = () => {
+      const time = clockRef.current?.() ?? null
+      if (time !== previous && (time === null || previous == null || Math.abs(time-previous) >= 0.02)) {
+        previous = time
+        setFrameTime(time)
+      }
+      frame = requestAnimationFrame(tick)
+    }
+    tick()
+    return () => cancelAnimationFrame(frame)
+  }, [hasClock, subtitleVisible, nativeASS, secondarySubtitle])
   const [cues, setCues] = useState<SubtitleCue[]>([])
   const [secondaryCues, setSecondaryCues] = useState<SubtitleCue[]>([])
 
@@ -25,7 +51,7 @@ export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps
   useEffect(() => {
     const controller = new AbortController()
     setCues([])
-    if (!activeSubtitle || !subtitleVisible) {
+    if (!activeSubtitle || !subtitleVisible || nativeASS) {
       setCues([])
       return
     }
@@ -39,7 +65,7 @@ export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps
       })
       .catch(() => { if (!controller.signal.aborted) setCues([]) })
     return () => controller.abort()
-  }, [activeSubtitle, path, subtitles, subtitleVisible])
+  }, [activeSubtitle, path, subtitles, subtitleVisible, nativeASS])
 
   // Fetch and parse secondary subtitle
   useEffect(() => {
@@ -64,21 +90,28 @@ export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps
   if (!subtitleVisible) return null
   if (!activeSubtitle && !secondarySubtitle) return null
 
-  const adjustedTime = currentTime + syncOffset
-  const activePrimary = activeSubtitle
+  const time = hasClock ? frameTime : currentTime
+  const adjustedTime = time === null ? -1 : time + syncOffset
+  const activePrimary = activeSubtitle && !nativeASS
     ? cues.filter((c) => adjustedTime >= c.start && adjustedTime < c.end)
     : []
   const activeSecondary = secondarySubtitle
     ? secondaryCues.filter((c) => adjustedTime >= c.start && adjustedTime < c.end)
     : []
 
-  if (activePrimary.length === 0 && activeSecondary.length === 0) return null
+  if (!nativeASS && activePrimary.length === 0 && activeSecondary.length === 0) return null
 
   const baseFontSize = 1.4 // rem
   const computedFontSize = baseFontSize * (fontSize / 100)
   const secondaryFontSize = computedFontSize * 0.85
 
   return (
+    <>
+    {nativeASS && activeSubtitle && <ASSDisplay key={`${path}:${activeSubtitle}:${subtitleVisible}`} revision={subtitles} videoRef={videoRef} path={path} id={activeSubtitle}
+      getTime={() => clockRef.current ? clockRef.current() : usePlayerStore.getState().currentTime} onFailure={() => {
+        setASSFailed(true)
+        useToastStore.getState().addToast({ type: 'warning', message: 'ASS 효과를 표시하지 못해 일반 자막으로 전환했습니다.' })
+      }} />}
     <div className="absolute bottom-16 left-0 right-0 flex flex-col items-center pointer-events-none z-40 px-8">
       {/* Secondary subtitle (top, smaller, semi-transparent) */}
       {activeSecondary.map((cue, i) => (
@@ -115,5 +148,6 @@ export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps
         </div>
       ))}
     </div>
+    </>
   )
 }

@@ -18,6 +18,11 @@ const { PlaybackStartupWatch } = await loadSource('../src/utils/playbackStartup.
 const { playbackDelta } = await loadSource('../src/utils/playbackMetrics.ts')
 const { PlaybackHealthWatch } = await loadSource('../src/utils/playbackHealth.ts')
 
+test('일반 자막의 문자 참조는 글자로 표시하고 HTML로 해석하지 않는다', () => {
+  const cues = parseVTT('WEBVTT\n\n00:01.000 --> 00:02.000\n&lt;안녕&gt; &amp; &#54620;&#xAE00;\n')
+  assert.equal(cues[0].text, '<안녕> & 한글')
+})
+
 test('충분한 버퍼에서 지속되는 화면 누락만 디코더 대체를 요청한다', () => {
   const watch=new PlaybackHealthWatch()
   const sample={now:0,time:0,rate:1,frames:0,dropped:0,buffer:10,paused:false,seeking:false,visible:true}

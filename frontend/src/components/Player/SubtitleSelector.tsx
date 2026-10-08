@@ -328,7 +328,7 @@ export default function SubtitleSelector() {
           {/* Upload subtitle — editor/admin only */}
           {canEdit && (
             <>
-              <input ref={fileInputRef} type="file" accept=".srt,.vtt,.ass,.ssa" className="hidden" onChange={handleUpload} />
+              <input ref={fileInputRef} type="file" accept=".srt,.vtt,.ass,.ssa,.smi,.sami" className="hidden" onChange={handleUpload} />
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploading}

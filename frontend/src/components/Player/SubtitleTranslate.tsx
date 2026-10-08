@@ -15,8 +15,6 @@ import { getJob, type Job } from '@/api/job'
 
 const ENGINES = [
   { value: 'gemini', label: 'Gemini' },
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'deepl', label: 'DeepL' },
 ]
 
 const BUILT_IN_PRESETS = [
@@ -193,6 +191,9 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
       <div className="text-xs text-gray-500 mb-2">
         Source: {sourceSubtitle.label}
       </div>
+      {['ass', 'ssa'].includes(sourceSubtitle.format.toLowerCase()) && <p className="text-xs text-gray-400 mb-2">
+        위치·스타일을 보존해 ASS로 저장합니다. 글자별 복잡한 효과는 원문을 유지하고 번역을 별도로 표시합니다.
+      </p>}
 
       {!jobId ? (
         <>
@@ -395,6 +396,9 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
               <Check className="w-6 h-6 text-green-400 mx-auto mb-2" />
               <div className="text-sm text-green-400">Complete!</div>
               <div className="text-xs text-gray-500 mt-1">Translation added to list</div>
+              {Number(job?.result?.plain_effect_fallbacks) > 0 && <div className="text-xs text-amber-300 mt-1">
+                복잡한 효과 {Number(job?.result?.plain_effect_fallbacks)}개 구간은 원문 효과와 일반 번역문으로 보존했습니다.
+              </div>}
             </>
           )}
           {isFailed && (
