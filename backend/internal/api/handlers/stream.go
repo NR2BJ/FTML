@@ -215,8 +215,8 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		return
 	}
 
-	// Wait for the playlist to contain at least one media segment.
-	// Short clips and near-end seeks may legitimately produce fewer than 3.
+	// 탐색의 키프레임 앞부분을 건너뛰어도 다음 목록 갱신까지 버틸 조각을 확보한다.
+	// 짧은 영상/끝부분은 ENDLIST가 있으면 하나만 있어도 재생한다.
 	playlistPath := filepath.Join(session.OutputDir, "playlist.m3u8")
 	ready := false
 	for i := 0; i < 100; i++ {
@@ -225,18 +225,9 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 			return
 		}
 		data, err := os.ReadFile(playlistPath)
-		if err == nil {
-			segCount := 0
-			for _, line := range strings.Split(string(data), "\n") {
-				trimmed := strings.TrimSpace(line)
-				if strings.HasSuffix(trimmed, ".ts") || strings.HasSuffix(trimmed, ".m4s") {
-					segCount++
-				}
-			}
-			if segCount >= 1 {
-				ready = true
-				break
-			}
+		if err == nil && playlistReady(data, sp.startTime-session.TimelineOrigin) {
+			ready = true
+			break
 		}
 		select {
 		case <-r.Context().Done():
@@ -286,7 +277,31 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Session-ID", sessionID)
+	w.Header().Set("X-Media-Time-Origin", strconv.FormatFloat(session.TimelineOrigin, 'f', 6, 64))
 	w.Write([]byte(strings.Join(lines, "\n")))
+}
+
+func playlistReady(data []byte, preroll float64) bool {
+	count := 0
+	total, target := 0.0, 0.0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "#EXTINF:") {
+			raw, _, _ := strings.Cut(strings.TrimPrefix(line, "#EXTINF:"), ",")
+			if n, err := strconv.ParseFloat(raw, 64); err == nil && n > 0 && !math.IsInf(n, 0) {
+				total += n
+			}
+		}
+		if strings.HasPrefix(line, "#EXT-X-TARGETDURATION:") {
+			target, _ = strconv.ParseFloat(strings.TrimPrefix(line, "#EXT-X-TARGETDURATION:"), 64)
+		}
+		if strings.HasSuffix(strings.TrimSpace(line), ".m4s") || strings.HasSuffix(strings.TrimSpace(line), ".ts") {
+			count++
+		}
+	}
+	if count > 0 && strings.Contains(string(data), "#EXT-X-ENDLIST") {
+		return true
+	}
+	return count >= 2 && total >= math.Max(0, preroll)+target+1
 }
 
 func (h *StreamHandler) serveSegment(w http.ResponseWriter, r *http.Request, rawPath string) {

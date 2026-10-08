@@ -74,7 +74,7 @@ func GenerateThumbnail(inputPath, outputDir string) (outputPath string, err erro
 
 	// Try VAAPI hardware-accelerated decode first
 	caps := GetCapabilities()
-	if caps != nil && caps.CanDecode && caps.Device != "" {
+	if caps != nil && caps.HWAccel == "vaapi" && caps.Device != "" {
 		err := generateThumbnailVAAPI(inputPath, outputPath, seekTime, caps.Device)
 		if err == nil {
 			return outputPath, nil

@@ -50,6 +50,19 @@ func TestHEVCMain10CapabilityIsExplicit(t *testing.T) {
 	}
 }
 
+func TestPlaylistReadinessIncludesSeekPreroll(t *testing.T) {
+	data := []byte("#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg_00000.m4s\n#EXTINF:6,\nseg_00001.m4s\n")
+	if !playlistReady(data, 0) {
+		t.Fatal("two full segments should start")
+	}
+	if playlistReady(data, 8) {
+		t.Fatal("preroll consumes the buffer before the next reload")
+	}
+	if !playlistReady(append(data, []byte("#EXT-X-ENDLIST\n")...), 8) {
+		t.Fatal("near-end seek cannot wait for nonexistent segments")
+	}
+}
+
 func TestHLSPlaylistAndOwnedSegments(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg unavailable")
@@ -66,6 +79,7 @@ func TestHLSPlaylistAndOwnedSegments(t *testing.T) {
 		t.Fatalf("fixture: %v %s", err, out)
 	}
 	manager := ffmpeg.NewHLSManager(t.TempDir())
+	t.Cleanup(manager.Close)
 	h := NewStreamHandler(dir, manager)
 	sid := strings.Repeat("b", 32)
 	t.Cleanup(func() { manager.StopSession(sid) })
@@ -83,6 +97,9 @@ func TestHLSPlaylistAndOwnedSegments(t *testing.T) {
 	w := request("GET", "/api/stream/hls/"+escapeMediaPath(name)+"/playlist.m3u8?session="+sid+"&quality=passthrough&codec=h264&start=0.125", 12)
 	if w.Code != http.StatusOK || !strings.HasPrefix(w.Body.String(), "#EXTM3U") {
 		t.Fatalf("playlist: %d %s", w.Code, w.Body.String())
+	}
+	if w.Header().Get("X-Media-Time-Origin") == "" {
+		t.Fatal("missing shared clock origin")
 	}
 	var segmentURL string
 	for _, line := range strings.Split(w.Body.String(), "\n") {

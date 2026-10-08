@@ -22,7 +22,6 @@ import NextEpisodeOverlay from './NextEpisodeOverlay'
 
 const HEARTBEAT_INTERVAL_MS = 3000
 const POSITION_SAVE_INTERVAL_MS = 10000
-const NEXT_EP_HEARTBEAT_INTERVAL_MS = 60000
 
 interface PlayerProps {
   path: string
@@ -68,7 +67,6 @@ export default function Player({ path }: PlayerProps) {
     audioTrack,
     duration,
     negotiatedCodec,
-    browserCodecs,
     mediaInfo,
     setPlaying,
     setCurrentTime,
@@ -82,7 +80,6 @@ export default function Player({ path }: PlayerProps) {
     setSubtitles,
     setActiveSubtitle,
     setSubtitleVisible,
-    setQuality,
     setQualityPresets,
     setNegotiatedCodec,
     setBrowserCodecs,
@@ -115,6 +112,9 @@ export default function Player({ path }: PlayerProps) {
           stopHeartbeat()
           hlsRef.current?.destroy()
           hlsRef.current = null
+          usePlayerStore.getState().setPlaying(false)
+          stopSession(sid).catch(() => {})
+          sessionIDRef.current = null
           setError('서버 변환이 중단됐고 사용 가능한 대체 방식도 실패했습니다. 서버의 해당 시각 로그를 확인해 주세요.')
         }
       } catch { /* 일시적인 상태 조회 실패로 변환 방식을 바꾸지 않는다. */ }
@@ -138,9 +138,11 @@ export default function Player({ path }: PlayerProps) {
     const state = usePlayerStore.getState()
     const current = state.activeAttempt
     if (!current || rejectedRef.current.has(attemptKey(current))) return false
-    rejectAttempt(planRef.current, current, reason, rejectedRef.current)
-    const next = planRef.current.find(a => !rejectedRef.current.has(attemptKey(a)))
+    const rejected = new Set(rejectedRef.current)
+    rejectAttempt(planRef.current, current, reason, rejected)
+    const next = planRef.current.find(a => !rejected.has(attemptKey(a)))
     if (!next) return false
+    rejectedRef.current = rejected
 
     // Preserve user intent and absolute time while replacing the failed source.
     sourceChangingRef.current = true
@@ -151,7 +153,7 @@ export default function Player({ path }: PlayerProps) {
     setRecoveryStep(step => step + 1)
     useToastStore.getState().addToast({
       type: 'warning',
-      message: `${reason === 'server' ? '서버 변환 중단' : reason === 'slow' ? '재생 처리 지연' : '브라우저 재생 오류'}으로 ${next.acceleration === 'copy' ? '영상 유지' : next.codec.toUpperCase() + (next.acceleration === 'hybrid' ? ' CPU 디코딩·GPU 변환' : next.acceleration === 'software' ? ' CPU 변환' : ' GPU 변환')}을 시도합니다. 위치와 화질 설정은 유지됩니다.`,
+      message: `${reason === 'server' ? '서버 변환 중단' : reason === 'slow' ? '재생 처리 지연' : '브라우저 재생 오류'}으로 ${next.acceleration === 'copy' ? '영상 유지' : `${next.quality} ${next.codec.toUpperCase()}` + (next.acceleration === 'hybrid' ? ' CPU 디코딩·GPU 변환' : next.acceleration === 'software' ? ' CPU 변환' : ' GPU 변환')}을 시도합니다. 위치와 저장한 설정은 유지됩니다.`,
       duration: 7000,
     })
     return true
@@ -233,15 +235,23 @@ export default function Player({ path }: PlayerProps) {
 
     if (Hls.isSupported()) {
       const token = getStoredAuthToken()
+      let sourceOrigin = startTime
       const hls = new Hls({
         startPosition: 0,
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
+        backBufferLength: 60,
         maxBufferHole: 0.5,
         highBufferWatchdogPeriod: 3,
         startFragPrefetch: true,
         xhrSetup: (xhr: XMLHttpRequest) => {
           xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+          xhr.addEventListener('readystatechange', () => {
+            if (xhr.readyState < 2) return
+            if (startRequestSeqRef.current !== requestSeq) return
+            const header = xhr.getResponseHeader('X-Media-Time-Origin')
+            if (header !== null && Number.isFinite(Number(header))) sourceOrigin = Number(header)
+          })
         },
       })
       hlsRef.current = hls
@@ -253,7 +263,7 @@ export default function Player({ path }: PlayerProps) {
         if (!Number.isFinite(base)) return
         // 서버는 영상과 음성의 공통 원본 시각을 보존한다. HLS.js가 제거한
         // 시작 시각을 되돌려 탐색/자막/이어보기 모두 같은 시간축을 쓴다.
-        hlsStartTimeRef.current = base
+        hlsStartTimeRef.current = sourceOrigin + base
         timelineReady = true
       })
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
@@ -263,6 +273,7 @@ export default function Player({ path }: PlayerProps) {
         videoEl.playbackRate = usePlayerStore.getState().playbackRate
         sourceChangingRef.current = false
         if (playbackIntentRef.current) videoEl.play().catch(() => {})
+        else pauseSession(sid).catch(() => {})
       })
       let startupTimer: ReturnType<typeof setInterval> | null = null
       let startupFinished = false
@@ -343,14 +354,24 @@ export default function Player({ path }: PlayerProps) {
       hls.attachMedia(videoEl)
       setUseHLS(true)
     } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-      // Safari native HLS
-      videoEl.src = getHLSUrl(filePath, sid, q, startTime, codec, storeAudioTrack, attempt.acceleration)
-      setUseHLS(true)
-      if (autoPlay) {
-        videoEl.addEventListener('canplay', () => {
-          if (startRequestSeqRef.current === requestSeq) videoEl.play().catch(() => {})
+      const url = getHLSUrl(filePath, sid, q, startTime, codec, storeAudioTrack, attempt.acceleration)
+      fetch(url, { headers: { Authorization: `Bearer ${getStoredAuthToken()}` } }).then(response => {
+        if (startRequestSeqRef.current !== requestSeq) return
+        if (!response.ok) throw new Error('재생 준비 실패')
+        const header = response.headers.get('X-Media-Time-Origin')
+        hlsStartTimeRef.current = header !== null && Number.isFinite(Number(header)) ? Number(header) : startTime
+        videoEl.addEventListener('loadedmetadata', () => {
+          if (startRequestSeqRef.current !== requestSeq) return
+          videoEl.currentTime = Math.max(0, startTime-hlsStartTimeRef.current)
+          videoEl.playbackRate = usePlayerStore.getState().playbackRate
+          if (playbackIntentRef.current) videoEl.play().catch(() => {})
+          else pauseSession(sid).catch(() => {})
         }, { once: true })
-      }
+        videoEl.src = url
+        setUseHLS(true)
+      }).catch(() => {
+        if (startRequestSeqRef.current === requestSeq && !tryCompatibilityPlayback(q, codec, 'server')) setError('재생 목록을 준비하지 못했습니다.')
+      })
     } else {
       stopCurrentSession()
       setError('이 브라우저는 HLS 재생을 지원하지 않습니다.')
@@ -378,17 +399,13 @@ export default function Player({ path }: PlayerProps) {
     // Calculate the relative time within the current HLS session
     const relativeTime = clampedTime - hlsStartTimeRef.current
 
-    // Check if the target is within the currently available buffered range
-    let maxBufferedEnd = 0
+    // 아직 없는 구간으로 currentTime을 옮기면 브라우저가 버퍼 끝으로 잘라
+    // 요청 위치를 잃을 수 있다. 실제로 확보한 구간만 내부 탐색한다.
     for (let i = 0; i < video.buffered.length; i++) {
-      maxBufferedEnd = Math.max(maxBufferedEnd, video.buffered.end(i))
-    }
-
-    // If the seek target is within range (or close enough), seek directly
-    // Allow seeking up to 5s beyond current buffer (it will load)
-    if (relativeTime >= 0 && relativeTime <= maxBufferedEnd + 5) {
-      video.currentTime = relativeTime
-      return
+      if (relativeTime >= video.buffered.start(i) && relativeTime < video.buffered.end(i)-0.05) {
+        video.currentTime = relativeTime
+        return
+      }
     }
 
     // Beyond the buffered range: restart HLS from the new position
@@ -438,7 +455,7 @@ export default function Player({ path }: PlayerProps) {
           usePlayerStore.getState().setChapters(data.chapters)
         }
       })
-      .catch(() => {})
+      .catch(() => { if (!cancelled) setError('영상 정보를 읽지 못했습니다. 파일 상태와 서버 로그를 확인해 주세요.') })
 
     // Fetch saved watch position for resume
     getWatchPosition(path)
@@ -498,7 +515,7 @@ export default function Player({ path }: PlayerProps) {
       })
       .catch(() => { if (!cancelled) setError('재생 정보를 불러오지 못했습니다. 화면을 새로고침해 주세요.') })
     return () => { cancelled = true }
-  }, [path, negotiatedCodec, setQualityPresets, setQuality])
+  }, [path, negotiatedCodec, setQualityPresets])
 
   // Resume playback from saved position after media is ready
   useEffect(() => {
@@ -956,6 +973,7 @@ export default function Player({ path }: PlayerProps) {
           <p className="text-lg text-red-400">재생 오류</p>
           <p className="text-sm text-gray-400">{error}</p>
           <button className="rounded bg-gray-700 px-4 py-2 text-white" onClick={() => {
+            if (!mediaInfo || !negotiatedCodec || !presetsReady) { window.location.reload(); return }
             setError(null)
             setRetryCount(n => n + 1)
           }}>다시 시도</button>

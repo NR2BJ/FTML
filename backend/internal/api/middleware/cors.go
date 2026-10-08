@@ -22,7 +22,7 @@ func CORSHandler(allowedOrigins []string) cors.Options {
 		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
-		ExposedHeaders:   []string{"Content-Length", "Content-Range"},
+		ExposedHeaders:   []string{"Content-Length", "Content-Range", "X-Session-ID", "X-Media-Time-Origin"},
 		AllowCredentials: allowCreds,
 		MaxAge:           300,
 	}

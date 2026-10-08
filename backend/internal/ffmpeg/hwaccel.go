@@ -31,10 +31,9 @@ type EncoderInfo struct {
 
 // HWCapabilities is the server-wide hardware detection result.
 type HWCapabilities struct {
-	Encoders  []EncoderInfo `json:"encoders"`
-	HWAccel   string        `json:"hwaccel_type"` // "vaapi" or "none"
-	Device    string        `json:"device"`
-	CanDecode bool          `json:"can_decode"`
+	Encoders []EncoderInfo `json:"encoders"`
+	HWAccel  string        `json:"hwaccel_type"` // "vaapi" or "none"
+	Device   string        `json:"device"`
 }
 
 var (

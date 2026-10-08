@@ -28,6 +28,11 @@ export function buildPlaybackPlan(quality: string, presets: QualityOption[], enc
   }
   if (browser.h264 && encoders.some(e => e.codec === 'h264' && !e.hwaccel)) {
     plan.push({ quality: target.value, codec: 'h264', acceleration: 'software' })
+    if (quality === 'auto') {
+      for (const lower of transcodes.filter(p => p.height < target.height).sort((a, b) => b.height-a.height)) {
+        plan.push({ quality: lower.value, codec: 'h264', acceleration: 'software' })
+      }
+    }
   }
   return plan
 }
@@ -36,7 +41,7 @@ export function rejectAttempt(plan: PlaybackAttempt[], current: PlaybackAttempt,
   rejected.add(attemptKey(current))
   if ((reason === 'browser' || reason === 'slow') && !['direct', 'copy'].includes(current.acceleration)) {
     for (const a of plan) {
-      if (a.codec === current.codec && (reason === 'browser' || a.acceleration === 'hybrid')) rejected.add(attemptKey(a))
+      if (a.codec === current.codec && a.quality === current.quality && (reason === 'browser' || a.acceleration === 'hybrid')) rejected.add(attemptKey(a))
     }
   }
 }

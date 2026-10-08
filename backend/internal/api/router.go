@@ -20,7 +20,7 @@ import (
 	"github.com/video-stream/backend/internal/job"
 )
 
-func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.Config, jobQueue *job.JobQueue) *chi.Mux {
+func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.Config, jobQueue *job.JobQueue, hlsManager *ffmpeg.HLSManager) *chi.Mux {
 	r := chi.NewRouter()
 
 	// Rate limiters
@@ -38,7 +38,6 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 	// Handlers
 	authHandler := handlers.NewAuthHandler(database, jwtService)
 	filesHandler := handlers.NewFilesHandler(cfg.MediaPath, cfg.DataPath, database)
-	hlsManager := ffmpeg.NewHLSManager(cfg.DataPath)
 	streamHandler := handlers.NewStreamHandler(cfg.MediaPath, hlsManager)
 	userHandler := handlers.NewUserHandler(database)
 	subtitleHandler := handlers.NewSubtitleHandler(cfg.MediaPath, cfg.SubtitlePath, jobQueue, database)

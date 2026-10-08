@@ -74,7 +74,9 @@ func main() {
 	log.Printf("Job queue started")
 
 	// Create router
-	router := api.NewRouter(database, jwtService, cfg, jobQueue)
+	hlsManager := ffmpeg.NewHLSManager(cfg.DataPath)
+	defer hlsManager.Close()
+	router := api.NewRouter(database, jwtService, cfg, jobQueue, hlsManager)
 
 	// Start server
 	addr := fmt.Sprintf(":%d", cfg.Port)

@@ -12,7 +12,6 @@ async function loadSource(path) {
 const { parseVTT } = await loadSource('../src/utils/subtitles.ts')
 const { encodeMediaPath } = await loadSource('../src/utils/mediaPath.ts')
 const { createSessionID, normalizeSeekTime } = await loadSource('../src/utils/session.ts')
-const { compatibleQuality, canTryCompatibility } = await loadSource('../src/utils/playback.ts')
 const { detectBrowserCodecs, detectMediaCodecs } = await loadSource('../src/utils/codec.ts')
 const { buildPlaybackPlan, attemptKey, rejectAttempt } = await loadSource('../src/utils/playbackPlan.ts')
 const { PlaybackStartupWatch } = await loadSource('../src/utils/playbackStartup.ts')
@@ -41,14 +40,15 @@ const planEncoders = ['av1','hevc','h264'].map(codec => ({codec,hwaccel:'vaapi',
 const planBrowser = {h264:true,hevc:true,hevc10:true,av1:true,vp9:true,aac:true}
 test('자동 재생은 직접 재생, 영상 유지, 지원 GPU 코덱, CPU H.264 순서다', () => {
   const plan = buildPlaybackPlan('auto', planPresets, planEncoders, planBrowser, 'hevc', 0)
-  assert.deepEqual(plan.map(a=>`${a.codec}/${a.acceleration}`), ['hevc/direct','hevc/copy','av1/hardware','av1/hybrid','hevc/hardware','hevc/hybrid','h264/hardware','h264/hybrid','h264/software'])
-  assert.equal(plan.at(-1).quality, '1080p')
+  assert.deepEqual(plan.map(a=>`${a.codec}/${a.acceleration}`), ['hevc/direct','hevc/copy','av1/hardware','av1/hybrid','hevc/hardware','hevc/hybrid','h264/hardware','h264/hybrid','h264/software','h264/software'])
+  assert.equal(plan.at(-2).quality, '1080p')
+  assert.equal(plan.at(-1).quality, '720p', '자동 모드에서만 최후에 해상도를 낮춘다')
   assert.equal(buildPlaybackPlan('auto',planPresets,planEncoders,planBrowser,'hevc',1)[0].acceleration,'copy')
   assert.ok(buildPlaybackPlan('720p',planPresets,planEncoders,planBrowser,'hevc',0).every(a=>a.quality==='720p'))
 })
 test('CPU AV1을 자동 선택하지 않고 지원하지 않는 코덱을 제외한다', () => {
   const plan=buildPlaybackPlan('auto',planPresets.filter(p=>p.value!=='passthrough').map(p=>({...p,can_original:false,can_original_video:false})),planEncoders.filter(e=>!e.hwaccel),planBrowser,'mpeg2video',0)
-  assert.deepEqual(plan,[{quality:'1080p',codec:'h264',acceleration:'software'}])
+  assert.deepEqual(plan,[{quality:'1080p',codec:'h264',acceleration:'software'},{quality:'720p',codec:'h264',acceleration:'software'}])
   assert.ok(buildPlaybackPlan('1080p',planPresets,planEncoders,{...planBrowser,av1:false},'hevc',0).every(a=>a.codec!=='av1'))
 })
 test('MKV는 직접 재생 불가여도 영상 유지 후보를 보존한다', () => {
@@ -128,17 +128,20 @@ test('HLS 코덱은 MP4 MSE와 HEVC Main 10을 따로 검사한다', t => {
   assert.equal(detectBrowserCodecs().hevc10, true, 'MSE가 없으면 네이티브 지원 여부를 사용한다')
 })
 
-test('호환 변환은 원본 전송 대신 같은 해상도를 선택하고 한 번만 시도한다', () => {
-  const presets = [{value:'1080p',height:1080}, {value:'original',height:2160}, {value:'passthrough',height:2160}, {value:'720p',height:720}]
-  assert.equal(compatibleQuality('passthrough', presets), '1080p')
-  assert.equal(compatibleQuality('original', presets), '1080p')
-  assert.equal(compatibleQuality('720p', presets), '720p')
-  assert.equal(compatibleQuality('passthrough', []), '720p')
-  assert.equal(canTryCompatibility('passthrough', 'h264', false), true)
-  assert.equal(canTryCompatibility('original', 'h264', false), true)
-  assert.equal(canTryCompatibility('1080p', 'av1', false), true)
-  assert.equal(canTryCompatibility('1080p', 'h264', false), false)
-  assert.equal(canTryCompatibility('passthrough', 'av1', true), false)
+test('파일의 실제 크기와 프레임으로 원활한 디코딩을 질의한다', async t => {
+  const originals=Object.fromEntries(['document','MediaSource','navigator'].map(k=>[k,Object.getOwnPropertyDescriptor(globalThis,k)]))
+  t.after(()=>{for(const [k,d] of Object.entries(originals)){if(d)Object.defineProperty(globalThis,k,d);else delete globalThis[k]}})
+  const queries=[]
+  Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:()=>({canPlayType:()=> 'probably'})}})
+  Object.defineProperty(globalThis,'MediaSource',{configurable:true,value:{isTypeSupported:()=>true}})
+  Object.defineProperty(globalThis,'navigator',{configurable:true,value:{mediaCapabilities:{decodingInfo:async q=>{queries.push(q);return {supported:true,smooth:!q.video.contentType.includes('av01'),powerEfficient:true}}}}})
+  const support=await detectMediaCodecs({width:1920,height:1080,frame_rate:'24000/1001',bit_rate:'3456789',video_codec:'hevc',streams:[{codec_type:'video',level:153}]})
+  assert.equal(support.av1,false)
+  assert.equal(support.hevc10,true)
+  assert.ok(queries.some(q=>q.video.contentType.includes('hvc1.2.4.L153')))
+  assert.ok(queries.every(q=>q.video.width===1920&&q.video.height===1080&&q.video.bitrate===3456789&&q.video.framerate===24000/1001))
+  navigator.mediaCapabilities.decodingInfo=async()=>{throw new Error('API unsupported')}
+  assert.equal((await detectMediaCodecs({width:640,height:360,streams:[]})).av1,true)
 })
 
 test('Windows 줄바꿈과 BOM이 있는 자막을 분리한다', () => {

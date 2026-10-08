@@ -51,6 +51,7 @@ type ProbeChapter struct {
 }
 
 type ProbeFormat struct {
+	StartTime  string `json:"start_time"`
 	Filename   string `json:"filename"`
 	FormatName string `json:"format_name"` // e.g. "matroska,webm", "mov,mp4,m4a,3gp,3g2,mj2"
 	Duration   string `json:"duration"`
@@ -99,6 +100,7 @@ type ChapterInfo struct {
 }
 
 type MediaInfo struct {
+	StartTime    string            `json:"start_time"`
 	Duration     string            `json:"duration"`
 	Size         string            `json:"size"`
 	BitRate      string            `json:"bit_rate"`
@@ -181,6 +183,7 @@ func probeUncached(filePath string) (*MediaInfo, error) {
 	}
 
 	info := &MediaInfo{
+		StartTime: result.Format.StartTime,
 		Duration:  result.Format.Duration,
 		Size:      result.Format.Size,
 		BitRate:   result.Format.BitRate,

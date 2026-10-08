@@ -25,31 +25,32 @@ const (
 )
 
 type HLSSession struct {
-	ID            string
-	OwnerID       int64
-	StartTime     float64
-	AudioTrack    int
-	InputPath     string
-	Quality       string
-	Codec         string // "h264", "hevc", "av1", "vp9"
-	OutputDir     string
-	Cmd           *exec.Cmd
-	Cancel        context.CancelFunc
-	CreatedAt     time.Time
-	LastHeartbeat time.Time // last heartbeat from client
-	Stopped       bool      // set true before intentional cancel to prevent false SW fallback
-	Paused        bool      // true when FFmpeg is frozen via SIGSTOP
-	PausedAt      time.Time // when the session was paused
-	FFmpegDone    bool      // true after FFmpeg process exits (all segments written)
-	Failure       string
-	Encoder       string
-	Acceleration  string
-	OutputTime    float64
-	Speed         float64
-	Position      float64
-	Throttled     bool
-	ProcessDone   chan struct{}
-	ProgressAt    time.Time
+	ID             string
+	OwnerID        int64
+	StartTime      float64
+	AudioTrack     int
+	InputPath      string
+	Quality        string
+	Codec          string // "h264", "hevc", "av1", "vp9"
+	OutputDir      string
+	Cmd            *exec.Cmd
+	Cancel         context.CancelFunc
+	CreatedAt      time.Time
+	LastHeartbeat  time.Time // last heartbeat from client
+	Stopped        bool      // set true before intentional cancel to prevent false SW fallback
+	Paused         bool      // true when FFmpeg is frozen via SIGSTOP
+	PausedAt       time.Time // when the session was paused
+	FFmpegDone     bool      // true after FFmpeg process exits (all segments written)
+	Failure        string
+	Encoder        string
+	Acceleration   string
+	OutputTime     float64
+	Speed          float64
+	Position       float64
+	Throttled      bool
+	ProcessDone    chan struct{}
+	ProgressAt     time.Time
+	TimelineOrigin float64
 }
 
 type HLSManager struct {
@@ -57,6 +58,8 @@ type HLSManager struct {
 	sessions map[string]*HLSSession
 	baseDir  string
 	retired  map[string]time.Time
+	done     chan struct{}
+	closed   bool
 }
 
 // logFFmpegTail prints the last 20 lines of the ffmpeg.log file for debugging.
@@ -89,14 +92,38 @@ func NewHLSManager(baseDir string) *HLSManager {
 		sessions: make(map[string]*HLSSession),
 		baseDir:  hlsDir,
 		retired:  make(map[string]time.Time),
+		done:     make(chan struct{}),
 	}
 	go m.cleanup()
 	return m
 }
 
 func (m *HLSManager) GetOrCreateSession(sessionID string, ownerID int64, inputPath string, startTime float64, quality, codec string, params *TranscodeParams) (*HLSSession, error) {
+	// 느린 파일 탐색 중 다른 재생 작업의 상태/제어 잠금을 점유하지 않는다.
+	m.mu.RLock()
+	_, existing := m.sessions[sessionID]
+	closed := m.closed
+	m.mu.RUnlock()
+	if closed {
+		return nil, fmt.Errorf("재생 서버가 종료 중입니다")
+	}
+	if !existing && params != nil {
+		cloned := *params
+		params = &cloned
+		params.TimelineOrigin = startTime
+		if params.Encoder == "copy" && startTime > 0 {
+			origin, err := copyTimelineOrigin(inputPath, startTime)
+			if err != nil {
+				return nil, err
+			}
+			params.TimelineOrigin = origin
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil, fmt.Errorf("재생 서버가 종료 중입니다")
+	}
 
 	if s, ok := m.sessions[sessionID]; ok {
 		if s.OwnerID != ownerID || s.InputPath != inputPath || s.StartTime != startTime || s.Quality != quality || s.Codec != codec || (params != nil && (s.AudioTrack != params.AudioStreamIndex || s.Encoder != params.Encoder || s.Acceleration != acceleration(params))) {
@@ -166,22 +193,23 @@ func (m *HLSManager) GetOrCreateSession(sessionID string, ownerID int64, inputPa
 
 	now := time.Now()
 	session := &HLSSession{
-		ID:            sessionID,
-		OwnerID:       ownerID,
-		StartTime:     startTime,
-		AudioTrack:    params.AudioStreamIndex,
-		InputPath:     inputPath,
-		Quality:       quality,
-		Codec:         codec,
-		OutputDir:     outputDir,
-		Cmd:           cmd,
-		Cancel:        cancel,
-		CreatedAt:     now,
-		LastHeartbeat: now,
-		Encoder:       params.Encoder,
-		Acceleration:  acceleration(params),
-		Position:      startTime,
-		ProcessDone:   make(chan struct{}),
+		ID:             sessionID,
+		OwnerID:        ownerID,
+		StartTime:      startTime,
+		AudioTrack:     params.AudioStreamIndex,
+		InputPath:      inputPath,
+		Quality:        quality,
+		Codec:          codec,
+		OutputDir:      outputDir,
+		Cmd:            cmd,
+		Cancel:         cancel,
+		CreatedAt:      now,
+		LastHeartbeat:  now,
+		Encoder:        params.Encoder,
+		Acceleration:   acceleration(params),
+		Position:       startTime,
+		ProcessDone:    make(chan struct{}),
+		TimelineOrigin: params.TimelineOrigin,
 	}
 	m.sessions[sessionID] = session
 	progressDone := make(chan struct{})
@@ -227,7 +255,7 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 		"-nostdin",
 		"-loglevel", "warning",
 		"-progress", "pipe:1", "-stats_period", "1",
-		"-copyts", "-start_at_zero", "-avoid_negative_ts", "disabled",
+		"-copyts", "-start_at_zero",
 		"-analyzeduration", ffmpegAnalyzeDuration,
 		"-probesize", ffmpegProbeSize,
 	}
@@ -326,6 +354,9 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 	}
 
 	// HLS output
+	// 같은 상수를 두 스트림에서 빼되 원본 위치는 응답 헤더로 돌려준다.
+	// 큰 절대 tfdt와 0부터 시작하는 HLS 목록을 섞으면 다음 조각 탐색이 깨진다.
+	args = append(args, "-avoid_negative_ts", "disabled", "-output_ts_offset", fmt.Sprintf("%.6f", -params.TimelineOrigin))
 	args = append(args, "-f", "hls", "-hls_time", "4", "-hls_list_size", "0")
 
 	// Segment format
@@ -606,8 +637,43 @@ func (m *HLSManager) cleanup() {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 
-	for now := range ticker.C {
-		m.cleanupAt(now)
+	for {
+		select {
+		case now := <-ticker.C:
+			m.cleanupAt(now)
+		case <-m.done:
+			return
+		}
+	}
+}
+
+func (m *HLSManager) Close() {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.closed = true
+	if m.done != nil {
+		close(m.done)
+	}
+	sessions := make([]*HLSSession, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+		m.stopLocked(s)
+	}
+	m.mu.Unlock()
+	deadline := time.After(8 * time.Second)
+	for _, s := range sessions {
+		if s.ProcessDone == nil {
+			continue
+		}
+		select {
+		case <-s.ProcessDone:
+			os.RemoveAll(s.OutputDir)
+		case <-deadline:
+			return
+		}
 	}
 }
 

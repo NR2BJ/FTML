@@ -9,11 +9,12 @@ import (
 
 // TranscodeParams holds the computed transcode parameters for a specific quality level.
 type TranscodeParams struct {
-	Label      string `json:"label"`  // e.g. "720p", "1080p"
-	Height     int    `json:"height"` // target height (0 = original)
-	CRF        int    `json:"crf"`
-	MaxBitrate string `json:"max_bitrate"` // e.g. "12M"
-	BufSize    string `json:"buf_size"`    // e.g. "24M"
+	TimelineOrigin float64 `json:"-"`
+	Label          string  `json:"label"`  // e.g. "720p", "1080p"
+	Height         int     `json:"height"` // target height (0 = original)
+	CRF            int     `json:"crf"`
+	MaxBitrate     string  `json:"max_bitrate"` // e.g. "12M"
+	BufSize        string  `json:"buf_size"`    // e.g. "24M"
 	// Codec fields (Phase 3)
 	VideoCodec       string `json:"video_codec"`        // "h264", "hevc", "av1", "vp9", or "copy" for passthrough
 	AudioCodec       string `json:"audio_codec"`        // "aac" or "opus"
@@ -211,7 +212,7 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 	// MKV files can never be direct-played by browsers.
 	canDecodeVideo := canBrowserDecodeMedia(info, browser)
 	canDirectPlayVideo := canDecodeVideo && canBrowserDirectPlay(info.VideoCodec, info.Container, browser)
-	canDirectPlayAudio := CanBrowserPlayAudio(info.AudioCodec, browser)
+	canDirectPlayAudio := info.AudioCodec == "" || CanBrowserPlayAudio(info.AudioCodec, browser)
 	canOriginal := canDirectPlayVideo && canDirectPlayAudio
 
 	srcBitrateDesc := "Direct play"

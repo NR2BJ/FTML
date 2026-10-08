@@ -43,6 +43,17 @@ func TestHLSCommonTimeline(t *testing.T) {
 			t.Run(audio+"/"+mode, func(t *testing.T) {
 				output := t.TempDir()
 				params := &TranscodeParams{Encoder: mode, VideoCodec: "h264", SourceVideoCodec: "h264", SourceAudioCodec: audio, SegmentFmt: "fmp4", Height: 96, CRF: 23, MaxBitrate: "1M", BufSize: "2M"}
+				params.TimelineOrigin = 3.123
+				if mode == "copy" {
+					origin, err := copyTimelineOrigin(input, 3.123)
+					if err != nil {
+						t.Fatal(err)
+					}
+					params.TimelineOrigin = origin
+					if math.Abs(origin-2) > 0.05 {
+						t.Fatalf("wrong keyframe: %f", origin)
+					}
+				}
 				args := buildFFmpegArgs(input, output, 3.123, params)
 				if strings.Contains(strings.Join(args, " "), "STARTPTS") {
 					t.Fatal("stream-local clock reset")
@@ -70,7 +81,10 @@ func TestHLSCommonTimeline(t *testing.T) {
 						break
 					}
 				}
-				at := first + float64(peak)/48000
+				at := params.TimelineOrigin + first + float64(peak)/48000
+				if math.Abs(first) > 0.1 {
+					t.Fatalf("HLS timestamp not relative: %f", first)
+				}
 				// AAC 입력의 인코더 지연/컨테이너 반올림까지 40ms 안에서 허용한다.
 				if peak < 0 || math.Abs(at-5.1) > 0.04 {
 					t.Fatalf("sound moved: %.6f (first %.6f)", at, first)
@@ -81,5 +95,32 @@ func TestHLSCommonTimeline(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCopyTimelineRejectsForwardSeekInNonzeroTS(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg unavailable")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	path := filepath.Join(t.TempDir(), "offset.ts")
+	out, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=128x96:r=24", "-t", "8", "-c:v", "libx264", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0", "-output_ts_offset", "10", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("fixture: %v %s", err, out)
+	}
+	info, err := Probe(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, _ := strconv.ParseFloat(info.StartTime, 64)
+	if start < 10 {
+		t.Fatalf("missing nonzero timestamps: %+v", info)
+	}
+	if origin, err := copyTimelineOrigin(path, 3.123); err == nil {
+		t.Fatalf("forward keyframe must use accurate transcode instead: %f", origin)
 	}
 }

@@ -96,6 +96,15 @@ func TestReadAheadHysteresis(t *testing.T) {
 	}
 }
 
+func TestClosedManagerRejectsNewWork(t *testing.T) {
+	m := NewHLSManager(t.TempDir())
+	m.Close()
+	m.Close()
+	if _, err := m.GetOrCreateSession("new", 1, "video", 0, "720p", "h264", nil); err == nil {
+		t.Fatal("started work during shutdown")
+	}
+}
+
 func TestLowResolutionVideoHasTranscodeOption(t *testing.T) {
 	options := GeneratePresets(&MediaInfo{Height: 360, Width: 640, VideoCodec: "prores", Container: "mov"}, CodecH264, nil, BrowserCodecs{H264: true, AAC: true})
 	for _, option := range options {

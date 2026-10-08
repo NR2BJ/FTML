@@ -58,7 +58,7 @@ func (m *HLSManager) PlaybackStatus(id string, owner int64) (PlaybackStatus, boo
 func (m *HLSManager) readProgress(s *HLSSession, r io.Reader) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		key, _, ok := strings.Cut(scanner.Text(), "=")
+		key, value, ok := strings.Cut(scanner.Text(), "=")
 		if !ok {
 			continue
 		}
@@ -67,7 +67,7 @@ func (m *HLSManager) readProgress(s *HLSSession, r io.Reader) {
 		}
 		// copyts의 out_time은 FFmpeg 버전에 따라 0이므로 완성된 조각으로 계산한다.
 		// 준비 분량에는 키프레임 앞부분만큼의 오차가 있을 수 있다.
-		end := s.StartTime
+		end := s.TimelineOrigin
 		if data, err := os.ReadFile(filepath.Join(s.OutputDir, "playlist.m3u8")); err == nil {
 			for _, line := range strings.Split(string(data), "\n") {
 				if strings.HasPrefix(line, "#EXTINF:") {
@@ -91,7 +91,9 @@ func (m *HLSManager) readProgress(s *HLSSession, r io.Reader) {
 			s.ProgressAt = now
 		}
 		s.OutputTime = end
-		m.updateThrottle(s)
+		if value != "end" {
+			m.updateThrottle(s)
+		}
 		m.mu.Unlock()
 	}
 }
