@@ -16,16 +16,16 @@ interface SubtitleDisplayProps {
 
 import { parseVTT } from '@/utils/subtitles'
 export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps) {
-  const { activeSubtitle, secondarySubtitle, subtitleVisible, currentTime } = usePlayerStore()
+  const { activeSubtitle, secondarySubtitle, subtitleVisible, currentTime, subtitles } = usePlayerStore()
   const { syncOffset, fontSize, fontFamily, textColor, bgOpacity } = useSubtitleSettings()
   const [cues, setCues] = useState<SubtitleCue[]>([])
   const [secondaryCues, setSecondaryCues] = useState<SubtitleCue[]>([])
 
-  // Fetch and parse primary subtitle
+  // 같은 ID로 결과가 교체돼도 목록 갱신 또는 다시 켜기로 재조회한다.
   useEffect(() => {
     const controller = new AbortController()
     setCues([])
-    if (!activeSubtitle) {
+    if (!activeSubtitle || !subtitleVisible) {
       setCues([])
       return
     }
@@ -39,13 +39,13 @@ export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps
       })
       .catch(() => { if (!controller.signal.aborted) setCues([]) })
     return () => controller.abort()
-  }, [activeSubtitle, path])
+  }, [activeSubtitle, path, subtitles, subtitleVisible])
 
   // Fetch and parse secondary subtitle
   useEffect(() => {
     const controller = new AbortController()
     setSecondaryCues([])
-    if (!secondarySubtitle) {
+    if (!secondarySubtitle || !subtitleVisible) {
       setSecondaryCues([])
       return
     }
@@ -59,7 +59,7 @@ export default function SubtitleDisplay({ videoRef, path }: SubtitleDisplayProps
       })
       .catch(() => { if (!controller.signal.aborted) setSecondaryCues([]) })
     return () => controller.abort()
-  }, [secondarySubtitle, path])
+  }, [secondarySubtitle, path, subtitles, subtitleVisible])
 
   if (!subtitleVisible) return null
   if (!activeSubtitle && !secondarySubtitle) return null

@@ -19,6 +19,7 @@ import (
 	"github.com/video-stream/backend/internal/ffmpeg"
 	"github.com/video-stream/backend/internal/job"
 	"github.com/video-stream/backend/internal/storage"
+	"github.com/video-stream/backend/internal/subtitle"
 )
 
 type SubtitleHandler struct {
@@ -259,7 +260,7 @@ func (h *SubtitleHandler) ServeSubtitle(w http.ResponseWriter, r *http.Request) 
 	if strings.HasPrefix(subtitleID, "embedded:") {
 		h.serveEmbeddedSubtitle(w, fullPath, subtitleID)
 	} else if strings.HasPrefix(subtitleID, "external:") {
-		h.serveExternalSubtitle(w, fullPath, subtitleID)
+		h.serveExternalSubtitle(w, r, fullPath, subtitleID)
 	} else if strings.HasPrefix(subtitleID, "generated:") {
 		h.serveGeneratedSubtitle(w, path, subtitleID)
 	} else {
@@ -293,7 +294,7 @@ func (h *SubtitleHandler) serveEmbeddedSubtitle(w http.ResponseWriter, videoPath
 	w.Write(output)
 }
 
-func (h *SubtitleHandler) serveExternalSubtitle(w http.ResponseWriter, videoPath, subtitleID string) {
+func (h *SubtitleHandler) serveExternalSubtitle(w http.ResponseWriter, r *http.Request, videoPath, subtitleID string) {
 	filename := strings.TrimPrefix(subtitleID, "external:")
 	subPath, ok := h.safeSiblingSubtitlePath(videoPath, filename)
 	if !ok {
@@ -319,19 +320,9 @@ func (h *SubtitleHandler) serveExternalSubtitle(w http.ResponseWriter, videoPath
 		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
 		w.Write(srtToVTT(data))
 	case ".ass", ".ssa":
-		// Use FFmpeg to convert ASS/SSA to VTT
-		cmd := exec.Command("ffmpeg",
-			"-hide_banner",
-			"-loglevel", "error",
-			"-i", subPath,
-			"-f", "webvtt",
-			"pipe:1",
-		)
-		output, err := cmd.Output()
+		output, err := subtitle.ConvertASSFile(r.Context(), subPath, "webvtt")
 		if err != nil {
-			// Fallback: serve as-is
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.Write(data)
+			jsonError(w, "failed to convert subtitle", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
@@ -1024,12 +1015,13 @@ func (h *SubtitleHandler) ConvertSubtitle(w http.ResponseWriter, r *http.Request
 
 	// For ASS conversions, use FFmpeg
 	var outputData []byte
-	cmd := exec.Command("ffmpeg",
-		"-i", srcPath,
-		"-f", targetFmt,
-		"-",
-	)
-	outputData, err := cmd.Output()
+	var err error
+	if (srcExt == "ass" || srcExt == "ssa") && targetFmt != "ass" {
+		outputData, err = subtitle.ConvertASSFile(r.Context(), srcPath, targetFmt)
+	} else {
+		cmd := exec.CommandContext(r.Context(), "ffmpeg", "-i", srcPath, "-f", targetFmt, "-")
+		outputData, err = cmd.Output()
+	}
 	if err != nil {
 		jsonError(w, "conversion failed: "+err.Error(), http.StatusInternalServerError)
 		return

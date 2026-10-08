@@ -16,6 +16,7 @@ import (
 	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/job"
 	"github.com/video-stream/backend/internal/storage"
+	"github.com/video-stream/backend/internal/subtitle"
 )
 
 // Service manages translation engines and processes translation jobs
@@ -77,7 +78,7 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 	}
 
 	// Load source subtitle
-	vttContent, err := s.loadSubtitle(j.FilePath, params.SubtitleID)
+	vttContent, err := s.loadSubtitle(ctx, j.FilePath, params.SubtitleID)
 	if err != nil {
 		return fmt.Errorf("load subtitle: %w", err)
 	}
@@ -170,7 +171,7 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 }
 
 // loadSubtitle reads subtitle content from the appropriate source
-func (s *Service) loadSubtitle(videoPath, subtitleID string) (string, error) {
+func (s *Service) loadSubtitle(ctx context.Context, videoPath, subtitleID string) (string, error) {
 	if strings.HasPrefix(subtitleID, "generated:") {
 		// Load from generated subtitles directory
 		filename := strings.TrimPrefix(subtitleID, "generated:")
@@ -208,17 +209,9 @@ func (s *Service) loadSubtitle(videoPath, subtitleID string) (string, error) {
 			}
 			return srtToVTTString(string(data)), nil
 		case ".ass", ".ssa":
-			// Convert ASS/SSA to VTT via FFmpeg
-			cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "warning",
-				"-i", subPath, "-f", "webvtt", "pipe:1")
-			var stderr bytes.Buffer
-			cmd.Stderr = &stderr
-			output, err := cmd.Output()
-			if stderrStr := stderr.String(); stderrStr != "" {
-				log.Printf("[translate] ffmpeg stderr for %s conversion: %s", ext, stderrStr)
-			}
+			output, err := subtitle.ConvertASSFile(ctx, subPath, "webvtt")
 			if err != nil {
-				return "", fmt.Errorf("convert %s to VTT: %w, stderr: %s", ext, err, stderr.String())
+				return "", fmt.Errorf("convert %s to VTT: %w", ext, err)
 			}
 			if len(strings.TrimSpace(string(output))) == 0 {
 				return "", fmt.Errorf("empty VTT output from %s conversion", ext)
