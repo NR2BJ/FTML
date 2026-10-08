@@ -68,17 +68,31 @@ export const getPresets = (path: string, codec?: string, browserCodecs?: Browser
   return client.get<QualityOption[]>(`/stream/presets/${encodeMediaPath(path)}`, { params })
 }
 
-export const getHLSUrl = (path: string, sessionID: string, quality = '720p', startTime = 0, codec?: string, audioTrack = 0) => {
+export const getHLSUrl = (path: string, sessionID: string, quality = '720p', startTime = 0, codec?: string, audioTrack = 0, acceleration?: string) => {
   const params = new URLSearchParams({ session: sessionID, quality, start: String(startTime), audio: String(audioTrack) })
   if (codec) params.set('codec', codec)
+  if (acceleration && acceleration !== 'copy') params.set('acceleration', acceleration)
   return `/api/stream/hls/${encodeMediaPath(path)}/playlist.m3u8?${params}`
 }
 
 export const getDirectUrl = (path: string) =>
   `/api/stream/direct/${encodeMediaPath(path)}`
 
-export const sendHeartbeat = (sessionID: string) =>
-  client.post(`/stream/heartbeat/${sessionID}`)
+export const sendHeartbeat = (sessionID: string, position?: number) =>
+  client.post(`/stream/heartbeat/${sessionID}`, null, { params: { position } })
+
+export interface PlaybackStatus {
+  id: string
+  state: 'running' | 'completed' | 'failed'
+  codec: string
+  encoder: string
+  acceleration: string
+  output_time: number
+  speed: number
+  paused: boolean
+  throttled: boolean
+}
+export const getSessionStatus = (sessionID: string) => client.get<PlaybackStatus>(`/stream/session/${sessionID}`)
 
 export const pauseSession = (sessionID: string) =>
   client.post(`/stream/pause/${sessionID}`)

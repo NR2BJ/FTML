@@ -73,6 +73,7 @@ func TestHLSPlaylistAndOwnedSegments(t *testing.T) {
 	router.Get("/api/stream/hls/*", h.HLSHandler)
 	router.Post("/api/stream/heartbeat/{sessionID}", h.HeartbeatHandler)
 	router.Delete("/api/stream/session/{sessionID}", h.StopSessionHandler)
+	router.Get("/api/stream/session/{sessionID}", h.StatusHandler)
 	request := func(method, path string, userID int64) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, nil).WithContext(context.WithValue(ctx, middleware.UserClaimsKey, &auth.Claims{UserID: userID}))
 		w := httptest.NewRecorder()
@@ -108,9 +109,15 @@ func TestHLSPlaylistAndOwnedSegments(t *testing.T) {
 	if !manager.OwnsSession(sid, 12) {
 		t.Fatal("session lost")
 	}
+	if w := request("GET", "/api/stream/session/"+sid, 13); w.Code != http.StatusNotFound {
+		t.Fatal("another user read session status")
+	}
+	if w := request("GET", "/api/stream/session/"+sid, 12); w.Code != http.StatusOK || strings.Contains(w.Body.String(), dir) || !strings.Contains(w.Body.String(), `"encoder":"copy"`) {
+		t.Fatalf("unsafe or inaccurate status: %s", w.Body.String())
+	}
 	secondID := strings.Repeat("c", 32)
 	t.Cleanup(func() { manager.StopSession(secondID) })
-	w = request("GET", "/api/stream/hls/"+escapeMediaPath(name)+"/playlist.m3u8?session="+secondID+"&quality=360p&codec=h264", 13)
+	w = request("GET", "/api/stream/hls/"+escapeMediaPath(name)+"/playlist.m3u8?session="+secondID+"&quality=96p&codec=h264&acceleration=software", 13)
 	if w.Code != http.StatusOK {
 		t.Fatalf("CPU transcode: %d %s", w.Code, w.Body.String())
 	}

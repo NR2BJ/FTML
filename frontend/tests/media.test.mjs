@@ -13,9 +13,58 @@ const { parseVTT } = await loadSource('../src/utils/subtitles.ts')
 const { encodeMediaPath } = await loadSource('../src/utils/mediaPath.ts')
 const { createSessionID, normalizeSeekTime } = await loadSource('../src/utils/session.ts')
 const { compatibleQuality, canTryCompatibility } = await loadSource('../src/utils/playback.ts')
-const { detectBrowserCodecs } = await loadSource('../src/utils/codec.ts')
+const { detectBrowserCodecs, detectMediaCodecs } = await loadSource('../src/utils/codec.ts')
+const { buildPlaybackPlan, attemptKey, rejectAttempt } = await loadSource('../src/utils/playbackPlan.ts')
 const { PlaybackStartupWatch } = await loadSource('../src/utils/playbackStartup.ts')
 const { playbackDelta } = await loadSource('../src/utils/playbackMetrics.ts')
+const { PlaybackHealthWatch } = await loadSource('../src/utils/playbackHealth.ts')
+
+test('충분한 버퍼에서 지속되는 화면 누락만 디코더 대체를 요청한다', () => {
+  const watch=new PlaybackHealthWatch()
+  const sample={now:0,time:0,rate:1,frames:0,dropped:0,buffer:10,paused:false,seeking:false,visible:true}
+  for(let n=0;n<9;n++) assert.equal(watch.check({...sample,now:n*1000,time:n,frames:n*24,dropped:n*12}),null)
+  assert.equal(watch.check({...sample,now:9000,time:9,frames:216,dropped:108}),'browser')
+  for(let n=0;n<25;n++) assert.equal(watch.check({...sample,now:n*1000,time:n,frames:n*24,dropped:n*12,visible:false}),null)
+})
+test('서버 준비 지연과 네트워크 대기를 구분하고 순간 끊김은 무시한다', () => {
+  const sample={now:0,time:0,rate:1,frames:0,dropped:0,buffer:0,paused:false,seeking:false,visible:true,server:{state:'running',output_time:0,throttled:false}}
+  const watch=new PlaybackHealthWatch()
+  for(let n=0;n<18;n++) assert.equal(watch.check({...sample,now:n*1000}),null)
+  assert.equal(watch.check({...sample,now:18000}),'slow')
+  for(let n=0;n<30;n++) assert.equal(watch.check({...sample,now:n*1000,server:{...sample.server,output_time:60}}),null)
+  watch.reset()
+  for(let n=0;n<30;n++) assert.equal(watch.check({...sample,now:n*1000,paused:true}),null)
+})
+
+const planPresets = [{value:'original',height:1080,can_original:true,can_original_video:true}, {value:'passthrough',height:1080}, {value:'720p',height:720}, {value:'1080p',height:1080}]
+const planEncoders = ['av1','hevc','h264'].map(codec => ({codec,hwaccel:'vaapi',encoder:codec+'_vaapi'})).concat([{codec:'h264',hwaccel:'',encoder:'libx264'}, {codec:'av1',hwaccel:'',encoder:'libsvtav1'}])
+const planBrowser = {h264:true,hevc:true,hevc10:true,av1:true,vp9:true,aac:true}
+test('자동 재생은 직접 재생, 영상 유지, 지원 GPU 코덱, CPU H.264 순서다', () => {
+  const plan = buildPlaybackPlan('auto', planPresets, planEncoders, planBrowser, 'hevc', 0)
+  assert.deepEqual(plan.map(a=>`${a.codec}/${a.acceleration}`), ['hevc/direct','hevc/copy','av1/hardware','av1/hybrid','hevc/hardware','hevc/hybrid','h264/hardware','h264/hybrid','h264/software'])
+  assert.equal(plan.at(-1).quality, '1080p')
+  assert.equal(buildPlaybackPlan('auto',planPresets,planEncoders,planBrowser,'hevc',1)[0].acceleration,'copy')
+  assert.ok(buildPlaybackPlan('720p',planPresets,planEncoders,planBrowser,'hevc',0).every(a=>a.quality==='720p'))
+})
+test('CPU AV1을 자동 선택하지 않고 지원하지 않는 코덱을 제외한다', () => {
+  const plan=buildPlaybackPlan('auto',planPresets.filter(p=>p.value!=='passthrough').map(p=>({...p,can_original:false,can_original_video:false})),planEncoders.filter(e=>!e.hwaccel),planBrowser,'mpeg2video',0)
+  assert.deepEqual(plan,[{quality:'1080p',codec:'h264',acceleration:'software'}])
+  assert.ok(buildPlaybackPlan('1080p',planPresets,planEncoders,{...planBrowser,av1:false},'hevc',0).every(a=>a.codec!=='av1'))
+})
+test('MKV는 직접 재생 불가여도 영상 유지 후보를 보존한다', () => {
+  const plan=buildPlaybackPlan('auto',planPresets.map(p=>({...p,can_original:false,can_original_video:false})),planEncoders,planBrowser,'hevc',0)
+  assert.equal(plan[0].acceleration,'copy')
+})
+test('서버 실패는 CPU 디코딩으로, 브라우저 실패는 다른 코덱으로 넘어가며 반복하지 않는다', () => {
+  const plan=buildPlaybackPlan('1080p',planPresets,planEncoders,planBrowser,'hevc',0)
+  const failed=new Set()
+  rejectAttempt(plan,plan[0],'server',failed)
+  assert.equal(plan.find(a=>!failed.has(attemptKey(a))).acceleration,'hybrid')
+  rejectAttempt(plan,plan[1],'browser',failed)
+  assert.equal(plan.find(a=>!failed.has(attemptKey(a))).codec,'hevc')
+  for(const a of plan) rejectAttempt(plan,a,'server',failed)
+  assert.equal(plan.find(a=>!failed.has(attemptKey(a))),undefined)
+})
 
 test('표시 프레임과 재생 진행률은 최근 실제 경과 시간으로 계산한다', () => {
   const sample = { wallTime: 1000, mediaTime: 600, totalFrames: 240, droppedFrames: 2, playbackRate: 1 }

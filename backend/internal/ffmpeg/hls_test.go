@@ -36,16 +36,11 @@ func TestSessionOwnershipAndLifetime(t *testing.T) {
 	}
 }
 
-func TestStoppedSessionCannotRestartFallback(t *testing.T) {
+func TestFailedSessionCannotRewritePublishedOutput(t *testing.T) {
 	dir := t.TempDir()
 	m := &HLSManager{sessions: map[string]*HLSSession{}, baseDir: dir}
-	output := filepath.Join(dir, "already-stopped")
-	params := &TranscodeParams{Encoder: "h264_vaapi"}
-	m.retryWithHybrid("missing", "unused.mkv", output, 0, "720p", "h264", params)
-	m.retryWithSoftware("missing", "unused.mkv", output, 0, "720p", "h264", params)
-	if _, err := os.Stat(output); !os.IsNotExist(err) {
-		t.Fatal("stopped conversion was restarted")
-	}
+	output := filepath.Join(dir, "published.m4s")
+	os.WriteFile(output, []byte("already served"), 0600)
 	m.sessions["failed"] = &HLSSession{ID: "failed", OwnerID: 1, InputPath: "video", Quality: "720p", Codec: "h264"}
 	m.markFailed("failed", fmt.Errorf("test error"))
 	if m.SessionFailure("failed") == "" {
@@ -53,6 +48,51 @@ func TestStoppedSessionCannotRestartFallback(t *testing.T) {
 	}
 	if _, err := m.GetOrCreateSession("failed", 1, "video", 0, "720p", "h264", nil); err == nil {
 		t.Fatal("failed session reused")
+	}
+	data, _ := os.ReadFile(output)
+	if string(data) != "already served" {
+		t.Fatal("published segment rewritten")
+	}
+	if status, ok := m.PlaybackStatus("failed", 1); !ok || status.State != "failed" {
+		t.Fatal("failure not observable")
+	}
+	if _, ok := m.PlaybackStatus("failed", 2); ok {
+		t.Fatal("another user read playback state")
+	}
+}
+
+func TestRetiredAndStaleDiskSessionCannotRestart(t *testing.T) {
+	m := &HLSManager{sessions: map[string]*HLSSession{}, baseDir: t.TempDir()}
+	m.sessions["retired"] = &HLSSession{ID: "retired"}
+	m.StopSession("retired")
+	if _, err := m.GetOrCreateSession("retired", 1, "video", 0, "720p", "h264", nil); err == nil {
+		t.Fatal("retired session restarted")
+	}
+	os.Mkdir(filepath.Join(m.baseDir, "stale"), 0700)
+	if _, err := m.GetOrCreateSession("stale", 1, "video", 0, "720p", "h264", nil); err == nil {
+		t.Fatal("stale disk segments reused")
+	}
+}
+
+func TestReadAheadHysteresis(t *testing.T) {
+	s := &HLSSession{ID: "test", Position: 100, OutputTime: 191}
+	m := &HLSManager{sessions: map[string]*HLSSession{"test": s}}
+	m.updateThrottle(s)
+	if !s.Throttled {
+		t.Fatal("unbounded read ahead")
+	}
+	m.UpdatePosition("test", 130)
+	if !s.Throttled {
+		t.Fatal("resumed without hysteresis")
+	}
+	m.UpdatePosition("test", 150)
+	if s.Throttled {
+		t.Fatal("never resumed")
+	}
+	s.Paused = true
+	m.UpdatePosition("test", 200)
+	if !s.Paused {
+		t.Fatal("read ahead changed user pause")
 	}
 }
 

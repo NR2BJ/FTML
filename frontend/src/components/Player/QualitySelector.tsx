@@ -1,11 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { usePlayerStore } from '@/stores/playerStore'
-import { compatibleQuality } from '@/utils/playback'
 
 export default function QualitySelector() {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const { quality, qualityPresets, setQuality, negotiatedCodec, compatibilityMode } = usePlayerStore()
+  const { quality, qualityPresets, setQuality, negotiatedCodec, compatibilityMode, activeAttempt } = usePlayerStore()
 
   // Close menu on outside click
   useEffect(() => {
@@ -19,10 +18,10 @@ export default function QualitySelector() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [open])
 
-  const effectiveQuality = compatibilityMode ? compatibleQuality(quality, qualityPresets) : quality
+  const effectiveQuality = activeAttempt?.quality ?? quality
   const currentPreset = qualityPresets.find((q) => q.value === effectiveQuality)
-  const currentLabel = currentPreset?.label || quality
-  const codecBadge = compatibilityMode ? 'H264' : negotiatedCodec ? negotiatedCodec.toUpperCase() : null
+  const currentLabel = quality === 'auto' ? `자동 · ${currentPreset?.label || '준비 중'}` : currentPreset?.label || quality
+  const codecBadge = activeAttempt?.codec.toUpperCase()
 
   // Don't render if no presets loaded yet
   if (qualityPresets.length === 0) return null
@@ -57,6 +56,9 @@ export default function QualitySelector() {
 
       {open && (
         <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg py-1 min-w-[180px] z-50">
+          <button className={`block w-full text-left px-3 py-2 text-sm hover:bg-gray-700 ${quality === 'auto' ? 'text-primary-400' : 'text-gray-300'}`} onClick={() => { setQuality('auto'); setOpen(false) }}>
+            자동 <span className="text-xs text-gray-500">원본 우선 · 필요한 경우만 변환</span>
+          </button>
           {qualityPresets.map((opt) => {
             // Original option: show differently based on audio compatibility
             const isOriginal = opt.value === 'original'

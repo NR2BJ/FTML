@@ -1,13 +1,14 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import Hls from 'hls.js'
-import { getHLSUrl, getDirectUrl, getPresets, getCapabilities, sendHeartbeat, stopSession, pauseSession, resumeSession } from '@/api/stream'
+import { getHLSUrl, getDirectUrl, getPresets, getCapabilities, getSessionStatus, sendHeartbeat, stopSession, pauseSession, resumeSession } from '@/api/stream'
 import { getFileInfo } from '@/api/files'
 import { saveWatchPosition, getWatchPosition } from '@/api/user'
 import { listSubtitles } from '@/api/subtitle'
-import { detectBrowserCodecs } from '@/utils/codec'
+import { detectMediaCodecs } from '@/utils/codec'
 import { createSessionID, normalizeSeekTime } from '@/utils/session'
-import { compatibleQuality, canTryCompatibility } from '@/utils/playback'
+import { buildPlaybackPlan, attemptKey, rejectAttempt, type PlaybackAttempt, type FailureReason } from '@/utils/playbackPlan'
 import { PlaybackStartupWatch } from '@/utils/playbackStartup'
+import { PlaybackHealthWatch } from '@/utils/playbackHealth'
 import { getStoredAuthToken } from '@/utils/authToken'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useToastStore } from '@/stores/toastStore'
@@ -19,7 +20,7 @@ import PlaybackStats from './PlaybackStats'
 import SubtitleDisplay from './SubtitleDisplay'
 import NextEpisodeOverlay from './NextEpisodeOverlay'
 
-const HEARTBEAT_INTERVAL_MS = 15000
+const HEARTBEAT_INTERVAL_MS = 3000
 const POSITION_SAVE_INTERVAL_MS = 10000
 const NEXT_EP_HEARTBEAT_INTERVAL_MS = 60000
 
@@ -40,6 +41,10 @@ export default function Player({ path }: PlayerProps) {
   const startRequestSeqRef = useRef(0)
   const playbackIntentRef = useRef(true)
   const sourceChangingRef = useRef(false)
+  const planRef = useRef<PlaybackAttempt[]>([])
+  const rejectedRef = useRef(new Set<string>())
+  const recoverRef = useRef<(reason: FailureReason) => boolean>(() => false)
+  const [recoveryStep, setRecoveryStep] = useState(0)
   const [useHLS, setUseHLS] = useState(true)
   const [presetsReady, setPresetsReady] = useState(false)
   const [ended, setEnded] = useState(false)
@@ -60,11 +65,11 @@ export default function Player({ path }: PlayerProps) {
     subtitleVisible,
     quality,
     qualityPresets,
-    compatibilityMode,
     audioTrack,
     duration,
     negotiatedCodec,
     browserCodecs,
+    mediaInfo,
     setPlaying,
     setCurrentTime,
     setDuration,
@@ -96,10 +101,27 @@ export default function Player({ path }: PlayerProps) {
     stopHeartbeat()
     sessionIDRef.current = sid
     // Send immediately, then every 15 seconds
-    sendHeartbeat(sid).catch(() => {})
-    heartbeatRef.current = setInterval(() => {
-      sendHeartbeat(sid).catch(() => {})
-    }, HEARTBEAT_INTERVAL_MS)
+    let pending = false
+    const tick = async () => {
+      if (pending || sessionIDRef.current !== sid) return
+      pending = true
+      try {
+        await sendHeartbeat(sid, absTimeRef.current)
+        const { data } = await getSessionStatus(sid)
+        if (sessionIDRef.current !== sid) return
+        usePlayerStore.setState({ playbackStatus: data })
+        if (data.state === 'failed' && !recoverRef.current('server')) {
+          sourceChangingRef.current = true
+          stopHeartbeat()
+          hlsRef.current?.destroy()
+          hlsRef.current = null
+          setError('서버 변환이 중단됐고 사용 가능한 대체 방식도 실패했습니다. 서버의 해당 시각 로그를 확인해 주세요.')
+        }
+      } catch { /* 일시적인 상태 조회 실패로 변환 방식을 바꾸지 않는다. */ }
+      finally { pending = false }
+    }
+    void tick()
+    heartbeatRef.current = setInterval(tick, HEARTBEAT_INTERVAL_MS)
   }, [stopHeartbeat])
 
   // Stop the current HLS session on the server
@@ -112,9 +134,13 @@ export default function Player({ path }: PlayerProps) {
     }
   }, [stopHeartbeat])
 
-  const tryCompatibilityPlayback = useCallback((requestedQuality: string, codec?: string) => {
+  const tryCompatibilityPlayback = useCallback((_requestedQuality?: string, _codec?: string, reason: FailureReason = 'browser') => {
     const state = usePlayerStore.getState()
-    if (!canTryCompatibility(requestedQuality, codec, state.compatibilityMode)) return false
+    const current = state.activeAttempt
+    if (!current || rejectedRef.current.has(attemptKey(current))) return false
+    rejectAttempt(planRef.current, current, reason, rejectedRef.current)
+    const next = planRef.current.find(a => !rejectedRef.current.has(attemptKey(a)))
+    if (!next) return false
 
     // Preserve user intent and absolute time while replacing the failed source.
     sourceChangingRef.current = true
@@ -122,23 +148,48 @@ export default function Player({ path }: PlayerProps) {
     hlsRef.current?.destroy()
     hlsRef.current = null
     state.setCompatibilityMode(true)
+    setRecoveryStep(step => step + 1)
     useToastStore.getState().addToast({
       type: 'warning',
-      message: '브라우저 재생 오류로 H.264 호환 변환을 사용합니다. 저장된 화질 설정은 유지됩니다.',
+      message: `${reason === 'server' ? '서버 변환 중단' : reason === 'slow' ? '재생 처리 지연' : '브라우저 재생 오류'}으로 ${next.acceleration === 'copy' ? '영상 유지' : next.codec.toUpperCase() + (next.acceleration === 'hybrid' ? ' CPU 디코딩·GPU 변환' : next.acceleration === 'software' ? ' CPU 변환' : ' GPU 변환')}을 시도합니다. 위치와 화질 설정은 유지됩니다.`,
       duration: 7000,
     })
     return true
   }, [stopCurrentSession])
+  recoverRef.current = reason => tryCompatibilityPlayback(undefined, undefined, reason)
 
-  // One-time codec negotiation on mount
   useEffect(() => {
-    let cancelled = false
-    const codecs = detectBrowserCodecs()
-    setBrowserCodecs(codecs)
+    const watch = new PlaybackHealthWatch()
+    const timer = setInterval(() => {
+      const video = videoRef.current
+      if (!video || sourceChangingRef.current || video.error) { watch.reset(); return }
+      let buffer = 0
+      for (let i = 0; i < video.buffered.length; i++) {
+        if (video.currentTime >= video.buffered.start(i) && video.currentTime <= video.buffered.end(i)) buffer = video.buffered.end(i)-video.currentTime
+      }
+      const frames = video.getVideoPlaybackQuality?.()
+      const reason = watch.check({ now: performance.now(), time: video.currentTime + hlsStartTimeRef.current,
+        rate: video.playbackRate, frames: frames?.totalVideoFrames ?? 0, dropped: frames?.droppedVideoFrames ?? 0,
+        buffer, paused: video.paused, seeking: video.seeking, visible: !document.hidden,
+        server: usePlayerStore.getState().playbackStatus ?? undefined })
+      if (reason) recoverRef.current(reason)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [path, quality, recoveryStep])
 
-    getCapabilities(codecs)
-      .then(({ data }) => {
-        if (cancelled) return
+  // 파일의 해상도와 프로필을 포함해 브라우저/서버 공통 후보를 정한다.
+  useEffect(() => {
+    if (!mediaInfo) return
+    let cancelled = false
+    detectMediaCodecs(mediaInfo).then(codecs => {
+      if (cancelled) return null
+      setBrowserCodecs(codecs)
+      return getCapabilities(codecs)
+    })
+      .then(response => {
+        if (cancelled || !response) return
+        const { data } = response
+        usePlayerStore.setState({ serverEncoders: data.server_encoders })
         setNegotiatedCodec(
           data.selected_codec,
           data.selected_encoder,
@@ -147,11 +198,10 @@ export default function Player({ path }: PlayerProps) {
       })
       .catch(() => {
         if (cancelled) return
-        // Fallback to h264
-        setNegotiatedCodec('h264', 'libx264', 'none')
+        setError('브라우저와 서버의 재생 지원 정보를 확인하지 못했습니다. 다시 시도해 주세요.')
       })
     return () => { cancelled = true }
-  }, [setBrowserCodecs, setNegotiatedCodec])
+  }, [mediaInfo, setBrowserCodecs, setNegotiatedCodec])
 
   // Helper to start HLS playback from a given time
   const startHLS = useCallback((videoEl: HTMLVideoElement, filePath: string, q: string, startTime: number = 0, autoPlay: boolean = false) => {
@@ -173,9 +223,10 @@ export default function Player({ path }: PlayerProps) {
     setEnded(false)
 
     // Get the current negotiated codec and audio track from the store
-    const { negotiatedCodec: storeCodec, audioTrack: storeAudioTrack, compatibilityMode: compatible, qualityPresets: presets } = usePlayerStore.getState()
-    const codec = compatible ? 'h264' : storeCodec || undefined
-    if (compatible) q = compatibleQuality(q, presets)
+    const { audioTrack: storeAudioTrack, activeAttempt: attempt } = usePlayerStore.getState()
+    if (!attempt) return
+    const codec = attempt.codec
+    q = attempt.quality
 
     const sid = createSessionID()
     startHeartbeat(sid)
@@ -258,6 +309,7 @@ export default function Player({ path }: PlayerProps) {
 
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
+            if ((data.response?.code ?? 0) >= 500 && tryCompatibilityPlayback(q, codec, 'server')) return
             if (networkRecoveryAttempts < 2) {
               networkRecoveryAttempts += 1
               hls.startLoad()
@@ -287,12 +339,12 @@ export default function Player({ path }: PlayerProps) {
           if (startRequestSeqRef.current === requestSeq && playbackIntentRef.current) videoEl.play().catch(() => {})
         })
       }
-      hls.loadSource(getHLSUrl(filePath, sid, q, startTime, codec, storeAudioTrack))
+      hls.loadSource(getHLSUrl(filePath, sid, q, startTime, codec, storeAudioTrack, attempt.acceleration))
       hls.attachMedia(videoEl)
       setUseHLS(true)
     } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS
-      videoEl.src = getHLSUrl(filePath, sid, q, startTime, codec, storeAudioTrack)
+      videoEl.src = getHLSUrl(filePath, sid, q, startTime, codec, storeAudioTrack, attempt.acceleration)
       setUseHLS(true)
       if (autoPlay) {
         videoEl.addEventListener('canplay', () => {
@@ -361,6 +413,7 @@ export default function Player({ path }: PlayerProps) {
     usePlayerStore.getState().setChapters([])
     usePlayerStore.getState().setAudioTrack(0)
     setQualityPresets([])
+    usePlayerStore.setState({ negotiatedCodec: null, browserCodecs: null, serverEncoders: [], activeAttempt: null, playbackStatus: null })
     usePlayerStore.getState().setCompatibilityMode(false)
     setCurrentFile(path)
     setPresetsReady(false)
@@ -440,44 +493,7 @@ export default function Player({ path }: PlayerProps) {
           setPresetsReady(true)
           // Keep all presets - QualitySelector handles disabling original when audio incompatible
           setQualityPresets(presets)
-          // If current quality isn't available or not usable, select the best alternative
-          const savedQ = localStorage.getItem('ftml-quality') || '720p'
-          const available = presets.find((p) => p.value === savedQ)
-
-          let shouldFallback = !available
-
-          // Validate "original" quality against actual codec compatibility
-          if (available && savedQ === 'original') {
-            if (available.can_original) {
-              // Both video and audio compatible: keep original
-            } else if (available.can_original_video && !available.can_original_audio) {
-              // Video OK but audio incompatible → redirect to passthrough
-              const pt = presets.find((p) => p.value === 'passthrough')
-              if (pt) {
-                setQuality('passthrough')
-                shouldFallback = false // already handled
-              } else {
-                shouldFallback = true
-              }
-            } else {
-              // Video codec not supported → fall back to transcode
-              shouldFallback = true
-            }
-          }
-
-          if (shouldFallback) {
-            const passthrough = presets.find((p) => p.value === 'passthrough')
-            if (passthrough) {
-              setQuality('passthrough')
-            } else {
-              const transcodeOpts = presets.filter((p) => p.value !== 'original' && p.value !== 'passthrough')
-              if (transcodeOpts.length > 0) {
-                setQuality(transcodeOpts[transcodeOpts.length - 1].value)
-              } else {
-                setQuality('original')
-              }
-            }
-          }
+          // 저장한 선택은 유지하고 파일별 대안은 재생 계획에서만 결정한다.
         }
       })
       .catch(() => { if (!cancelled) setError('재생 정보를 불러오지 못했습니다. 화면을 새로고침해 주세요.') })
@@ -536,7 +552,12 @@ export default function Player({ path }: PlayerProps) {
     }
   }, [path])
 
-  // Initialize player (reacts to path, quality, and codec negotiation changes)
+  useEffect(() => {
+    rejectedRef.current.clear()
+    usePlayerStore.setState({ compatibilityMode: false })
+  }, [path, quality, retryCount])
+
+  // 실패한 방식은 같은 파일/화질에서는 다시 고르지 않는다. 탐색/음성 변경에도 유지한다.
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
@@ -552,6 +573,13 @@ export default function Player({ path }: PlayerProps) {
 
     setCurrentFile(path)
     setError(null)
+    const state = usePlayerStore.getState()
+    if (!state.browserCodecs || !state.mediaInfo) return
+    const plan = buildPlaybackPlan(quality, qualityPresets, state.serverEncoders, state.browserCodecs, state.mediaInfo.video_codec, audioTrack)
+    planRef.current = plan
+    const attempt = plan.find(a => !rejectedRef.current.has(attemptKey(a)))
+    if (!attempt) { setError('이 파일에 사용 가능한 재생 방식을 찾지 못했습니다. 서버 인코더와 브라우저 지원을 확인해 주세요.'); return }
+    usePlayerStore.setState({ activeAttempt: attempt, playbackStatus: null })
 
     // Save current absolute time for quality/audio-track switches (not new videos)
     // Use absTimeRef which survives HLS destroy from the cleanup of the previous effect run
@@ -565,7 +593,7 @@ export default function Player({ path }: PlayerProps) {
     }
 
     // Direct play only when user explicitly selects "original" quality
-    if (quality === 'original' && audioTrack === 0 && !compatibilityMode) {
+    if (attempt.acceleration === 'direct') {
       sourceChangingRef.current = true
       // Stop the HLS session on server when switching to original
       stopCurrentSession()
@@ -592,7 +620,7 @@ export default function Player({ path }: PlayerProps) {
 
     // Use HLS for all transcode qualities
     // For quality switch, start from the saved position
-    const effectiveQuality = quality === 'original' ? 'passthrough' : quality
+    const effectiveQuality = attempt.quality
     startHLS(video, path, effectiveQuality, savedAbsTime, wasPlaying)
 
     return () => {
@@ -604,7 +632,7 @@ export default function Player({ path }: PlayerProps) {
       }
       // Stop session on unmount or when dependencies change (quality switch)
     }
-  }, [path, quality, qualityPresets, presetsReady, audioTrack, negotiatedCodec, compatibilityMode, retryCount, setCurrentFile, startHLS, stopCurrentSession])
+  }, [path, quality, qualityPresets, presetsReady, audioTrack, negotiatedCodec, recoveryStep, retryCount, setCurrentFile, startHLS, stopCurrentSession])
 
   // Sync volume/muted/playbackRate
   useEffect(() => {
@@ -651,9 +679,7 @@ export default function Player({ path }: PlayerProps) {
     // Resume the frozen FFmpeg process and restart heartbeat
     if (sessionIDRef.current) {
       resumeSession(sessionIDRef.current).catch(() => {})
-      if (!heartbeatRef.current) {
-        startHeartbeat(sessionIDRef.current)
-      }
+      startHeartbeat(sessionIDRef.current)
     }
   }, [setPlaying, startHeartbeat])
 
@@ -661,20 +687,12 @@ export default function Player({ path }: PlayerProps) {
     if (sourceChangingRef.current || videoRef.current?.error) return
     playbackIntentRef.current = false
     setPlaying(false)
-    // Freeze the FFmpeg process immediately (SIGSTOP) to release GPU
+    // 계산만 일시정지한다. 이미 할당된 GPU 메모리는 작업 종료 시 반환된다.
     if (sessionIDRef.current) {
       pauseSession(sessionIDRef.current).catch(() => {})
     }
-    // Switch to low-frequency heartbeat (60s) to keep session alive during pause.
-    // The backend gives paused sessions 5 minutes, but users may pause longer.
-    // Heartbeat keeps the session from being cleaned up entirely.
-    stopHeartbeat()
-    if (sessionIDRef.current) {
-      const sid = sessionIDRef.current
-      heartbeatRef.current = setInterval(() => {
-        sendHeartbeat(sid).catch(() => {})
-      }, NEXT_EP_HEARTBEAT_INTERVAL_MS)
-    }
+    // 일시정지 중에도 서버 실패를 감시한다. 재개 후 60초 주기가 남으면
+    // 활성 작업의 45초 만료보다 늦어 작업이 사라질 수 있다.
   }, [setPlaying, stopHeartbeat])
 
   const handleMediaError = useCallback(() => {

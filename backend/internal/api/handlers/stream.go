@@ -46,6 +46,9 @@ func (h *StreamHandler) CapabilitiesHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	caps := ffmpeg.GetCapabilities()
+	if caps == nil {
+		caps = &ffmpeg.HWCapabilities{Encoders: []ffmpeg.EncoderInfo{{Codec: ffmpeg.CodecH264, Encoder: "libx264"}}, HWAccel: "none"}
+	}
 	negotiated := ffmpeg.NegotiateCodec(caps, browser)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -146,8 +149,20 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	codec, encoder, browser := parseCodecParams(r)
 
 	// Probe the file to generate presets and find the matching transcode params
-	info, _ := ffmpeg.Probe(fullPath)
-	if info != nil && len(info.AudioStreams) > 0 && sp.audioStreamIdx >= len(info.AudioStreams) {
+	info, probeErr := ffmpeg.Probe(fullPath)
+	if probeErr != nil || info.VideoCodec == "" {
+		jsonError(w, "영상 정보를 읽지 못했습니다", http.StatusUnprocessableEntity)
+		return
+	}
+	if sp.quality != "passthrough" {
+		var err error
+		encoder, err = ffmpeg.ResolveEncoder(ffmpeg.GetCapabilities(), codec, r.URL.Query().Get("acceleration"))
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if (len(info.AudioStreams) > 0 && sp.audioStreamIdx >= len(info.AudioStreams)) || (len(info.AudioStreams) == 0 && sp.audioStreamIdx != 0) {
 		jsonError(w, "음성 트랙이 존재하지 않습니다", http.StatusBadRequest)
 		return
 	}
@@ -160,7 +175,7 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	if params == nil && sp.quality == "passthrough" && info != nil {
 		videoCodecNorm := ffmpeg.NormalizeCodecName(info.VideoCodec)
 		// 10bit H.264 can't be decoded via MSE — don't allow passthrough
-		if !(videoCodecNorm == "h264" && ffmpeg.Is10bit(info.PixFmt)) {
+		if (videoCodecNorm == "h264" || videoCodecNorm == "hevc" || videoCodecNorm == "av1" || videoCodecNorm == "vp9") && !(videoCodecNorm == "h264" && ffmpeg.Is10bit(info.PixFmt)) {
 			params = &ffmpeg.TranscodeParams{
 				Label:            "Passthrough",
 				VideoCodec:       "copy",
@@ -173,14 +188,9 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 		}
 	}
 
-	// If quality not found in presets, use first available transcode preset
-	if params == nil && sp.quality != "original" && sp.quality != "passthrough" {
-		for _, p := range presets {
-			if p.Value != "original" && p.Value != "passthrough" {
-				params = ffmpeg.GetTranscodeParams(p.Value, presets, encoder)
-				break
-			}
-		}
+	if params == nil {
+		jsonError(w, "요청한 화질이나 영상 유지 방식을 사용할 수 없습니다", http.StatusBadRequest)
+		return
 	}
 
 	// Apply audio stream index to params
@@ -195,6 +205,9 @@ func (h *StreamHandler) servePlaylist(w http.ResponseWriter, r *http.Request, vi
 	}
 
 	sessionID := sp.sessionID
+	if r.Context().Err() != nil {
+		return
+	}
 	session, err := h.hlsManager.GetOrCreateSession(sessionID, claims.UserID, fullPath, sp.startTime, sp.quality, string(codec), params)
 	if err != nil {
 		log.Printf("[stream] failed to start transcoding: %v", err)
@@ -467,10 +480,31 @@ func (h *StreamHandler) HeartbeatHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	if h.ownsSession(r, sessionID) && h.hlsManager.Heartbeat(sessionID) {
+		if raw := r.URL.Query().Get("position"); raw != "" {
+			if position, err := strconv.ParseFloat(raw, 64); err == nil {
+				h.hlsManager.UpdatePosition(sessionID, position)
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	} else {
 		jsonError(w, "session not found", http.StatusNotFound)
 	}
+}
+
+func (h *StreamHandler) StatusHandler(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		jsonError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	status, ok := h.hlsManager.PlaybackStatus(chi.URLParam(r, "sessionID"), claims.UserID)
+	if !ok {
+		jsonError(w, "재생 작업을 찾을 수 없습니다", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(status)
 }
 
 // PauseHandler sends SIGSTOP to an FFmpeg process, freezing it to release GPU.

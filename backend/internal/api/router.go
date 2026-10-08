@@ -120,6 +120,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			r.Post("/stream/pause/{sessionID}", streamHandler.PauseHandler)
 			r.Post("/stream/resume/{sessionID}", streamHandler.ResumeHandler)
 			r.Delete("/stream/session/{sessionID}", streamHandler.StopSessionHandler)
+			r.Get("/stream/session/{sessionID}", streamHandler.StatusHandler)
 
 			// Subtitles — read-only
 			r.Get("/subtitle/list/*", subtitleHandler.ListSubtitles)

@@ -274,6 +274,10 @@ func GeneratePresets(info *MediaInfo, codec Codec, encoder *EncoderInfo, browser
 }
 
 func canBrowserDecodeMedia(info *MediaInfo, browser BrowserCodecs) bool {
+	// 일반 브라우저의 영상 경로는 4:2:0 8/10비트를 대상으로 한다.
+	if info.PixFmt != "" && info.PixFmt != "yuv420p" && info.PixFmt != "yuvj420p" && info.PixFmt != "nv12" && info.PixFmt != "yuv420p10le" && info.PixFmt != "p010le" {
+		return false
+	}
 	codec := NormalizeCodecName(info.VideoCodec)
 	if Is10bit(info.PixFmt) {
 		switch codec {
@@ -281,6 +285,8 @@ func canBrowserDecodeMedia(info *MediaInfo, browser BrowserCodecs) bool {
 			return false
 		case "hevc":
 			return browser.HEVC10
+		case "av1", "vp9":
+			return false // 현재 능력 질의는 이 두 코덱의 8비트 프로필만 검사한다.
 		}
 	}
 	return canBrowserDecodeCodec(info.VideoCodec, browser)

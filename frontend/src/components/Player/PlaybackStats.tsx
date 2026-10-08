@@ -24,7 +24,7 @@ interface RuntimeStats {
 }
 
 export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) {
-  const { showStats, mediaInfo, currentTime, duration, quality, negotiatedCodec, negotiatedEncoder, hwaccel, compatibilityMode } = usePlayerStore()
+  const { showStats, mediaInfo, currentTime, duration, activeAttempt, playbackStatus, audioTrack } = usePlayerStore()
   const [stats, setStats] = useState<RuntimeStats>({
     playResolution: '',
     playBitrate: 0,
@@ -177,9 +177,9 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
   const srcResolution = mediaInfo?.width && mediaInfo?.height
     ? `${mediaInfo.width}x${mediaInfo.height}`
     : 'N/A'
-  const audioStream = mediaInfo?.streams?.find((s: any) => s.codec_type === 'audio')
-  const isOriginal = quality === 'original' && !compatibilityMode
-  const isPassthrough = quality === 'passthrough' && !compatibilityMode
+  const audioStream = mediaInfo?.audio_streams?.[audioTrack]
+  const isOriginal = activeAttempt?.acceleration === 'direct'
+  const isPassthrough = activeAttempt?.acceleration === 'copy'
   const isHLS = !!hlsRef.current
 
   return (
@@ -187,7 +187,7 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
       <div className="font-bold text-blue-400 mb-1">원본</div>
       <div className="ml-2 space-y-0.5">
         <div>영상: {srcCodec} {srcResolution}</div>
-        <div>음성: {mediaInfo?.audio_codec || 'N/A'}{audioStream?.channels ? ` ${audioStream.channels}ch` : ''}{audioStream?.sample_rate ? ` ${audioStream.sample_rate}Hz` : ''}</div>
+        <div>음성: {audioStream?.codec_name || mediaInfo?.audio_codec || 'N/A'}{audioStream?.channels ? ` ${audioStream.channels}ch` : ''}{audioStream?.sample_rate ? ` ${audioStream.sample_rate}Hz` : ''}</div>
       </div>
 
       <div className="font-bold text-green-400 mt-2 mb-1">재생{isOriginal ? ' (원본 직접)' : isPassthrough ? ' (영상 유지)' : ' (변환)'}</div>
@@ -197,10 +197,10 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
           <>
             <div>코덱: {isPassthrough
               ? `${(mediaInfo?.video_codec || 'N/A').toUpperCase()} (유지) + AAC`
-              : `${(compatibilityMode ? 'h264' : negotiatedCodec || 'h264').toUpperCase()} + AAC`
+              : `${(activeAttempt?.codec || '미확인').toUpperCase()} + AAC`
             }</div>
             {!isPassthrough && (
-              <div>인코더: {compatibilityMode ? 'H.264 (서버 자동 선택)' : `${negotiatedEncoder || 'N/A'}${hwaccel && hwaccel !== 'none' ? ` (${hwaccel})` : ''}`}</div>
+              <div>인코더: {playbackStatus?.encoder || '확인 중'} ({activeAttempt?.acceleration === 'hybrid' ? 'CPU 디코딩·GPU 인코딩' : activeAttempt?.acceleration === 'hardware' ? 'GPU' : 'CPU'})</div>
             )}
           </>
         )}
@@ -216,6 +216,8 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
         <div>누락: 최근 {stats.recentDroppedFrames ?? '-'} / 누적 {stats.droppedFrames}</div>
         {isHLS && <div>전송 추정: {fmtBitrate(stats.bandwidth)}</div>}
         {isHLS && <div>재생 라이브러리: HLS.js {Hls.version}</div>}
+        {playbackStatus && <div>서버: {playbackStatus.state === 'failed' ? '변환 실패' : playbackStatus.state === 'completed' ? '준비 완료' : playbackStatus.paused ? '일시정지' : playbackStatus.throttled ? '앞 구간 준비 완료 · 대기' : '준비 중'}</div>}
+        {playbackStatus && <div>준비 분량: 약 {Math.max(0, playbackStatus.output_time - currentTime).toFixed(0)}초 / 최근 처리 {playbackStatus.speed > 0 ? playbackStatus.speed.toFixed(1) + '배' : '측정 중'}</div>}
       </div>
 
       <div className="font-bold text-purple-400 mt-2 mb-1">재생 위치</div>

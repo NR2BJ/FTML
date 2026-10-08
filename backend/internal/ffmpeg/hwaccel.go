@@ -1,12 +1,14 @@
 package ffmpeg
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Codec represents a video codec family.
@@ -105,10 +107,8 @@ func detectHardware() *HWCapabilities {
 
 		if len(caps.Encoders) > 0 {
 			caps.HWAccel = "vaapi"
-			caps.CanDecode = testVAAPIDecoder(device)
-			if caps.CanDecode {
-				log.Printf("[HWAccel] VAAPI decode: available")
-			}
+			// 인코더 시험은 특정 원본의 하드웨어 디코딩 가능 여부를 보장하지 않는다.
+			log.Printf("[HWAccel] VAAPI decode: determined per playback attempt")
 		}
 	} else {
 		log.Printf("[HWAccel] No VAAPI device found")
@@ -138,7 +138,7 @@ func (caps *HWCapabilities) addSoftwareFallbacks() {
 	}
 
 	for _, sw := range softwareEncoders {
-		if !hasCodec[sw.Codec] {
+		if !hasCodec[sw.Codec] || sw.Codec == CodecH264 {
 			if testSoftwareEncoder(sw.Encoder) {
 				caps.Encoders = append(caps.Encoders, EncoderInfo{
 					Codec:   sw.Codec,
@@ -167,7 +167,9 @@ func findVAAPIDevice() string {
 
 // testVAAPIEncoder runs a quick encode test to verify a VAAPI encoder works.
 func testVAAPIEncoder(device, encoder string) bool {
-	cmd := exec.Command("ffmpeg",
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-hide_banner", "-loglevel", "error",
 		"-init_hw_device", fmt.Sprintf("vaapi=hw:%s", device),
 		"-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1:r=1",
@@ -184,23 +186,11 @@ func testVAAPIEncoder(device, encoder string) bool {
 	return true
 }
 
-// testVAAPIDecoder checks if VAAPI decoding is functional.
-func testVAAPIDecoder(device string) bool {
-	cmd := exec.Command("ffmpeg",
-		"-hide_banner", "-loglevel", "error",
-		"-hwaccel", "vaapi",
-		"-hwaccel_device", device,
-		"-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1:r=1",
-		"-frames:v", "1",
-		"-f", "null", "-",
-	)
-	err := cmd.Run()
-	return err == nil
-}
-
 // testSoftwareEncoder checks if a software encoder is available in this FFmpeg build.
 func testSoftwareEncoder(encoder string) bool {
-	cmd := exec.Command("ffmpeg",
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-hide_banner", "-loglevel", "error",
 		"-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1:r=1",
 		"-c:v", encoder,
@@ -297,7 +287,7 @@ func NegotiateCodec(caps *HWCapabilities, browser BrowserCodecs) *EncoderInfo {
 			continue
 		}
 		for i := range caps.Encoders {
-			if caps.Encoders[i].Codec == p.codec {
+			if caps.Encoders[i].Codec == p.codec && caps.Encoders[i].HWAccel != "" {
 				return &caps.Encoders[i]
 			}
 		}
@@ -305,6 +295,32 @@ func NegotiateCodec(caps *HWCapabilities, browser BrowserCodecs) *EncoderInfo {
 
 	// Absolute fallback
 	return &EncoderInfo{Codec: CodecH264, Encoder: "libx264"}
+}
+
+// 요청한 코덱/가속 방식과 실제 인코더가 다르면 다른 코덱으로 몰래 대체하지 않는다.
+func ResolveEncoder(caps *HWCapabilities, codec Codec, mode string) (*EncoderInfo, error) {
+	if mode != "" && mode != "hardware" && mode != "hybrid" && mode != "software" {
+		return nil, fmt.Errorf("알 수 없는 변환 방식입니다")
+	}
+	if caps == nil {
+		caps = &HWCapabilities{Encoders: []EncoderInfo{{Codec: CodecH264, Encoder: "libx264"}}}
+	}
+	for _, candidate := range caps.Encoders {
+		if candidate.Codec != codec {
+			continue
+		}
+		if mode == "software" && candidate.HWAccel != "" {
+			continue
+		}
+		if (mode == "hardware" || mode == "hybrid") && candidate.HWAccel != "vaapi" {
+			continue
+		}
+		if mode == "hybrid" {
+			candidate.HWAccel = ""
+		}
+		return &candidate, nil
+	}
+	return nil, fmt.Errorf("요청한 코덱의 변환기를 사용할 수 없습니다")
 }
 
 // GetEncoderForCodec returns the best available encoder for a specific codec.

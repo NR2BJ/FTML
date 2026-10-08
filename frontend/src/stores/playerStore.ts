@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { MediaInfo, ChapterInfo } from '@/api/files'
 import { SubtitleEntry } from '@/api/subtitle'
-import { QualityOption } from '@/api/stream'
+import { QualityOption, CapabilitiesResponse, PlaybackStatus } from '@/api/stream'
+import type { PlaybackAttempt } from '@/utils/playbackPlan'
 import { BrowserCodecSupport } from '@/utils/codec'
 
 interface ABLoop {
@@ -33,6 +34,9 @@ interface PlayerState {
   quality: string
   qualityPresets: QualityOption[]
   compatibilityMode: boolean
+  activeAttempt: PlaybackAttempt | null
+  playbackStatus: PlaybackStatus | null
+  serverEncoders: CapabilitiesResponse['server_encoders']
   // Audio track
   audioTrack: number  // audio-only stream index (0-based)
   // Codec (Phase 3)
@@ -91,9 +95,12 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   activeSubtitle: null,
   secondarySubtitle: null,
   subtitleVisible: true,
-  quality: localStorage.getItem('ftml-quality') || '720p',
+  quality: localStorage.getItem('ftml-quality') || 'auto',
   qualityPresets: [],
   compatibilityMode: false,
+  activeAttempt: null,
+  playbackStatus: null,
+  serverEncoders: [],
   audioTrack: 0,
   negotiatedCodec: null,
   negotiatedEncoder: null,

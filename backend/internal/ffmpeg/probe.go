@@ -1,6 +1,7 @@
 package ffmpeg
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -64,6 +65,11 @@ type ProbeStream struct {
 	Width         int               `json:"width,omitempty"`
 	Height        int               `json:"height,omitempty"`
 	PixFmt        string            `json:"pix_fmt,omitempty"`
+	Profile       string            `json:"profile,omitempty"`
+	Level         int               `json:"level,omitempty"`
+	AvgFrameRate  string            `json:"avg_frame_rate,omitempty"`
+	ColorTransfer string            `json:"color_transfer,omitempty"`
+	Disposition   map[string]int    `json:"disposition,omitempty"`
 	RFrameRate    string            `json:"r_frame_rate,omitempty"`
 	BitRate       string            `json:"bit_rate,omitempty"`
 	SampleRate    string            `json:"sample_rate,omitempty"`
@@ -153,7 +159,9 @@ func Probe(filePath string) (*MediaInfo, error) {
 }
 
 func probeUncached(filePath string) (*MediaInfo, error) {
-	cmd := exec.Command("ffprobe",
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ffprobe",
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_format",
@@ -184,11 +192,17 @@ func probeUncached(filePath string) (*MediaInfo, error) {
 	for _, s := range result.Streams {
 		switch s.CodecType {
 		case "video":
+			if s.Disposition["attached_pic"] != 0 {
+				continue
+			}
 			if info.VideoCodec == "" {
 				info.VideoCodec = s.CodecName
 				info.Width = s.Width
 				info.Height = s.Height
 				info.FrameRate = s.RFrameRate
+				if s.AvgFrameRate != "" && s.AvgFrameRate != "0/0" {
+					info.FrameRate = s.AvgFrameRate
+				}
 				info.PixFmt = s.PixFmt
 			}
 		case "audio":
