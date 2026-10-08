@@ -158,7 +158,7 @@ func (m *HLSManager) GetOrCreateSession(sessionID string, ownerID int64, inputPa
 			VideoCodec: "h264",
 			AudioCodec: "aac",
 			Encoder:    "libx264",
-			SegmentFmt: "mpegts",
+			SegmentFmt: "fmp4",
 		}
 	}
 
@@ -246,7 +246,9 @@ func (m *HLSManager) GetOrCreateSession(sessionID string, ownerID int64, inputPa
 func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *TranscodeParams) []string {
 	args := []string{
 		"-hide_banner",
+		"-nostdin",
 		"-loglevel", "warning",
+		"-copyts", "-start_at_zero", "-avoid_negative_ts", "disabled",
 		"-analyzeduration", ffmpegAnalyzeDuration,
 		"-probesize", ffmpegProbeSize,
 	}
@@ -278,13 +280,17 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 	if startTime > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", startTime))
 	}
+	if isPassthrough {
+		// 영상은 직전 키프레임부터 복사되므로 음성도 같은 구간을 보존한다.
+		args = append(args, "-noaccurate_seek")
+	}
 
 	// Audio stream mapping: use the specified audio stream index
 	audioMap := fmt.Sprintf("0:a:%d?", params.AudioStreamIndex)
 
 	args = append(args,
 		"-i", inputPath,
-		"-map", "0:v:0",
+		"-map", "0:V:0",
 		"-map", audioMap,
 	)
 
@@ -296,30 +302,22 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 		// the setts bitstream filter to properly reset timestamps on both streams.
 		args = append(args, "-fflags", "+genpts")
 		args = append(args, "-max_interleave_delta", "0")
-		// Reset video PTS/DTS to 0-based. MKV files often have non-zero first PTS (5-10s offset).
-		// In copy mode, -output_ts_offset alone doesn't work because packets keep original PTS.
-		// The setts bitstream filter rewrites PTS/DTS at the packet level before muxing.
-		videoBSF := "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS"
+		// 개별 스트림의 STARTPTS를 빼면 키프레임 간격만큼 음성이 밀린다.
+		// 두 스트림 모두 입력 파일 기준 시각을 유지한다.
 		if params.SourceVideoCodec == "hevc" {
 			// 오래된 MKV의 hvcC version 0을 그대로 MP4에 넘기면 브라우저가 거부한다.
 			// Annex B를 거쳐 MP4 초기화 정보를 재구성하되 영상은 재인코딩하지 않는다.
 			// 열린 GOP의 CRA로 시작할 때 그보다 먼저 표시되는 RASL은 앞 GOP를
 			// 참조할 수 없다. 첫 PTS 이전 패킷만 제외하고 이후 GOP는 보존한다.
 			// amount=0은 패킷 바이트 변경을 금지한다. PTS가 없는 패킷도 보존한다.
-			videoBSF = "hevc_mp4toannexb,noise=amount=0:drop='not(eq(pts,nopts))*lt(pts,startpts)'," + videoBSF
+			args = append(args, "-bsf:v", "hevc_mp4toannexb,noise=amount=0:drop='not(eq(pts,nopts))*lt(pts,startpts)'")
 		}
-		args = append(args, "-bsf:v", videoBSF)
 
-		// Audio handling: copy AAC directly, re-encode others to AAC.
-		// Both paths reset audio PTS/DTS to 0-based to match the video setts filter.
 		if params.SourceAudioCodec == "aac" {
-			// Source is AAC — copy without re-encoding, reset PTS/DTS via bitstream filter
 			args = append(args, "-c:a", "copy")
-			args = append(args, "-bsf:a", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS")
 		} else {
-			// Source is not AAC (DTS, FLAC, etc.) — re-encode to AAC with PTS reset
 			args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
-			args = append(args, "-af", "asetpts=PTS-STARTPTS,aresample=async=1")
+			args = append(args, "-af", "aresample=async=1")
 		}
 
 		// fMP4 HLS requires codec tags for browser MSE compatibility
@@ -365,9 +363,11 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 	}
 
 	// 원본 전송은 열린 GOP일 수 있으므로 조각의 독립 재생을 보장하지 않는다.
+	flags := "temp_file"
 	if !isPassthrough {
-		args = append(args, "-hls_flags", "independent_segments")
+		flags += "+independent_segments"
 	}
+	args = append(args, "-hls_flags", flags)
 	args = append(args,
 		"-hls_playlist_type", "event",
 		"-hls_init_time", "1",
@@ -450,6 +450,7 @@ func appendSoftwareArgs(args []string, params *TranscodeParams) []string {
 		)
 	case "libx265":
 		args = append(args,
+			"-x265-params", "open-gop=0",
 			"-preset", "fast",
 			"-crf", fmt.Sprintf("%d", params.CRF),
 			"-maxrate", params.MaxBitrate,

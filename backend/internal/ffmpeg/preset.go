@@ -76,7 +76,7 @@ var codecAudio = map[Codec]string{
 // HLS segment format per codec.
 // h264 → mpegts (.ts), hevc/av1/vp9 → fmp4 (.m4s)
 var codecSegmentFmt = map[Codec]string{
-	CodecH264: "mpegts",
+	CodecH264: "fmp4",
 	CodecHEVC: "fmp4",
 	CodecAV1:  "fmp4",
 	CodecVP9:  "fmp4",

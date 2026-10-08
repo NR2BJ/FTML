@@ -194,6 +194,25 @@ export default function Player({ path }: PlayerProps) {
         },
       })
       hlsRef.current = hls
+      let timelineReady = false
+      let initialSeekDone = false
+      hls.on(Hls.Events.INIT_PTS_FOUND, (_, data) => {
+        if (startRequestSeqRef.current !== requestSeq || timelineReady) return
+        const base = data.initPTS / data.timescale
+        if (!Number.isFinite(base)) return
+        // 서버는 영상과 음성의 공통 원본 시각을 보존한다. HLS.js가 제거한
+        // 시작 시각을 되돌려 탐색/자막/이어보기 모두 같은 시간축을 쓴다.
+        hlsStartTimeRef.current = base
+        timelineReady = true
+      })
+      hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        if (startRequestSeqRef.current !== requestSeq || !timelineReady || initialSeekDone) return
+        initialSeekDone = true
+        videoEl.currentTime = Math.max(0, startTime - hlsStartTimeRef.current)
+        videoEl.playbackRate = usePlayerStore.getState().playbackRate
+        sourceChangingRef.current = false
+        if (playbackIntentRef.current) videoEl.play().catch(() => {})
+      })
       let startupTimer: ReturnType<typeof setInterval> | null = null
       let startupFinished = false
       const clearStartupTimer = () => {
@@ -495,7 +514,7 @@ export default function Player({ path }: PlayerProps) {
     if (!video) return
 
     const savePosition = () => {
-      const absTime = video.currentTime + hlsStartTimeRef.current
+      const absTime = absTimeRef.current
       const dur = probeDurationRef.current || video.duration
       if (absTime > 0 && dur > 0 && Math.abs(absTime - lastSavedTimeRef.current) > 2) {
         lastSavedTimeRef.current = absTime
@@ -555,6 +574,7 @@ export default function Player({ path }: PlayerProps) {
       hlsStartTimeRef.current = 0
       // Seek back if quality switch
       const restorePosition = () => {
+        video.playbackRate = usePlayerStore.getState().playbackRate
         if (savedAbsTime > 0) {
           video.currentTime = savedAbsTime
         }
