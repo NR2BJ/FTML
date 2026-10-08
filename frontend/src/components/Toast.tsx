@@ -10,10 +10,10 @@ const icons = {
 }
 
 const colors = {
-  success: 'text-green-400 bg-green-500/10 border-green-500/30',
-  error: 'text-red-400 bg-red-500/10 border-red-500/30',
-  info: 'text-blue-400 bg-blue-500/10 border-blue-500/30',
-  warning: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
+  success: 'text-green-400 border-green-400/50',
+  error: 'text-red-400 border-red-400/50',
+  info: 'text-blue-400 border-blue-400/50',
+  warning: 'text-amber-400 border-amber-400/50',
 }
 
 function ToastItem({ toast }: { toast: Toast }) {
@@ -27,13 +27,17 @@ function ToastItem({ toast }: { toast: Toast }) {
 
   return (
     <div
-      className={`flex items-center gap-2.5 px-4 py-3 rounded-lg border shadow-lg backdrop-blur-sm min-w-[280px] max-w-[400px] animate-slide-in ${colors[toast.type]}`}
+      role={toast.type === 'error' ? 'alert' : 'status'}
+      className={`flex items-center gap-2.5 px-4 py-3 rounded-lg border bg-slate-900 shadow-lg min-w-[280px] max-w-[400px] animate-slide-in ${colors[toast.type]}`}
     >
       <Icon className="w-4 h-4 shrink-0" />
-      <span className="text-sm text-gray-200 flex-1">{toast.message}</span>
+      {/* 영상 위의 알림은 밝은 테마의 전역 gray 글자색 재정의를 적용하지 않는다. */}
+      <span className="text-sm text-slate-100 flex-1">{toast.message}</span>
       <button
+        type="button"
+        aria-label="알림 닫기"
         onClick={() => removeToast(toast.id)}
-        className="text-gray-500 hover:text-gray-300 shrink-0"
+        className="text-slate-300 hover:text-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-100 rounded shrink-0"
       >
         <X className="w-3.5 h-3.5" />
       </button>
