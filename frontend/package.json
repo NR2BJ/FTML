@@ -14,7 +14,7 @@
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
     "zustand": "^5.0.0",
-    "hls.js": "^1.5.17",
+    "hls.js": "~1.6.19",
     "lucide-react": "^0.460.0",
     "axios": "^1.7.9"
   },

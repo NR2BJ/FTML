@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, RefObject } from 'react'
 import Hls from 'hls.js'
 import { usePlayerStore } from '@/stores/playerStore'
 import { formatDuration } from '@/utils/format'
+import { playbackDelta, type PlaybackSample } from '@/utils/playbackMetrics'
 
 interface PlaybackStatsProps {
   videoRef: RefObject<HTMLVideoElement | null>
@@ -11,7 +12,11 @@ interface PlaybackStatsProps {
 interface RuntimeStats {
   playResolution: string
   playBitrate: number
-  playFramerate: number
+  playFramerate: number | null
+  mediaSpeed: number | null
+  playbackRate: number
+  recentDroppedFrames: number | null
+  state: string
   bufferLength: number
   droppedFrames: number
   totalFrames: number
@@ -23,7 +28,11 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
   const [stats, setStats] = useState<RuntimeStats>({
     playResolution: '',
     playBitrate: 0,
-    playFramerate: 0,
+    playFramerate: null,
+    mediaSpeed: null,
+    playbackRate: 1,
+    recentDroppedFrames: null,
+    state: '준비 중',
     bufferLength: 0,
     droppedFrames: 0,
     totalFrames: 0,
@@ -34,6 +43,11 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
 
   useEffect(() => {
     if (!showStats) return
+    let previousSample: PlaybackSample | null = null
+    const resetSample = () => { previousSample = null }
+    const observedVideo = videoRef.current
+    for (const event of ['seeking', 'emptied', 'ratechange']) observedVideo?.addEventListener(event, resetSample)
+    segmentHistoryRef.current = []
 
     const onFragLoaded = (_: string, data: any) => {
       const fragStats = data?.frag?.stats
@@ -61,10 +75,12 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
         hls.on(Hls.Events.FRAG_LOADED, onFragLoaded)
         attachedHlsRef.current = hls
         segmentHistoryRef.current = []
+        resetSample()
       } else if (!hls && attachedHlsRef.current) {
         attachedHlsRef.current.off(Hls.Events.FRAG_LOADED, onFragLoaded)
         attachedHlsRef.current = null
         segmentHistoryRef.current = []
+        resetSample()
       }
 
       // Buffer length
@@ -77,7 +93,7 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
       }
 
       // Dropped frames
-      const playQuality = (video as any).getVideoPlaybackQuality?.()
+      const playQuality = video.getVideoPlaybackQuality?.()
       const droppedFrames = playQuality?.droppedVideoFrames || 0
       const totalFrames = playQuality?.totalVideoFrames || 0
 
@@ -86,17 +102,20 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
         ? `${video.videoWidth}x${video.videoHeight}`
         : ''
 
-      // Framerate from decoded frames / time
-      const playFramerate = totalFrames > 0 && video.currentTime > 1
-        ? Math.round(totalFrames / video.currentTime)
-        : 0
+      const sample: PlaybackSample = {
+        wallTime: performance.now(), mediaTime: video.currentTime,
+        totalFrames, droppedFrames, playbackRate: video.playbackRate,
+      }
+      const delta = document.hidden ? null : playbackDelta(previousSample, sample)
+      previousSample = document.hidden ? null : sample
 
       let playBitrate = 0
       let bandwidth = 0
 
       if (hls) {
         // HLS mode: bitrate from segment sizes, bandwidth from hls.js
-        const history = segmentHistoryRef.current
+        const history = segmentHistoryRef.current.filter(s => s.time > Date.now() - 30000)
+        segmentHistoryRef.current = history
         if (history.length > 0) {
           const totalBytes = history.reduce((sum, s) => sum + s.bytes, 0)
           const totalDuration = history.reduce((sum, s) => sum + s.duration, 0)
@@ -123,7 +142,11 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
       setStats({
         playResolution,
         playBitrate,
-        playFramerate,
+        playFramerate: playQuality ? delta?.displayedFPS ?? null : null,
+        mediaSpeed: delta?.mediaSpeed ?? null,
+        playbackRate: video.playbackRate,
+        recentDroppedFrames: playQuality ? delta?.droppedFrames ?? null : null,
+        state: video.error ? '오류' : video.ended ? '재생 완료' : video.paused ? '일시정지' : video.seeking ? '탐색 중' : video.readyState < 3 ? '영상 대기' : '재생 중',
         bufferLength,
         droppedFrames,
         totalFrames,
@@ -133,6 +156,7 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
 
     return () => {
       clearInterval(interval)
+      for (const event of ['seeking', 'emptied', 'ratechange']) observedVideo?.removeEventListener(event, resetSample)
       if (attachedHlsRef.current) {
         attachedHlsRef.current.off(Hls.Events.FRAG_LOADED, onFragLoaded)
         attachedHlsRef.current = null
@@ -160,38 +184,41 @@ export default function PlaybackStats({ videoRef, hlsRef }: PlaybackStatsProps) 
 
   return (
     <div className="absolute top-4 left-4 z-50 bg-black/80 text-white text-xs font-mono p-3 rounded-lg select-none pointer-events-none max-w-xs">
-      <div className="font-bold text-blue-400 mb-1">Source</div>
+      <div className="font-bold text-blue-400 mb-1">원본</div>
       <div className="ml-2 space-y-0.5">
-        <div>Video: {srcCodec} {srcResolution}</div>
-        <div>Audio: {mediaInfo?.audio_codec || 'N/A'}{audioStream?.channels ? ` ${audioStream.channels}ch` : ''}{audioStream?.sample_rate ? ` ${audioStream.sample_rate}Hz` : ''}</div>
+        <div>영상: {srcCodec} {srcResolution}</div>
+        <div>음성: {mediaInfo?.audio_codec || 'N/A'}{audioStream?.channels ? ` ${audioStream.channels}ch` : ''}{audioStream?.sample_rate ? ` ${audioStream.sample_rate}Hz` : ''}</div>
       </div>
 
-      <div className="font-bold text-green-400 mt-2 mb-1">Playback{isOriginal ? ' (Direct)' : isPassthrough ? ' (Passthrough)' : ' (Transcode)'}</div>
+      <div className="font-bold text-green-400 mt-2 mb-1">재생{isOriginal ? ' (원본 직접)' : isPassthrough ? ' (영상 유지)' : ' (변환)'}</div>
       <div className="ml-2 space-y-0.5">
-        <div>Resolution: {stats.playResolution || 'N/A'}</div>
+        <div>해상도: {stats.playResolution || 'N/A'}</div>
         {!isOriginal && (
           <>
-            <div>Codec: {isPassthrough
-              ? `${(mediaInfo?.video_codec || 'N/A').toUpperCase()} (Copy) + AAC`
+            <div>코덱: {isPassthrough
+              ? `${(mediaInfo?.video_codec || 'N/A').toUpperCase()} (유지) + AAC`
               : `${(compatibilityMode ? 'h264' : negotiatedCodec || 'h264').toUpperCase()} + AAC`
             }</div>
             {!isPassthrough && (
-              <div>Encoder: {compatibilityMode ? 'H.264 (서버 자동 선택)' : `${negotiatedEncoder || 'N/A'}${hwaccel && hwaccel !== 'none' ? ` (${hwaccel})` : ''}`}</div>
+              <div>인코더: {compatibilityMode ? 'H.264 (서버 자동 선택)' : `${negotiatedEncoder || 'N/A'}${hwaccel && hwaccel !== 'none' ? ` (${hwaccel})` : ''}`}</div>
             )}
           </>
         )}
-        <div>Bitrate: {fmtBitrate(stats.playBitrate)}{isOriginal && stats.playBitrate > 0 ? ' (avg)' : ''}</div>
-        <div>Framerate: {stats.playFramerate > 0 ? `${stats.playFramerate} fps` : 'N/A'}</div>
+        <div>비트레이트: {fmtBitrate(stats.playBitrate)}{isOriginal && stats.playBitrate > 0 ? ' (평균)' : ''}</div>
+        <div>표시 프레임: {stats.playFramerate === null ? '측정 중' : `${stats.playFramerate.toFixed(1)} fps`}</div>
+        <div>배속: {stats.playbackRate.toFixed(2)}배 / 진행률: {stats.mediaSpeed === null ? '측정 중' : `${stats.mediaSpeed.toFixed(2)}배`}</div>
+        <div>상태: {stats.state}</div>
       </div>
 
-      <div className="font-bold text-yellow-400 mt-2 mb-1">Network</div>
+      <div className="font-bold text-yellow-400 mt-2 mb-1">버퍼 · 프레임 누락</div>
       <div className="ml-2 space-y-0.5">
-        <div>Buffer: {stats.bufferLength.toFixed(1)}s</div>
-        <div>Dropped: {stats.droppedFrames}{stats.totalFrames ? ` / ${stats.totalFrames}` : ''}</div>
-        {isHLS && <div>Delivery: {fmtBitrate(stats.bandwidth)}</div>}
+        <div>남은 버퍼: {stats.bufferLength.toFixed(1)}초</div>
+        <div>누락: 최근 {stats.recentDroppedFrames ?? '-'} / 누적 {stats.droppedFrames}</div>
+        {isHLS && <div>전송 추정: {fmtBitrate(stats.bandwidth)}</div>}
+        {isHLS && <div>재생 라이브러리: HLS.js {Hls.version}</div>}
       </div>
 
-      <div className="font-bold text-purple-400 mt-2 mb-1">Position</div>
+      <div className="font-bold text-purple-400 mt-2 mb-1">재생 위치</div>
       <div className="ml-2">
         <div>{formatDuration(currentTime)} / {formatDuration(duration)}</div>
       </div>

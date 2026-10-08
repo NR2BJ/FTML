@@ -15,6 +15,26 @@ const { createSessionID, normalizeSeekTime } = await loadSource('../src/utils/se
 const { compatibleQuality, canTryCompatibility } = await loadSource('../src/utils/playback.ts')
 const { detectBrowserCodecs } = await loadSource('../src/utils/codec.ts')
 const { PlaybackStartupWatch } = await loadSource('../src/utils/playbackStartup.ts')
+const { playbackDelta } = await loadSource('../src/utils/playbackMetrics.ts')
+
+test('표시 프레임과 재생 진행률은 최근 실제 경과 시간으로 계산한다', () => {
+  const sample = { wallTime: 1000, mediaTime: 600, totalFrames: 240, droppedFrames: 2, playbackRate: 1 }
+  assert.equal(playbackDelta(null, sample), null)
+  assert.deepEqual(playbackDelta(sample, { ...sample, wallTime: 2000, mediaTime: 601, totalFrames: 264, droppedFrames: 4 }),
+    { displayedFPS: 22, mediaSpeed: 1, droppedFrames: 2 })
+  assert.deepEqual(playbackDelta(sample, { ...sample, wallTime: 2000 }),
+    { displayedFPS: 0, mediaSpeed: 0, droppedFrames: 0 })
+  assert.deepEqual(playbackDelta({ ...sample, playbackRate: 2 }, { ...sample, wallTime: 2000, mediaTime: 602, totalFrames: 288, playbackRate: 2 }),
+    { displayedFPS: 48, mediaSpeed: 2, droppedFrames: 0 })
+})
+
+test('탐색과 배속 변경, 소스 교체, 절전은 재생 속도 측정에서 제외한다', () => {
+  const previous = { wallTime: 1000, mediaTime: 10, totalFrames: 240, droppedFrames: 2, playbackRate: 1 }
+  const current = { ...previous, wallTime: 2000, mediaTime: 11, totalFrames: 264 }
+  for (const change of [{ mediaTime: 1 }, { mediaTime: 600 }, { totalFrames: 10 }, { droppedFrames: 0 }, { wallTime: 10000 }, { wallTime: 1000 }, { playbackRate: 2 }, { mediaTime: NaN }]) {
+    assert.equal(playbackDelta(previous, { ...current, ...change }), null)
+  }
+})
 
 test('재생 시작 감시는 영상 준비를 기다리고 오류 없는 멈춤을 구분한다', () => {
   const watch = new PlaybackStartupWatch()
