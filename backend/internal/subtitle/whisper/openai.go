@@ -43,7 +43,7 @@ func (c *OpenAIWhisperClient) Transcribe(ctx context.Context, req TranscribeRequ
 
 	// Step 1: Extract audio as MP3 (smaller than WAV for upload)
 	updateProgress(0.05)
-	audioPath, err := extractAudioMP3(ctx, req.FilePath)
+	audioPath, err := extractAudioMP3(ctx, req.FilePath, req.AudioTrack)
 	if err != nil {
 		return nil, fmt.Errorf("extract audio: %w", err)
 	}
@@ -225,7 +225,10 @@ func (c *OpenAIWhisperClient) transcribeChunked(ctx context.Context, req Transcr
 }
 
 // extractAudioMP3 extracts audio as MP3 for OpenAI (smaller file size)
-func extractAudioMP3(ctx context.Context, videoPath string) (string, error) {
+func extractAudioMP3(ctx context.Context, videoPath string, audioTrack int) (string, error) {
+	if audioTrack < 0 {
+		return "", fmt.Errorf("잘못된 음성 트랙")
+	}
 	tmpFile, err := os.CreateTemp("", "whisper-audio-*.mp3")
 	if err != nil {
 		return "", err
@@ -236,6 +239,9 @@ func extractAudioMP3(ctx context.Context, videoPath string) (string, error) {
 		"-hide_banner",
 		"-loglevel", "error",
 		"-i", videoPath,
+		"-map", fmt.Sprintf("0:a:%d", audioTrack),
+		"-af", "aresample=16000:async=1:first_pts=0",
+		"-ac", "1",
 		"-vn",
 		"-acodec", "libmp3lame",
 		"-q:a", "4", // ~130kbps VBR

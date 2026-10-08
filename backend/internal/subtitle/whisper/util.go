@@ -10,7 +10,10 @@ import (
 )
 
 // extractAudio uses FFmpeg to extract audio as WAV 16kHz mono (required by whisper)
-func extractAudio(ctx context.Context, videoPath string) (string, error) {
+func extractAudio(ctx context.Context, videoPath string, audioTrack int) (string, error) {
+	if audioTrack < 0 {
+		return "", fmt.Errorf("잘못된 음성 트랙")
+	}
 	tmpFile, err := os.CreateTemp("", "whisper-audio-*.wav")
 	if err != nil {
 		return "", err
@@ -21,8 +24,11 @@ func extractAudio(ctx context.Context, videoPath string) (string, error) {
 		"-hide_banner",
 		"-loglevel", "error",
 		"-i", videoPath,
+		"-map", fmt.Sprintf("0:a:%d", audioTrack),
 		"-vn", // no video
-		"-af", "pan=mono|c0=0.5*FC+0.25*FL+0.25*FR,loudnorm=I=-16:TP=-1.5:LRA=11,acompressor=threshold=-25dB:ratio=3:attack=5:release=50",
+		// WAV는 PTS를 저장하지 않으므로 시작 지연과 중간 공백을 샘플로 보존한다.
+		"-af", "aresample=16000:async=1:first_pts=0",
+		"-ac", "1",
 		"-acodec", "pcm_s16le",
 		"-ar", "16000", // 16kHz
 		"-y", // overwrite

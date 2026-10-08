@@ -1,4 +1,4 @@
-openvino-genai
+openvino-genai==2026.4.1.0
 fastapi
 uvicorn[standard]
 python-multipart

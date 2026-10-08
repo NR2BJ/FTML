@@ -42,9 +42,10 @@ type Job struct {
 
 // TranscribeParams are parameters for a transcription job
 type TranscribeParams struct {
-	Engine         string          `json:"engine"`                    // "whisper.cpp", "faster-whisper", "openai"
-	Model          string          `json:"model"`                    // "tiny", "base", "small", "medium", "large-v3"
-	Language       string          `json:"language"`                 // "auto", "ko", "en", "ja", etc.
+	AudioTrack     int              `json:"audio_track,omitempty"`
+	Engine         string           `json:"engine"`                    // "whisper.cpp", "faster-whisper", "openai"
+	Model          string           `json:"model"`                     // "tiny", "base", "small", "medium", "large-v3"
+	Language       string           `json:"language"`                  // "auto", "ko", "en", "ja", etc.
 	ChainTranslate *TranslateParams `json:"chain_translate,omitempty"` // auto-translate after transcribe completes
 }
 
@@ -59,15 +60,15 @@ type TranslateParams struct {
 
 // TranscribeResult is the output of a successful transcription
 type TranscribeResult struct {
-	OutputPath string `json:"output_path"` // relative path to generated VTT
-	Language   string `json:"language"`    // detected or specified language
-	Duration   float64 `json:"duration"`   // processing time in seconds
+	OutputPath string  `json:"output_path"` // relative path to generated VTT
+	Language   string  `json:"language"`    // detected or specified language
+	Duration   float64 `json:"duration"`    // processing time in seconds
 }
 
 // TranslateResult is the output of a successful translation
 type TranslateResult struct {
-	OutputPath string `json:"output_path"` // relative path to translated VTT
-	Duration   float64 `json:"duration"`   // processing time in seconds
+	OutputPath string  `json:"output_path"` // relative path to translated VTT
+	Duration   float64 `json:"duration"`    // processing time in seconds
 }
 
 // JobHandler processes a job. Implementations are provided by whisper/translate packages.

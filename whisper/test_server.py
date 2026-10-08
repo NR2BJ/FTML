@@ -4,6 +4,7 @@ import io
 import threading
 import unittest
 import wave
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -17,6 +18,50 @@ except ImportError:
 
 @unittest.skipIf(server is None, "Install Whisper web/audio dependencies to run service tests")
 class ServerTests(unittest.TestCase):
+    def test_word_pipeline_failure_keeps_segment_fallback_explicit(self):
+        attempts = []
+        def construct(*args, **kwargs):
+            attempts.append(kwargs)
+            if kwargs.get("word_timestamps"):
+                raise RuntimeError("unsupported timing fixture")
+            return self.model([])
+        modules = {"openvino_genai": SimpleNamespace(WhisperGenerationConfig=lambda:SimpleNamespace(word_timestamps=False),WhisperPipeline=construct),
+                   "huggingface_hub": SimpleNamespace(snapshot_download=lambda *args,**kwargs:"fixture-model")}
+        with patch.dict(sys.modules, modules), patch.object(server,"WORD_TIMESTAMPS",True), patch.object(server,"pipeline",None), patch.object(server,"model_id_str",None), patch.object(server,"word_timestamps_active",False):
+            with self.assertLogs("whisper",level="WARNING"):
+                server.load_model_by_id("fixture")
+            self.assertFalse(server.word_timestamps_active)
+            self.assertIsNotNone(server.pipeline)
+        self.assertEqual(attempts,[{"word_timestamps":True},{}])
+
+    def test_digital_silence_does_not_reach_whisper(self):
+        model = self.model([])
+        model.generate = lambda *_: self.fail("디지털 무음을 인식함")
+        with patch.object(server, "pipeline", model):
+            chunks, _, _, _ = server.run_inference(np.zeros(40*16000, dtype=np.float32))
+        self.assertEqual(chunks, [])
+
+    def test_segment_edges_trim_only_digital_silence(self):
+        audio = np.zeros(5*16000, dtype=np.float32)
+        audio[2*16000:3*16000] = 0.000001  # 작은 목소리를 크기로 제거하지 않는다.
+        model = self.model([SimpleNamespace(text="quiet", start_ts=0, end_ts=5)])
+        with patch.object(server, "pipeline", model), patch.object(server, "GAP_THRESHOLD_S", 0):
+            chunks, _, _, _ = server.run_inference(audio)
+        self.assertAlmostEqual(chunks[0]["start_ts"], 1.98)
+        self.assertAlmostEqual(chunks[0]["end_ts"], 3.02)
+
+    def test_word_timing_applies_absolute_chunk_offset(self):
+        calls = []
+        def generate(audio, config):
+            calls.append(True)
+            self.assertTrue(config.word_timestamps)
+            return SimpleNamespace(chunks=[SimpleNamespace(text="hello", start_ts=0, end_ts=4)], words=[SimpleNamespace(word="hello", start_ts=2, end_ts=3)])
+        model = self.model([])
+        model.generate = generate
+        with patch.object(server, "pipeline", model), patch.object(server, "word_timestamps_active", True), patch.object(server, "CHUNK_DURATION_S", 30), patch.object(server, "CHUNK_OVERLAP_S", 5), patch.object(server, "GAP_THRESHOLD_S", 0):
+            chunks, _, _, _ = server.run_inference(np.ones(40*16000, dtype=np.float32))
+        self.assertEqual([c["start_ts"] for c in chunks], [2, 27])
+
     def setUp(self):
         server.gate.idle_timeout = 0
         self.client = TestClient(server.app)

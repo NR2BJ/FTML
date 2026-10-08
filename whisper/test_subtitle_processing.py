@@ -1,6 +1,6 @@
 import unittest
 
-from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks
+from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks, timed_words_to_chunks
 
 
 def cue(text, start, end):
@@ -8,6 +8,23 @@ def cue(text, start, end):
 
 
 class SubtitleProcessingTests(unittest.TestCase):
+    def test_word_boundaries_do_not_fill_silence(self):
+        result = timed_words_to_chunks([
+            {"word": "hello", "start_ts": 2, "end_ts": 2.5},
+            {"word": " there", "start_ts": 2.55, "end_ts": 3},
+            {"word": " next", "start_ts": 7, "end_ts": 8},
+        ], [cue("hello there next", 0, 10)], offset=100)
+        self.assertEqual(result, [cue("hello there", 102, 103), cue("next", 107, 108)])
+
+    def test_missing_word_timing_preserves_full_sentence(self):
+        segment = [cue("日本語の台詞", 1, 4)]
+        for words in [[], [{"word": "日本語", "start_ts": 1, "end_ts": 2}], [{"word": "日本語の台詞", "start_ts": 2, "end_ts": 1}]]:
+            self.assertEqual(timed_words_to_chunks(words, segment), segment)
+
+    def test_word_timing_preserves_cjk_and_zero_length_punctuation(self):
+        words = [{"word": "はい", "start_ts": 1, "end_ts": 2}, {"word": "。", "start_ts": 2, "end_ts": 2}]
+        self.assertEqual(timed_words_to_chunks(words, [cue("はい。", 0, 3)]), [cue("はい。", 1, 2)])
+
     def test_real_dialogue_and_long_cues_survive(self):
         chunks = [cue(text, i*40, i*40+30) for i, text in enumerate(
             ["おやすみなさい", "お疲れ様でした", "No", "はい", "はい", "はい"])]

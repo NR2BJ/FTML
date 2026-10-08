@@ -4,9 +4,10 @@ import "context"
 
 // TranscribeRequest is the input for a transcription
 type TranscribeRequest struct {
-	FilePath string // absolute path to the media file
-	Language string // "auto", "ko", "en", "ja", etc.
-	Model    string // model name/size (for OpenAI: "whisper-1", for local: model path)
+	AudioTrack int
+	FilePath   string // absolute path to the media file
+	Language   string // "auto", "ko", "en", "ja", etc.
+	Model      string // model name/size (for OpenAI: "whisper-1", for local: model path)
 }
 
 // TranscribeResult is the output of a transcription

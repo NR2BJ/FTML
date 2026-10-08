@@ -21,7 +21,7 @@ interface Props {
 }
 
 export default function SubtitleGenerate({ onClose }: Props) {
-  const { currentFile, setSubtitles } = usePlayerStore()
+  const { currentFile, setSubtitles, audioTrack } = usePlayerStore()
   const [engines, setEngines] = useState<AvailableEngine[]>([])
   const [engine, setEngine] = useState('')
   const [language, setLanguage] = useState('auto')
@@ -75,7 +75,7 @@ export default function SubtitleGenerate({ onClose }: Props) {
     if (!currentFile) return
     setError(null)
     try {
-      const { data } = await generateSubtitle(currentFile, { engine, language })
+      const { data } = await generateSubtitle(currentFile, { engine, language, audio_track: audioTrack })
       setJobId(data.job_id)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start generation'
@@ -101,6 +101,7 @@ export default function SubtitleGenerate({ onClose }: Props) {
 
       {!jobId ? (
         <>
+          <p className="text-xs text-gray-400 mb-2">현재 선택한 음성 트랙 {audioTrack + 1}에서 추출합니다.</p>
           {/* Engine */}
           <div className="mb-2">
             <label className="text-xs text-gray-400 block mb-0.5">Engine</label>

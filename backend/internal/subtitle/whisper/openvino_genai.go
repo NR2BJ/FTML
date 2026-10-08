@@ -98,7 +98,7 @@ func (c *OpenVINOGenAIClient) EnsureModel(ctx context.Context, expectedModelID s
 func (c *OpenVINOGenAIClient) Transcribe(ctx context.Context, req TranscribeRequest, updateProgress func(float64)) (*TranscribeResult, error) {
 	// Step 1: Extract audio from video using FFmpeg (WAV 16kHz mono)
 	updateProgress(0.05)
-	audioPath, err := extractAudio(ctx, req.FilePath)
+	audioPath, err := extractAudio(ctx, req.FilePath, req.AudioTrack)
 	if err != nil {
 		return nil, fmt.Errorf("extract audio: %w", err)
 	}

@@ -11,6 +11,7 @@ export interface SubtitleEntry {
 }
 
 export interface GenerateParams {
+  audio_track?: number
   engine: string   // "whisper.cpp" | "openai"
   model?: string
   language: string // "auto" | "ko" | "en" | "ja" etc.
@@ -27,8 +28,12 @@ export interface TranslateParams {
 export const listSubtitles = (path: string) =>
   client.get<SubtitleEntry[]>(`/subtitle/list/${encodeMediaPath(path)}`)
 
-export const getSubtitleUrl = (videoPath: string, subtitleId: string) =>
-  `/api/subtitle/content/${encodeMediaPath(videoPath)}?id=${encodeURIComponent(subtitleId)}`
+export const getSubtitleUrl = (videoPath: string, subtitleId: string, native = false) =>
+  `/api/subtitle/content/${encodeMediaPath(videoPath)}?id=${encodeURIComponent(subtitleId)}${native ? '&mode=native' : ''}`
+
+export const getSubtitleFontsUrl = (path: string) => `/api/subtitle/fonts/${encodeMediaPath(path)}`
+export const getSubtitleFontUrl = (path: string, font: number | 'default') =>
+  `/api/subtitle/font/${encodeMediaPath(path)}?font=${font}`
 
 export const generateSubtitle = (path: string, params: GenerateParams) =>
   client.post<{ job_id: string }>(`/subtitle/generate/${encodeMediaPath(path)}`, params)

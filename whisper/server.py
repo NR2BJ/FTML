@@ -31,7 +31,7 @@ from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel
 from inference_runtime import ModelGate
-from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks
+from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks, timed_words_to_chunks
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +46,8 @@ DEFAULT_MODEL_ID = "OpenVINO/whisper-large-v3-int8-ov"
 # Whisper processes each chunk independently, timestamps are remapped to absolute.
 CHUNK_DURATION_S = int(os.environ.get("CHUNK_DURATION_S", "300"))  # 5 minutes
 CHUNK_OVERLAP_S = int(os.environ.get("CHUNK_OVERLAP_S", "5"))  # overlap to protect sentence boundaries
+WORD_TIMESTAMPS = os.environ.get("WHISPER_WORD_TIMESTAMPS", "true").lower() == "true"
+word_timestamps_active = False
 
 
 @asynccontextmanager
@@ -89,7 +91,7 @@ def load_model_by_id(mid: str, is_swap: bool = False):
         mid: HuggingFace model ID (e.g. "OpenVINO/whisper-large-v3-int8-ov")
         is_swap: If True, this is a runtime model swap (unload previous first)
     """
-    global pipeline, model_id_str, loading_model
+    global pipeline, model_id_str, loading_model, word_timestamps_active
     import openvino_genai
     from huggingface_hub import snapshot_download
 
@@ -108,7 +110,18 @@ def load_model_by_id(mid: str, is_swap: bool = False):
         log.info(f"Loading model: {mid} on device: {device}")
         model_path = snapshot_download(mid, revision=os.environ.get("MODEL_REVISION") or None)
         log.info(f"Model path: {model_path}")
-        new_pipeline = openvino_genai.WhisperPipeline(str(model_path), device)
+        word_timestamps_active = WORD_TIMESTAMPS and hasattr(openvino_genai.WhisperGenerationConfig(), "word_timestamps")
+        if word_timestamps_active:
+            try:
+                new_pipeline = openvino_genai.WhisperPipeline(str(model_path), device, word_timestamps=True)
+            except RuntimeError:
+                log.warning("단어 시각 지원으로 모델을 준비하지 못했습니다. 문장 시각으로 다시 준비합니다.", exc_info=True)
+                word_timestamps_active = False
+                gc.collect()
+                new_pipeline = openvino_genai.WhisperPipeline(str(model_path), device)
+        else:
+            new_pipeline = openvino_genai.WhisperPipeline(str(model_path), device)
+        log.info("Whisper timing mode: %s", "word" if word_timestamps_active else "segment (word timing disabled or unavailable)")
         with model_lock:
             pipeline = new_pipeline
             model_id_str = mid
@@ -191,7 +204,7 @@ def _recover_gaps(audio_getter, chunks, config, total_duration, sr=16000, cancel
             if audio.size and np.any(audio):
                 result = pipeline.generate(audio, config)
                 check_cancelled(cancel)
-                recovered = normalize_chunks(getattr(result, "chunks", []), begin_sample/sr, total_duration)
+                recovered = timed_words_to_chunks(getattr(result, "words", None), getattr(result, "chunks", []) or [], begin_sample/sr, total_duration)
                 recovered = [cue for cue in recovered if cue["start_ts"] >= start-1 and cue["end_ts"] <= window_end+1]
                 chunks = merge_chunks(chunks, recovered)
             start = window_end
@@ -203,25 +216,48 @@ def _transcribe(audio_getter, total_duration, language, cancel=None):
     ensure_model_loaded()
     config = pipeline.get_generation_config()
     config.return_timestamps = True
+    if word_timestamps_active:
+        config.word_timestamps = True
     config.task = "transcribe"
     config.language = f"<|{language}|>" if language and language != "auto" else ""
     started = time.monotonic()
     sr, position, chunks = 16000, 0, []
     total_samples = int(round(total_duration * sr))
-    chunk_samples = CHUNK_DURATION_S * sr
-    overlap_samples = CHUNK_OVERLAP_S * sr
+    chunk_samples = max(30, CHUNK_DURATION_S) * sr
+    overlap_samples = min(max(0, CHUNK_OVERLAP_S) * sr, chunk_samples // 2)
     while position < total_samples:
         check_cancelled(cancel)
         end = min(position + chunk_samples, total_samples)
-        result = pipeline.generate(audio_getter(position, end), config)
+        audio = audio_getter(position, end)
+        if not audio.size or not np.any(audio):
+            position = end
+            continue
+        result = pipeline.generate(audio, config)
         check_cancelled(cancel)
-        incoming = normalize_chunks(getattr(result, "chunks", []), position/sr, total_duration)
+        incoming = timed_words_to_chunks(getattr(result, "words", None), getattr(result, "chunks", []) or [], position/sr, total_duration)
         chunks = merge_chunks(chunks, incoming)
         log.info("Transcribed %.1f/%.1fs, %d cues", end/sr, total_duration, len(chunks))
         if end == total_samples:
             break
         position = end - overlap_samples
     chunks = _recover_gaps(audio_getter, chunks, config, total_duration, sr, cancel)
+    # 완전한 디지털 무음만 자른다. 배경음/작은 목소리를 VAD처럼 판정하지 않는다.
+    trimmed = []
+    for cue in chunks:
+        check_cancelled(cancel)
+        start, end = int(cue["start_ts"] * sr), int(cue["end_ts"] * sr)
+        # 긴/잘못된 자막 하나 때문에 큰 음성 배열을 만들지 않는다.
+        if end-start > 30*sr:
+            trimmed.append(cue)
+            continue
+        audio = audio_getter(start, end)
+        nonzero = np.flatnonzero(audio)
+        if nonzero.size:
+            cue = dict(cue)
+            cue["start_ts"] = max(cue["start_ts"], (start + nonzero[0])/sr - 0.02)
+            cue["end_ts"] = min(cue["end_ts"], (start + nonzero[-1]+1)/sr + 0.02)
+            trimmed.append(cue)
+    chunks = trimmed
     check_cancelled(cancel)
     return chunks, " ".join(cue["text"] for cue in chunks), time.monotonic()-started, total_duration
 
@@ -337,6 +373,7 @@ async def model_info():
         "busy": gate.active > 0,
         "idle_timeout": IDLE_TIMEOUT,
         "vram_held": pipeline is not None,
+        "timing_mode": "word" if word_timestamps_active else "segment",
     }
 
 

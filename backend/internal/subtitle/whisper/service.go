@@ -110,9 +110,10 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		params.Engine, j.FilePath, params.Language)
 
 	result, err := engine.Transcribe(ctx, TranscribeRequest{
-		FilePath: fullPath,
-		Language: params.Language,
-		Model:    params.Model,
+		AudioTrack: params.AudioTrack,
+		FilePath:   fullPath,
+		Language:   params.Language,
+		Model:      params.Model,
 	}, updateProgress)
 	if err != nil {
 		return fmt.Errorf("transcribe: %w", err)
@@ -132,7 +133,11 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 	if !storage.ValidFilenamePart(lang) {
 		return fmt.Errorf("자막 언어가 올바르지 않습니다")
 	}
-	outFile := filepath.Join(outDir, fmt.Sprintf("whisper_%s.vtt", lang))
+	filename := fmt.Sprintf("whisper_%s.vtt", lang)
+	if params.AudioTrack > 0 {
+		filename = fmt.Sprintf("whisper_%s_track%d.vtt", lang, params.AudioTrack+1)
+	}
+	outFile := filepath.Join(outDir, filename)
 
 	if err := storage.WriteVersionedFile(ctx, outFile, strings.NewReader(result.VTT)); err != nil {
 		return fmt.Errorf("save subtitle: %w", err)
@@ -142,7 +147,7 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 
 	// Store result in job
 	resultJSON, _ := json.Marshal(job.TranscribeResult{
-		OutputPath: fmt.Sprintf("generated:whisper_%s.vtt", lang),
+		OutputPath: "generated:" + filename,
 		Language:   lang,
 	})
 	j.Result = resultJSON
