@@ -18,6 +18,18 @@ WORKDIR /app
 ENV MODEL_ID=OpenVINO/whisper-large-v3-int8-ov
 ENV DEVICE=GPU
 ENV PORT=8178
+ENV HOME=/home/ftml
+ENV XDG_CACHE_HOME=/home/ftml/.cache
+ENV HF_HOME=/models
+ENV HF_HUB_CACHE=/models/hub
+ENV NUMBA_CACHE_DIR=/home/ftml/.cache/numba
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# /root 아래의 캐시는 일반 사용자가 접근할 수 없다.
+RUN mkdir -p /models /home/ftml/.cache/numba \
+  && chown -R 1000:1000 /models /home/ftml
+
+USER 1000:1000
 
 EXPOSE 8178
 

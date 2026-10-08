@@ -27,7 +27,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY --from=builder /build/server /app/server
 
-RUN mkdir -p /data
+# 마운트된 기존 볼륨의 소유권은 빌드로 바뀌지 않는다. 배포 전 별도 이전이 필요하다.
+ENV HOME=/home/ftml
+ENV XDG_CACHE_HOME=/home/ftml/.cache
+RUN mkdir -p /data /home/ftml/.cache \
+  && chown -R 1000:1000 /data /home/ftml
+
+USER 1000:1000
 
 EXPOSE 8080
 

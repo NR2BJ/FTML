@@ -49,6 +49,8 @@ Unlike Jellyfin or Plex, FTML doesn't scrape metadata or reorganize your files. 
 
 ## Quick Start
 
+> 기존 설치의 UID/GID 변경 전에는 [Debian 권한 점검 및 안전한 재배포](docs/container-permissions.md)를 먼저 따른다. 백엔드와 Whisper는 1000:1000으로 실행하며, 기존 root 소유 볼륨은 백업 후 소유권 이전이 필요하다. Portainer에서는 전용 절차를 사용한다.
+
 ### Prerequisites
 
 - Docker & Docker Compose
@@ -78,11 +80,20 @@ MEDIA_PATH=/path/to/your/videos
 FTML_PORT=7979
 ```
 
+Debian에서 `stat -c '%u:%g %a %n' /dev/dri/*`로 확인한 renderD*의 GID와 card*의 GID를 `.env`의 `RENDER_GID`, `VIDEO_GID`에 각각 설정한다. 영상 폴더는 미리 존재해야 하며 UID 1000이 접근할 수 있어야 한다.
+
 ### 3. Create Docker resources
 
 ```bash
 docker volume create ftml_data
 docker volume create whisper_models
+docker network create homeserver-net
+```
+
+이미 있는 볼륨/네트워크는 삭제하거나 다시 만들지 않는다. 새 설치도 시작 전에 다음 명령으로 전용 볼륨의 소유권을 준비한다. 기존 설치는 위 문서에 따라 먼저 서비스를 중지한다.
+
+```sh
+sh scripts/prepare-volume-permissions.sh --apply
 ```
 
 ### 4. Build & Run
@@ -114,7 +125,9 @@ Open `http://localhost:7979` and log in with your admin credentials.
 | `FTML_PORT` | `7979` | External access port |
 | `CORS_ORIGINS` | `*` | Allowed CORS origins |
 | `WHISPER_DEVICE` | `GPU` | Whisper inference device (`GPU` or `CPU`) |
-| `RENDER_GID` | `109` | GPU render group ID (check `getent group render`) |
+| `RENDER_GID` | 필수 | 호스트의 GPU renderD* 장치 소유 그룹 번호 |
+| `VIDEO_GID` | 필수 | 호스트의 GPU card* 장치 소유 그룹 번호 |
+| `MEDIA_READ_ONLY` | `false` | `true`이면 미디어 쓰기 차단. 관리자 파일 관리도 사용할 수 없음 |
 
 ### API Keys (Settings page)
 
