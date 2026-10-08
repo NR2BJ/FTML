@@ -1,17 +1,15 @@
 package handlers
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/video-stream/backend/internal/api/middleware"
@@ -172,7 +170,7 @@ func (h *SubtitleHandler) ListSubtitles(w http.ResponseWriter, r *http.Request) 
 			}
 			// Match subtitle files that start with the video filename
 			subBase := strings.TrimSuffix(name, filepath.Ext(name))
-			if !strings.HasPrefix(subBase, videoBase) {
+			if subBase != videoBase && !strings.HasPrefix(subBase, videoBase+".") {
 				continue
 			}
 
@@ -208,7 +206,7 @@ func (h *SubtitleHandler) ListSubtitles(w http.ResponseWriter, r *http.Request) 
 			}
 			name := entry.Name()
 			ext := strings.ToLower(filepath.Ext(name))
-			if ext != ".vtt" && ext != ".srt" {
+			if !storage.IsSubtitleFile(name) {
 				continue
 			}
 
@@ -217,8 +215,9 @@ func (h *SubtitleHandler) ListSubtitles(w http.ResponseWriter, r *http.Request) 
 			// Parse generated subtitle filenames: whisper_ja.vtt, translate_ko_gemini.vtt
 			baseName := strings.TrimSuffix(name, ext)
 			if strings.HasPrefix(baseName, "whisper_") {
-				lang = strings.TrimPrefix(baseName, "whisper_")
-				label = fmt.Sprintf("Generated (%s)", lang)
+				detail := strings.TrimPrefix(baseName, "whisper_")
+				lang = strings.SplitN(detail, "_", 2)[0]
+				label = fmt.Sprintf("생성 (%s)", detail)
 			} else if strings.HasPrefix(baseName, "translate_") {
 				parts := strings.SplitN(strings.TrimPrefix(baseName, "translate_"), "_", 2)
 				if len(parts) == 2 {
@@ -241,120 +240,28 @@ func (h *SubtitleHandler) ListSubtitles(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(entries)
 }
 
-// ServeSubtitle serves a subtitle as WebVTT format
+// ServeSubtitle는 기본 일반 표시와 ASS 원형 표시를 분리한다.
 func (h *SubtitleHandler) ServeSubtitle(w http.ResponseWriter, r *http.Request) {
-	path := extractPath(r)
-	subtitleID := r.URL.Query().Get("id")
-
-	if subtitleID == "" {
-		jsonError(w, "subtitle id required", http.StatusBadRequest)
+	doc, err := subtitle.Load(r.Context(), h.mediaPath, h.subtitlePath, extractPath(r), r.URL.Query().Get("id"))
+	if err != nil {
+		jsonError(w, "자막을 읽을 수 없습니다", http.StatusBadRequest)
 		return
 	}
-
-	fullPath, ok := h.safeVideoPath(path)
-	if !ok {
-		jsonError(w, "invalid path", http.StatusForbidden)
-		return
-	}
-
-	if strings.HasPrefix(subtitleID, "embedded:") {
-		h.serveEmbeddedSubtitle(w, fullPath, subtitleID)
-	} else if strings.HasPrefix(subtitleID, "external:") {
-		h.serveExternalSubtitle(w, r, fullPath, subtitleID)
-	} else if strings.HasPrefix(subtitleID, "generated:") {
-		h.serveGeneratedSubtitle(w, path, subtitleID)
+	data := doc.Data
+	contentType := "text/vtt; charset=utf-8"
+	if r.URL.Query().Get("mode") == "native" && subtitle.IsASS(doc.Format) {
+		contentType = "text/x-ssa; charset=utf-8"
 	} else {
-		jsonError(w, "invalid subtitle id", http.StatusBadRequest)
-	}
-}
-
-func (h *SubtitleHandler) serveEmbeddedSubtitle(w http.ResponseWriter, videoPath, subtitleID string) {
-	// Parse stream index from "embedded:3"
-	var streamIndex int
-	fmt.Sscanf(strings.TrimPrefix(subtitleID, "embedded:"), "%d", &streamIndex)
-
-	// Extract subtitle as VTT using FFmpeg
-	cmd := exec.Command("ffmpeg",
-		"-hide_banner",
-		"-loglevel", "error",
-		"-i", videoPath,
-		"-map", fmt.Sprintf("0:%d", streamIndex),
-		"-f", "webvtt",
-		"pipe:1",
-	)
-
-	output, err := cmd.Output()
-	if err != nil {
-		jsonError(w, "failed to extract subtitle", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-	w.Header().Set("Cache-Control", "private, no-cache")
-	w.Write(output)
-}
-
-func (h *SubtitleHandler) serveExternalSubtitle(w http.ResponseWriter, r *http.Request, videoPath, subtitleID string) {
-	filename := strings.TrimPrefix(subtitleID, "external:")
-	subPath, ok := h.safeSiblingSubtitlePath(videoPath, filename)
-	if !ok {
-		jsonError(w, "invalid path", http.StatusForbidden)
-		return
-	}
-
-	data, err := os.ReadFile(subPath)
-	if err != nil {
-		jsonError(w, "subtitle file not found", http.StatusNotFound)
-		return
-	}
-
-	ext := strings.ToLower(filepath.Ext(filename))
-
-	w.Header().Set("Cache-Control", "private, no-cache")
-
-	switch ext {
-	case ".vtt":
-		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-		w.Write(data)
-	case ".srt":
-		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-		w.Write(srtToVTT(data))
-	case ".ass", ".ssa":
-		output, err := subtitle.ConvertASSFile(r.Context(), subPath, "webvtt")
+		data, err = doc.VTT(r.Context())
 		if err != nil {
-			jsonError(w, "failed to convert subtitle", http.StatusInternalServerError)
+			jsonError(w, "지원하지 않거나 손상된 자막입니다", http.StatusUnprocessableEntity)
 			return
 		}
-		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-		w.Write(output)
-	default:
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write(data)
 	}
-}
-
-// srtToVTT converts SRT subtitle format to WebVTT
-func srtToVTT(srtData []byte) []byte {
-	var buf bytes.Buffer
-	buf.WriteString("WEBVTT\n\n")
-
-	// Replace \r\n with \n
-	content := strings.ReplaceAll(string(srtData), "\r\n", "\n")
-
-	scanner := bufio.NewScanner(strings.NewReader(content))
-	timestampRe := regexp.MustCompile(`(\d{2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}),(\d{3})`)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		// Convert SRT timestamp commas to VTT dots
-		if timestampRe.MatchString(line) {
-			line = timestampRe.ReplaceAllString(line, "$1.$2 --> $3.$4")
-		}
-		buf.WriteString(line)
-		buf.WriteString("\n")
-	}
-
-	return buf.Bytes()
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Write(data)
 }
 
 func langFromTags(tags map[string]string) string {
@@ -367,38 +274,6 @@ func langFromTags(tags map[string]string) string {
 	return ""
 }
 
-func (h *SubtitleHandler) serveGeneratedSubtitle(w http.ResponseWriter, videoPath, subtitleID string) {
-	filename := strings.TrimPrefix(subtitleID, "generated:")
-	subPath, ok := h.safeGeneratedSubtitlePath(videoPath, filename)
-	if !ok {
-		jsonError(w, "invalid path", http.StatusForbidden)
-		return
-	}
-
-	data, err := os.ReadFile(subPath)
-	if err != nil {
-		jsonError(w, "subtitle file not found", http.StatusNotFound)
-		return
-	}
-
-	ext := strings.ToLower(filepath.Ext(filename))
-
-	w.Header().Set("Cache-Control", "private, no-cache")
-
-	switch ext {
-	case ".vtt":
-		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-		w.Write(data)
-	case ".srt":
-		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-		w.Write(srtToVTT(data))
-	default:
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write(data)
-	}
-}
-
-// GenerateSubtitle creates a transcription job
 func (h *SubtitleHandler) GenerateSubtitle(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
 	fullPath, ok := h.safeVideoPath(path)
@@ -415,6 +290,10 @@ func (h *SubtitleHandler) GenerateSubtitle(w http.ResponseWriter, r *http.Reques
 	var params job.TranscribeParams
 	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if params.AudioTrack < 0 {
+		jsonError(w, "잘못된 음성 트랙", http.StatusBadRequest)
 		return
 	}
 
@@ -468,6 +347,10 @@ func (h *SubtitleHandler) TranslateSubtitle(w http.ResponseWriter, r *http.Reque
 	}
 	if params.Engine == "" {
 		params.Engine = "gemini"
+	}
+	if params.Engine != "gemini" {
+		jsonError(w, "번역은 Gemini만 지원합니다", http.StatusBadRequest)
+		return
 	}
 	if params.Preset == "" {
 		params.Preset = "movie"
@@ -573,6 +456,10 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 	if req.Engine == "" {
 		req.Engine = "gemini"
 	}
+	if req.Engine != "gemini" {
+		jsonError(w, "번역은 Gemini만 지원합니다", http.StatusBadRequest)
+		return
+	}
 	if req.Preset == "" {
 		req.Preset = "movie"
 	}
@@ -605,7 +492,7 @@ func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request)
 			if subtitleID == "" {
 				for _, entry := range genEntries {
 					name := entry.Name()
-					if strings.HasSuffix(name, ".vtt") {
+					if !entry.IsDir() && storage.IsSubtitleFile(name) && !strings.HasPrefix(name, "translate_") {
 						subtitleID = "generated:" + name
 						break
 					}
@@ -714,6 +601,10 @@ func (h *SubtitleHandler) BatchGenerateTranslate(w http.ResponseWriter, r *http.
 	if req.Translate.Engine == "" {
 		req.Translate.Engine = "gemini"
 	}
+	if req.Translate.Engine != "gemini" {
+		jsonError(w, "번역은 Gemini만 지원합니다", http.StatusBadRequest)
+		return
+	}
 	if req.Translate.Preset == "" {
 		req.Translate.Preset = "movie"
 	}
@@ -793,10 +684,8 @@ func (h *SubtitleHandler) UploadSubtitle(w http.ResponseWriter, r *http.Request)
 
 	// Validate extension
 	filename := filepath.Base(header.Filename)
-	ext := strings.ToLower(filepath.Ext(filename))
-	allowedExts := map[string]bool{".srt": true, ".vtt": true, ".ass": true, ".ssa": true}
-	if !allowedExts[ext] {
-		jsonError(w, "only .srt, .vtt, .ass, .ssa files are allowed", http.StatusBadRequest)
+	if !storage.IsSubtitleFile(filename) {
+		jsonError(w, "SRT, VTT, ASS, SSA, SMI 자막을 지원합니다", http.StatusBadRequest)
 		return
 	}
 
@@ -813,16 +702,16 @@ func (h *SubtitleHandler) UploadSubtitle(w http.ResponseWriter, r *http.Request)
 
 	destPath := filepath.Join(genDir, filename)
 
-	dst, err := os.Create(destPath)
-	if err != nil {
-		jsonError(w, "failed to save subtitle", http.StatusInternalServerError)
+	data, err := io.ReadAll(io.LimitReader(file, subtitle.MaxDocumentBytes+1))
+	if err == nil {
+		data, err = subtitle.DecodeText(data)
+	}
+	if err != nil || len(data) > subtitle.MaxDocumentBytes {
+		jsonError(w, "UTF-8 또는 UTF-16 자막 파일을 확인해 주세요", http.StatusBadRequest)
 		return
 	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, file); err != nil {
-		os.Remove(destPath)
-		jsonError(w, "failed to write subtitle", http.StatusInternalServerError)
+	if err := storage.WriteVersionedFile(r.Context(), destPath, bytes.NewReader(data)); err != nil {
+		jsonError(w, "자막 저장 실패", http.StatusInternalServerError)
 		return
 	}
 
@@ -908,131 +797,23 @@ func (h *SubtitleHandler) ConvertSubtitle(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	videoFullPath, ok := h.safeVideoPath(videoPath)
-	if !ok {
-		jsonError(w, "invalid video path", http.StatusForbidden)
-		return
-	}
-
-	var srcPath string
-	var srcExt string
-	embeddedStream := -1
-
-	switch {
-	case strings.HasPrefix(req.SubtitleID, "generated:"):
-		filename := strings.TrimPrefix(req.SubtitleID, "generated:")
-		var ok bool
-		srcPath, ok = h.safeGeneratedSubtitlePath(videoPath, filename)
-		if !ok {
-			jsonError(w, "invalid subtitle path", http.StatusForbidden)
-			return
-		}
-		srcExt = strings.TrimPrefix(strings.ToLower(filepath.Ext(srcPath)), ".")
-	case strings.HasPrefix(req.SubtitleID, "external:"):
-		filename := strings.TrimPrefix(req.SubtitleID, "external:")
-		var ok bool
-		srcPath, ok = h.safeSiblingSubtitlePath(videoFullPath, filename)
-		if !ok {
-			jsonError(w, "invalid subtitle path", http.StatusForbidden)
-			return
-		}
-		srcExt = strings.TrimPrefix(strings.ToLower(filepath.Ext(srcPath)), ".")
-	case strings.HasPrefix(req.SubtitleID, "embedded:"):
-		if _, err := fmt.Sscanf(strings.TrimPrefix(req.SubtitleID, "embedded:"), "%d", &embeddedStream); err != nil {
-			jsonError(w, "invalid embedded subtitle id", http.StatusBadRequest)
-			return
-		}
-	default:
-		jsonError(w, "subtitle not found", http.StatusNotFound)
-		return
-	}
-
-	if embeddedStream >= 0 {
-		cmd := exec.Command("ffmpeg",
-			"-hide_banner",
-			"-loglevel", "error",
-			"-i", videoFullPath,
-			"-map", fmt.Sprintf("0:%d", embeddedStream),
-			"-f", targetFmt,
-			"pipe:1",
-		)
-		outputData, err := cmd.Output()
-		if err != nil {
-			jsonError(w, "conversion failed: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		h.logSubtitleOp(r, "subtitle_convert", videoPath, targetFmt)
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"embedded_%d.%s\"", embeddedStream, targetFmt))
-		w.Write(outputData)
-		return
-	}
-
-	// If source format is the same as target, just serve the file
-	if srcExt == targetFmt {
-		data, err := os.ReadFile(srcPath)
-		if err != nil {
-			jsonError(w, "failed to read subtitle", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		baseName := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.%s\"", baseName, targetFmt))
-		w.Write(data)
-		return
-	}
-
-	// SRT → VTT (Go conversion)
-	if srcExt == "srt" && targetFmt == "vtt" {
-		data, err := os.ReadFile(srcPath)
-		if err != nil {
-			jsonError(w, "failed to read subtitle", http.StatusInternalServerError)
-			return
-		}
-		converted := srtToVTT(data)
-		baseName := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.vtt\"", baseName))
-		w.Write(converted)
-		return
-	}
-
-	// VTT → SRT (Go conversion)
-	if srcExt == "vtt" && targetFmt == "srt" {
-		data, err := os.ReadFile(srcPath)
-		if err != nil {
-			jsonError(w, "failed to read subtitle", http.StatusInternalServerError)
-			return
-		}
-		converted := vttToSRT(data)
-		baseName := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.srt\"", baseName))
-		w.Write(converted)
-		return
-	}
-
-	// For ASS conversions, use FFmpeg
-	var outputData []byte
-	var err error
-	if (srcExt == "ass" || srcExt == "ssa") && targetFmt != "ass" {
-		outputData, err = subtitle.ConvertASSFile(r.Context(), srcPath, targetFmt)
-	} else {
-		cmd := exec.CommandContext(r.Context(), "ffmpeg", "-i", srcPath, "-f", targetFmt, "-")
-		outputData, err = cmd.Output()
-	}
+	doc, err := subtitle.Load(r.Context(), h.mediaPath, h.subtitlePath, videoPath, req.SubtitleID)
 	if err != nil {
-		jsonError(w, "conversion failed: "+err.Error(), http.StatusInternalServerError)
+		jsonError(w, "자막 읽기 실패", http.StatusBadRequest)
 		return
 	}
-
-	h.logSubtitleOp(r, "subtitle_convert", videoPath, targetFmt)
-
-	baseName := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
+	data, err := doc.Convert(r.Context(), targetFmt)
+	if err != nil {
+		jsonError(w, "자막 변환 실패", http.StatusUnprocessableEntity)
+		return
+	}
+	_, name, _ := strings.Cut(req.SubtitleID, ":")
+	name = strings.TrimSuffix(filepath.Base(name), filepath.Ext(name)) + "." + targetFmt
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.%s\"", baseName, targetFmt))
-	w.Write(outputData)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	w.Header().Set("Cache-Control", "private, no-cache")
+	h.logSubtitleOp(r, "subtitle_convert", videoPath, targetFmt)
+	w.Write(data)
 }
 
 // RequestDelete creates a delete request for a generated subtitle (user-facing)
@@ -1092,54 +873,4 @@ func (h *SubtitleHandler) ListMyDeleteRequests(w http.ResponseWriter, r *http.Re
 		return
 	}
 	jsonResponse(w, requests, http.StatusOK)
-}
-
-// vttToSRT converts WebVTT to SRT format
-func vttToSRT(vttData []byte) []byte {
-	var buf bytes.Buffer
-	content := strings.ReplaceAll(string(vttData), "\r\n", "\n")
-
-	// Skip WEBVTT header
-	lines := strings.Split(content, "\n")
-	cueIndex := 1
-	i := 0
-	// Skip header lines
-	for i < len(lines) {
-		if strings.TrimSpace(lines[i]) == "" {
-			i++
-			break
-		}
-		i++
-	}
-
-	timestampRe := regexp.MustCompile(`(\d{2}:\d{2}:\d{2})\.(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2})\.(\d{3})`)
-
-	for i < len(lines) {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			i++
-			continue
-		}
-
-		// Check if this is a timestamp line
-		if timestampRe.MatchString(line) {
-			buf.WriteString(fmt.Sprintf("%d\n", cueIndex))
-			cueIndex++
-			// Convert VTT dots to SRT commas
-			line = timestampRe.ReplaceAllString(line, "$1,$2 --> $3,$4")
-			buf.WriteString(line + "\n")
-			i++
-			// Read text lines until empty line
-			for i < len(lines) && strings.TrimSpace(lines[i]) != "" {
-				buf.WriteString(lines[i] + "\n")
-				i++
-			}
-			buf.WriteString("\n")
-		} else {
-			// Skip cue identifiers or other non-timestamp lines
-			i++
-		}
-	}
-
-	return buf.Bytes()
 }

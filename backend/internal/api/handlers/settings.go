@@ -15,8 +15,7 @@ var settingsKeys = []SettingDef{
 	{Key: "timezone", Label: "Timezone", Group: "general", Placeholder: "Asia/Seoul", Secret: false},
 	{Key: "gemini_api_key", Label: "Gemini API Key", Group: "translation", Placeholder: "AIza...", Secret: true},
 	{Key: "gemini_model", Label: "Gemini Model", Group: "translation", Placeholder: "사용할 모델을 선택해 주세요", Secret: false},
-	{Key: "openai_api_key", Label: "OpenAI API Key", Group: "translation", Placeholder: "sk-...", Secret: true},
-	{Key: "deepl_api_key", Label: "DeepL API Key", Group: "translation", Placeholder: "xxxxxxxx-xxxx-...", Secret: true},
+	{Key: "openai_api_key", Label: "기존 OpenAI 음성 인식 API 키", Group: "legacy", Placeholder: "sk-...", Secret: true},
 }
 
 type SettingDef struct {

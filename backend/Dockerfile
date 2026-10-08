@@ -15,6 +15,7 @@ FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    fonts-noto-cjk \
     vainfo \
     intel-media-va-driver-non-free \
     libva-drm2 \

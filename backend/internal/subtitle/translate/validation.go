@@ -45,21 +45,6 @@ func parseIdentifiedTranslations(cues []SubtitleCue, content string) ([]Subtitle
 	return result, nil
 }
 
-func mapTranslations(cues []SubtitleCue, translations []string) ([]SubtitleCue, error) {
-	if len(cues) != len(translations) {
-		return nil, fmt.Errorf("%w: %d개 중 %d개 반환", errInvalidTranslation, len(cues), len(translations))
-	}
-	result := make([]SubtitleCue, len(cues))
-	for i, cue := range cues {
-		if strings.TrimSpace(translations[i]) == "" {
-			return nil, fmt.Errorf("%w: 자막 번호 %d의 번역문 누락", errInvalidTranslation, cue.Index)
-		}
-		result[i] = cue
-		result[i].Text = translations[i]
-	}
-	return result, nil
-}
-
 func validateTranslatedCues(source, translated []SubtitleCue) error {
 	if len(source) != len(translated) {
 		return errInvalidTranslation

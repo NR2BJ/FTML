@@ -2,13 +2,15 @@ package translate
 
 import (
 	"fmt"
+	"html"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
 )
 
 // Matches both HH:MM:SS.mmm and MM:SS.mmm timestamp formats
-var timestampRe = regexp.MustCompile(`(\d{1,2}:\d{2}:\d{2}[.,]\d{3}|\d{1,2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{3}|\d{1,2}:\d{2}[.,]\d{3})`)
+var timestampRe = regexp.MustCompile(`^(\d{1,6}:\d{2}:\d{2}[.,]\d{3}|\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,6}:\d{2}:\d{2}[.,]\d{3}|\d{2}:\d{2}[.,]\d{3})(?:\s+.*)?$`)
 
 // htmlTagRe strips VTT/HTML formatting tags like <i>, </b>, <v Name>, <c.class>, etc.
 var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
@@ -29,10 +31,10 @@ func ParseVTT(content string) []SubtitleCue {
 
 		// Empty line: finalize current cue, end skip block
 		if line == "" {
-			if currentCue != nil && currentCue.Text != "" {
+			if validCue(currentCue) {
 				cues = append(cues, *currentCue)
-				currentCue = nil
 			}
+			currentCue = nil
 			skipBlock = false
 			continue
 		}
@@ -48,7 +50,7 @@ func ParseVTT(content string) []SubtitleCue {
 		}
 
 		// Skip NOTE and STYLE blocks (block continues until next empty line)
-		if strings.HasPrefix(line, "NOTE") || line == "STYLE" {
+		if currentCue == nil && (line == "NOTE" || strings.HasPrefix(line, "NOTE ") || line == "STYLE" || line == "REGION") {
 			skipBlock = true
 			continue
 		}
@@ -60,7 +62,7 @@ func ParseVTT(content string) []SubtitleCue {
 
 		// Check for timestamp line
 		if matches := timestampRe.FindStringSubmatch(line); len(matches) == 3 {
-			if currentCue != nil && currentCue.Text != "" {
+			if validCue(currentCue) {
 				cues = append(cues, *currentCue)
 			}
 			index++
@@ -79,7 +81,7 @@ func ParseVTT(content string) []SubtitleCue {
 
 		// Text line — strip HTML/VTT formatting tags (<i>, </b>, <v Name>, etc.)
 		if currentCue != nil {
-			cleaned := htmlTagRe.ReplaceAllString(line, "")
+			cleaned := html.UnescapeString(htmlTagRe.ReplaceAllString(line, ""))
 			if cleaned == "" {
 				continue
 			}
@@ -90,7 +92,7 @@ func ParseVTT(content string) []SubtitleCue {
 		}
 	}
 
-	if currentCue != nil && currentCue.Text != "" {
+	if validCue(currentCue) {
 		cues = append(cues, *currentCue)
 	}
 
@@ -105,13 +107,13 @@ func CuesToVTT(cues []SubtitleCue) string {
 	idx := 0
 	for _, cue := range cues {
 		// Skip cues with empty text
-		if strings.TrimSpace(cue.Text) == "" {
+		if !validCue(&cue) {
 			continue
 		}
 		idx++
 		sb.WriteString(fmt.Sprintf("%d\n", idx))
 		sb.WriteString(fmt.Sprintf("%s --> %s\n", formatTimestamp(cue.Start), formatTimestamp(cue.End)))
-		sb.WriteString(cue.Text)
+		sb.WriteString(html.EscapeString(cue.Text))
 		sb.WriteString("\n\n")
 	}
 
@@ -121,6 +123,12 @@ func CuesToVTT(cues []SubtitleCue) string {
 func parseTimestamp(ts string) float64 {
 	ts = strings.Replace(ts, ",", ".", 1)
 	parts := strings.Split(ts, ":")
+	for i, part := range parts {
+		value, err := strconv.ParseFloat(part, 64)
+		if err != nil || value < 0 || (i > 0 || len(parts) == 2) && value >= 60 {
+			return math.NaN()
+		}
+	}
 	switch len(parts) {
 	case 3:
 		// HH:MM:SS.mmm
@@ -139,8 +147,12 @@ func parseTimestamp(ts string) float64 {
 	}
 }
 
+func validCue(cue *SubtitleCue) bool {
+	return cue != nil && strings.TrimSpace(cue.Text) != "" && !math.IsNaN(cue.Start) && !math.IsNaN(cue.End) && !math.IsInf(cue.Start, 0) && !math.IsInf(cue.End, 0) && cue.Start >= 0 && cue.End > cue.Start
+}
+
 func formatTimestamp(seconds float64) string {
-	totalMs := int(seconds * 1000)
+	totalMs := int(math.Round(seconds * 1000))
 	h := totalMs / 3600000
 	totalMs %= 3600000
 	m := totalMs / 60000

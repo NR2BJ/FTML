@@ -21,7 +21,7 @@ var videoExtensions = map[string]bool{
 }
 
 var subtitleExtensions = map[string]bool{
-	".srt": true, ".vtt": true, ".ass": true, ".ssa": true, ".sub": true,
+	".srt": true, ".vtt": true, ".ass": true, ".ssa": true, ".smi": true, ".sami": true,
 }
 
 func IsVideoFile(name string) bool {

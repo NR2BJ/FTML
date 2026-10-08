@@ -27,12 +27,13 @@ func responseJSON(body string) *http.Response {
 }
 
 func geminiResponse(content, reason string) string {
+	runes := []rune(content)
 	body, _ := json.Marshal(map[string]any{"candidates": []any{map[string]any{
 		"finishReason": reason,
 		"content": map[string]any{"parts": []any{
 			map[string]any{"thought": true, "text": "not the translation"},
-			map[string]any{"text": content[:len(content)/2]},
-			map[string]any{"text": content[len(content)/2:]},
+			map[string]any{"text": string(runes[:len(runes)/2])},
+			map[string]any{"text": string(runes[len(runes)/2:])},
 		}},
 	}}})
 	return string(body)
@@ -115,23 +116,6 @@ func TestGeminiSubdividesIncompleteResponse(t *testing.T) {
 	}
 	if err := validateTranslatedCues(cues, got); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestOtherProvidersRejectMissingText(t *testing.T) {
-	o := NewOpenAITranslator("test")
-	o.httpClient.Transport = fakeTransport(func(*http.Request) (*http.Response, error) {
-		return responseJSON(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"translations\":[\"one\"]}"}}]}`), nil
-	})
-	if _, err := o.translateBatch(context.Background(), testCues, ""); err == nil {
-		t.Fatal("OpenAI accepted missing cue")
-	}
-	d := NewDeepLTranslator("test")
-	d.httpClient.Transport = fakeTransport(func(*http.Request) (*http.Response, error) {
-		return responseJSON(`{"translations":[{"text":"one"},{"text":""}]}`), nil
-	})
-	if _, err := d.translateBatch(context.Background(), testCues, TranslateOptions{}); err == nil {
-		t.Fatal("DeepL accepted empty cue")
 	}
 }
 

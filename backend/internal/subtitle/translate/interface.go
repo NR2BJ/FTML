@@ -2,11 +2,6 @@ package translate
 
 import "context"
 
-const (
-	batchSize   = 200 // number of cues per API call (used by DeepL, OpenAI)
-	concurrency = 4   // max concurrent API requests
-)
-
 // SubtitleCue represents a single subtitle entry with timing
 type SubtitleCue struct {
 	Index int     `json:"index"`
@@ -23,7 +18,7 @@ type TranslateOptions struct {
 	CustomPrompt string `json:"custom_prompt"` // for "custom" preset
 }
 
-// Translator is the common interface for all translation engines
+// Translator는 번역 요청과 문장 검증을 분리한다.
 type Translator interface {
 	// Translate translates subtitle cues
 	Translate(ctx context.Context, cues []SubtitleCue, opts TranslateOptions, updateProgress func(float64)) ([]SubtitleCue, error)

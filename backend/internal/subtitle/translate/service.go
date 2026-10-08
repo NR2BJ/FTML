@@ -1,14 +1,12 @@
 package translate
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -45,18 +43,6 @@ func (s *Service) resolveEngine(name string) (Translator, error) {
 			return nil, fmt.Errorf("Gemini API key not configured")
 		}
 		return NewGeminiTranslator(key, s.modelResolver), nil
-	case "openai":
-		key := s.database.GetSetting("openai_api_key", "")
-		if key == "" {
-			return nil, fmt.Errorf("OpenAI API key not configured")
-		}
-		return NewOpenAITranslator(key), nil
-	case "deepl":
-		key := s.database.GetSetting("deepl_api_key", "")
-		if key == "" {
-			return nil, fmt.Errorf("DeepL API key not configured")
-		}
-		return NewDeepLTranslator(key), nil
 	default:
 		return nil, fmt.Errorf("unknown translation engine: %s", name)
 	}
@@ -77,20 +63,25 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		return err
 	}
 
-	// Load source subtitle
-	vttContent, err := s.loadSubtitle(ctx, j.FilePath, params.SubtitleID)
+	doc, err := subtitle.Load(ctx, s.mediaPath, s.subtitlePath, j.FilePath, params.SubtitleID)
 	if err != nil {
-		return fmt.Errorf("load subtitle: %w", err)
+		return fmt.Errorf("자막 읽기: %w", err)
 	}
-
-	log.Printf("[translate] loaded subtitle: id=%s len=%d first100=%q",
-		params.SubtitleID, len(vttContent), truncateStr(vttContent, 100))
-
-	// Parse VTT
-	cues := ParseVTT(vttContent)
+	var assPlan *subtitle.ASSTranslation
+	var cues []SubtitleCue
+	if subtitle.IsASS(doc.Format) {
+		assPlan = subtitle.PrepareASSTranslation(doc.Data)
+		for _, event := range assPlan.Texts {
+			cues = append(cues, SubtitleCue{Index: event.ID, Start: event.Start, End: event.End, Text: event.Text})
+		}
+	} else {
+		data, err := doc.VTT(ctx)
+		if err != nil {
+			return err
+		}
+		cues = ParseVTT(string(data))
+	}
 	if len(cues) == 0 {
-		log.Printf("[translate] VTT parse returned 0 cues, content preview (%d bytes): %q",
-			len(vttContent), truncateStr(vttContent, 500))
 		return fmt.Errorf("no subtitle cues found in source")
 	}
 
@@ -151,117 +142,40 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		return fmt.Errorf("자막 폴더 생성 실패: %w", err)
 	}
 
-	outFile := filepath.Join(outDir, fmt.Sprintf("translate_%s_%s.vtt", params.TargetLang, params.Engine))
-	vtt := CuesToVTT(translated)
+	content := CuesToVTT(translated)
+	ext := "vtt"
+	fallbacks := 0
+	if assPlan != nil {
+		byID := make(map[int]string, len(translated))
+		for _, cue := range translated {
+			byID[cue.Index] = cue.Text
+		}
+		data, err := assPlan.Render(byID)
+		if err != nil {
+			return err
+		}
+		content, ext, fallbacks = string(data), "ass", assPlan.Fallbacks
+	}
+	// 다른 원본의 번역과 기존 VTT를 덮어쓰지 않는다.
+	sourceKey := sha256.Sum256([]byte(params.SubtitleID))
+	filename := fmt.Sprintf("translate_%s_%s_%x.%s", params.TargetLang, params.Engine, sourceKey[:8], ext)
+	outFile := filepath.Join(outDir, filename)
 
-	if err := storage.WriteVersionedFile(ctx, outFile, strings.NewReader(vtt)); err != nil {
+	if err := storage.WriteVersionedFile(ctx, outFile, strings.NewReader(content)); err != nil {
 		return fmt.Errorf("save translated subtitle: %w", err)
 	}
 
 	log.Printf("[translate] translation complete: %s", outFile)
 
 	// Store result in job
-	resultJSON, _ := json.Marshal(job.TranslateResult{
-		OutputPath: fmt.Sprintf("generated:translate_%s_%s.vtt", params.TargetLang, params.Engine),
+	resultJSON, _ := json.Marshal(map[string]any{
+		"output_path":            "generated:" + filename,
+		"plain_effect_fallbacks": fallbacks,
 	})
 	j.Result = resultJSON
 
 	updateProgress(1.0)
 	return nil
-}
-
-// loadSubtitle reads subtitle content from the appropriate source
-func (s *Service) loadSubtitle(ctx context.Context, videoPath, subtitleID string) (string, error) {
-	if strings.HasPrefix(subtitleID, "generated:") {
-		// Load from generated subtitles directory
-		filename := strings.TrimPrefix(subtitleID, "generated:")
-		hash := videoHash(videoPath)
-		subPath, err := storage.ResolveWithinBase(s.subtitlePath, filepath.Join(hash, filename))
-		if err != nil {
-			return "", fmt.Errorf("resolve generated subtitle: %w", err)
-		}
-		data, err := os.ReadFile(subPath)
-		if err != nil {
-			return "", fmt.Errorf("read generated subtitle: %w", err)
-		}
-		return string(data), nil
-	}
-
-	if strings.HasPrefix(subtitleID, "external:") {
-		// Load from media directory
-		filename := strings.TrimPrefix(subtitleID, "external:")
-		fullPath, err := storage.ResolveWithinBase(s.mediaPath, videoPath)
-		if err != nil {
-			return "", fmt.Errorf("resolve video path: %w", err)
-		}
-		videoDir := filepath.Dir(fullPath)
-		subPath, err := storage.ResolveWithinBase(videoDir, filename)
-		if err != nil {
-			return "", fmt.Errorf("resolve external subtitle: %w", err)
-		}
-
-		ext := strings.ToLower(filepath.Ext(filename))
-		switch ext {
-		case ".srt":
-			data, err := os.ReadFile(subPath)
-			if err != nil {
-				return "", fmt.Errorf("read external subtitle: %w", err)
-			}
-			return srtToVTTString(string(data)), nil
-		case ".ass", ".ssa":
-			output, err := subtitle.ConvertASSFile(ctx, subPath, "webvtt")
-			if err != nil {
-				return "", fmt.Errorf("convert %s to VTT: %w", ext, err)
-			}
-			if len(strings.TrimSpace(string(output))) == 0 {
-				return "", fmt.Errorf("empty VTT output from %s conversion", ext)
-			}
-			log.Printf("[translate] converted %s to VTT: %d bytes", ext, len(output))
-			return string(output), nil
-		default:
-			data, err := os.ReadFile(subPath)
-			if err != nil {
-				return "", fmt.Errorf("read external subtitle: %w", err)
-			}
-			return string(data), nil
-		}
-	}
-
-	if strings.HasPrefix(subtitleID, "embedded:") {
-		// Extract embedded subtitle via FFmpeg as VTT
-		var streamIndex int
-		fmt.Sscanf(strings.TrimPrefix(subtitleID, "embedded:"), "%d", &streamIndex)
-
-		fullPath, err := storage.ResolveWithinBase(s.mediaPath, videoPath)
-		if err != nil {
-			return "", fmt.Errorf("resolve video path: %w", err)
-		}
-		cmd := exec.Command("ffmpeg",
-			"-hide_banner",
-			"-loglevel", "warning",
-			"-i", fullPath,
-			"-map", fmt.Sprintf("0:%d", streamIndex),
-			"-f", "webvtt",
-			"pipe:1",
-		)
-
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		output, err := cmd.Output()
-		if stderrStr := stderr.String(); stderrStr != "" {
-			log.Printf("[translate] ffmpeg stderr for %s: %s", subtitleID, stderrStr)
-		}
-		if err != nil {
-			return "", fmt.Errorf("extract embedded subtitle (stream %d): %w, stderr: %s", streamIndex, err, stderr.String())
-		}
-		if len(strings.TrimSpace(string(output))) == 0 {
-			return "", fmt.Errorf("empty VTT output for embedded stream %d", streamIndex)
-		}
-		log.Printf("[translate] extracted embedded stream %d: %d bytes", streamIndex, len(output))
-		return string(output), nil
-	}
-
-	return "", fmt.Errorf("unknown subtitle type: %s", subtitleID)
 }
 
 func detectSourceLang(subtitleID string) string {
@@ -275,7 +189,7 @@ func detectSourceLang(subtitleID string) string {
 	name = strings.TrimSuffix(name, filepath.Ext(name))
 
 	if strings.HasPrefix(name, "whisper_") {
-		return strings.TrimPrefix(name, "whisper_")
+		return strings.SplitN(strings.TrimPrefix(name, "whisper_"), "_", 2)[0]
 	}
 	if strings.HasPrefix(name, "translate_") {
 		parts := strings.SplitN(strings.TrimPrefix(name, "translate_"), "_", 2)
@@ -296,33 +210,9 @@ func detectSourceLang(subtitleID string) string {
 	return "auto"
 }
 
-var srtTimestampRe = regexp.MustCompile(`(\d{2}:\d{2}:\d{2}),(\d{3})`)
-
-func srtToVTTString(srt string) string {
-	srt = strings.ReplaceAll(srt, "\r\n", "\n")
-	// Strip UTF-8 BOM if present
-	srt = strings.TrimPrefix(srt, "\xEF\xBB\xBF")
-
-	var sb strings.Builder
-	sb.WriteString("WEBVTT\n\n")
-	// Only replace commas in timestamp patterns, not in subtitle text
-	for _, line := range strings.Split(srt, "\n") {
-		sb.WriteString(srtTimestampRe.ReplaceAllString(line, "${1}.${2}"))
-		sb.WriteByte('\n')
-	}
-	return sb.String()
-}
-
 func videoHash(videoPath string) string {
 	h := sha256.Sum256([]byte(videoPath))
 	return fmt.Sprintf("%x", h[:8])
-}
-
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }
 
 // assDrawingRe matches ASS drawing commands like {=17}m -484.5 -210 l ...

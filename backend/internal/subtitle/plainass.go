@@ -1,16 +1,14 @@
 package subtitle
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -180,13 +178,21 @@ func ConvertASSFile(ctx context.Context, path, format string) ([]byte, error) {
 	if format != "webvtt" && format != "srt" {
 		return nil, fmt.Errorf("지원하지 않는 일반 자막 형식")
 	}
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", format, "pipe:1")
-	cmd.Stdin = bytes.NewReader(NormalizeASSForText(data))
-	return cmd.Output()
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, MaxDocumentBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > MaxDocumentBytes {
+		return nil, fmt.Errorf("자막 크기 제한 초과")
+	}
+	data, err = DecodeText(data)
+	if err != nil {
+		return nil, err
+	}
+	return (Document{Data: data, Format: "ass"}).Convert(ctx, format)
 }

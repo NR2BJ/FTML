@@ -63,6 +63,7 @@ type ProbeStream struct {
 	Index         int               `json:"index"`
 	CodecName     string            `json:"codec_name"`
 	CodecType     string            `json:"codec_type"` // video, audio, subtitle
+	ExtraDataSize int64             `json:"extradata_size,omitempty"`
 	Width         int               `json:"width,omitempty"`
 	Height        int               `json:"height,omitempty"`
 	PixFmt        string            `json:"pix_fmt,omitempty"`

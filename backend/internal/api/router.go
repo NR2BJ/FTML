@@ -124,6 +124,8 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			// Subtitles — read-only
 			r.Get("/subtitle/list/*", subtitleHandler.ListSubtitles)
 			r.Get("/subtitle/content/*", subtitleHandler.ServeSubtitle)
+			r.Get("/subtitle/fonts/*", subtitleHandler.SubtitleFonts)
+			r.Get("/subtitle/font/*", subtitleHandler.SubtitleFont)
 
 			// Jobs — read-only
 			r.Get("/jobs", jobHandler.ListJobs)
