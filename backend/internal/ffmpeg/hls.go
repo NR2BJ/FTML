@@ -301,10 +301,12 @@ func buildFFmpegArgs(inputPath, outputDir string, startTime float64, params *Tra
 		// The setts bitstream filter rewrites PTS/DTS at the packet level before muxing.
 		videoBSF := "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS"
 		if params.SourceVideoCodec == "hevc" {
+			// 오래된 MKV의 hvcC version 0을 그대로 MP4에 넘기면 브라우저가 거부한다.
+			// Annex B를 거쳐 MP4 초기화 정보를 재구성하되 영상은 재인코딩하지 않는다.
 			// 열린 GOP의 CRA로 시작할 때 그보다 먼저 표시되는 RASL은 앞 GOP를
 			// 참조할 수 없다. 첫 PTS 이전 패킷만 제외하고 이후 GOP는 보존한다.
 			// amount=0은 패킷 바이트 변경을 금지한다. PTS가 없는 패킷도 보존한다.
-			videoBSF = "noise=amount=0:drop='not(eq(pts,nopts))*lt(pts,startpts)'," + videoBSF
+			videoBSF = "hevc_mp4toannexb,noise=amount=0:drop='not(eq(pts,nopts))*lt(pts,startpts)'," + videoBSF
 		}
 		args = append(args, "-bsf:v", videoBSF)
 
