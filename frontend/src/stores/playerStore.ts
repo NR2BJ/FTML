@@ -30,6 +30,7 @@ interface PlayerState {
   activeSubtitle: string | null
   secondarySubtitle: string | null
   subtitleVisible: boolean
+  subtitleRefreshVersion: number
   // Quality
   quality: string
   qualityPresets: QualityOption[]
@@ -63,6 +64,7 @@ interface PlayerState {
   setMediaInfo: (info: MediaInfo | null) => void
   setShowStats: (v: boolean) => void
   setSubtitles: (subs: SubtitleEntry[]) => void
+  requestSubtitleRefresh: (path: string) => void
   setActiveSubtitle: (id: string | null) => void
   setSecondarySubtitle: (id: string | null) => void
   setSubtitleVisible: (v: boolean) => void
@@ -95,6 +97,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   activeSubtitle: null,
   secondarySubtitle: null,
   subtitleVisible: true,
+  subtitleRefreshVersion: 0,
   quality: localStorage.getItem('ftml-quality') || 'auto',
   qualityPresets: [],
   compatibilityMode: false,
@@ -122,6 +125,8 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   setMediaInfo: (info) => set({ mediaInfo: info }),
   setShowStats: (v) => set({ showStats: v }),
   setSubtitles: (subs) => set({ subtitles: subs }),
+  requestSubtitleRefresh: (path) => set(state => state.currentFile === path
+    ? { subtitleRefreshVersion: state.subtitleRefreshVersion + 1 } : {}),
   setActiveSubtitle: (id) => set({ activeSubtitle: id }),
   setSecondarySubtitle: (id) => set({ secondarySubtitle: id }),
   setSubtitleVisible: (v) => set({ subtitleVisible: v }),

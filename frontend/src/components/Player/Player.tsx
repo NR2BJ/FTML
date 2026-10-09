@@ -3,7 +3,6 @@ import Hls from 'hls.js'
 import { getHLSUrl, getDirectUrl, getPresets, getCapabilities, getSessionStatus, sendHeartbeat, stopSession, pauseSession, resumeSession } from '@/api/stream'
 import { getFileInfo } from '@/api/files'
 import { saveWatchPosition, getWatchPosition } from '@/api/user'
-import { listSubtitles } from '@/api/subtitle'
 import { detectMediaCodecs } from '@/utils/codec'
 import { createSessionID, normalizeSeekTime } from '@/utils/session'
 import { buildPlaybackPlan, attemptKey, rejectAttempt, type PlaybackAttempt, type FailureReason } from '@/utils/playbackPlan'
@@ -19,6 +18,7 @@ import Controls from './Controls'
 import PlaybackStats from './PlaybackStats'
 import SubtitleDisplay from './SubtitleDisplay'
 import NextEpisodeOverlay from './NextEpisodeOverlay'
+import { usePlayerSubtitles } from './usePlayerSubtitles'
 
 const HEARTBEAT_INTERVAL_MS = 3000
 const POSITION_SAVE_INTERVAL_MS = 10000
@@ -467,31 +467,10 @@ export default function Player({ path }: PlayerProps) {
       })
       .catch(() => {})
 
-    // Fetch available subtitles and auto-select based on preferences
-    listSubtitles(path)
-      .then(({ data }) => {
-        if (cancelled) return
-        if (data && data.length > 0) {
-          setSubtitles(data)
-          // Auto-select subtitle based on saved preferences
-          const { subtitleEnabled, preferredSubLang } = usePlayerStore.getState()
-          if (subtitleEnabled) {
-            let target = data[0] // fallback to first
-            if (preferredSubLang) {
-              const langMatch = data.find((s: { language: string }) => s.language === preferredSubLang)
-              if (langMatch) target = langMatch
-            }
-            if (target) {
-              setActiveSubtitle(target.id)
-              usePlayerStore.getState().setSubtitleVisible(true)
-            }
-          }
-        }
-      })
-      .catch(() => {})
-
     return () => { cancelled = true }
   }, [path, setCurrentTime, setDuration, setPlaying, setResumePosition, setHasResumed, setMediaInfo, setSubtitles, setActiveSubtitle, setQualityPresets, setCurrentFile])
+
+  usePlayerSubtitles(path)
 
   // Fetch quality presets — waits for codec negotiation to complete so that
   // passthrough/original options are correctly generated based on browser capabilities.

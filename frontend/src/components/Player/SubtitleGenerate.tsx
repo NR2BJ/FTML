@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Wand2, Loader2, X, Check, AlertCircle } from 'lucide-react'
 import { usePlayerStore } from '@/stores/playerStore'
-import { generateSubtitle, listSubtitles } from '@/api/subtitle'
+import { generateSubtitle } from '@/api/subtitle'
+import { useJobStore } from '@/stores/jobStore'
 import { getJob, type Job } from '@/api/job'
 import { listAvailableEngines, type AvailableEngine } from '@/api/whisperBackends'
 
@@ -21,7 +22,7 @@ interface Props {
 }
 
 export default function SubtitleGenerate({ onClose }: Props) {
-  const { currentFile, setSubtitles, audioTrack } = usePlayerStore()
+  const { currentFile, audioTrack } = usePlayerStore()
   const [engines, setEngines] = useState<AvailableEngine[]>([])
   const [engine, setEngine] = useState('')
   const [language, setLanguage] = useState('auto')
@@ -50,26 +51,24 @@ export default function SubtitleGenerate({ onClose }: Props) {
   // Poll job status
   useEffect(() => {
     if (!jobId) return
+    let cancelled = false
     const poll = async () => {
       try {
         const { data } = await getJob(jobId)
+        if (cancelled) return
         setJob(data)
         if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
           stopPolling()
-          // Refresh subtitle list on completion
-          if (data.status === 'completed' && currentFile) {
-            const { data: subs } = await listSubtitles(currentFile)
-            setSubtitles(subs || [])
-          }
+          void useJobStore.getState().fetchActiveJobs()
         }
       } catch {
-        stopPolling()
+        if (!cancelled) stopPolling()
       }
     }
     poll()
     pollRef.current = setInterval(poll, 2000)
-    return stopPolling
-  }, [jobId, currentFile, setSubtitles, stopPolling])
+    return () => { cancelled = true; stopPolling() }
+  }, [jobId, stopPolling])
 
   const handleGenerate = async () => {
     if (!currentFile) return
@@ -77,6 +76,7 @@ export default function SubtitleGenerate({ onClose }: Props) {
     try {
       const { data } = await generateSubtitle(currentFile, { engine, language, audio_track: audioTrack })
       setJobId(data.job_id)
+      void useJobStore.getState().fetchActiveJobs()
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start generation'
       setError(msg)

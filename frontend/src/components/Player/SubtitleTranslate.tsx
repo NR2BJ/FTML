@@ -3,7 +3,6 @@ import { Languages, Loader2, X, Check, AlertCircle, Save, Trash2, Pencil } from 
 import { usePlayerStore } from '@/stores/playerStore'
 import {
   translateSubtitle,
-  listSubtitles,
   listPresets,
   createPreset,
   updatePreset,
@@ -12,6 +11,7 @@ import {
   type TranslationPreset,
 } from '@/api/subtitle'
 import { getJob, type Job } from '@/api/job'
+import { useJobStore } from '@/stores/jobStore'
 
 const ENGINES = [
   { value: 'gemini', label: 'Gemini' },
@@ -40,7 +40,7 @@ interface Props {
 }
 
 export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
-  const { currentFile, setSubtitles } = usePlayerStore()
+  const { currentFile } = usePlayerStore()
   const [engine, setEngine] = useState('gemini')
   const [targetLang, setTargetLang] = useState('ko')
   const [preset, setPreset] = useState('anime')
@@ -69,25 +69,24 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
 
   useEffect(() => {
     if (!jobId) return
+    let cancelled = false
     const poll = async () => {
       try {
         const { data } = await getJob(jobId)
+        if (cancelled) return
         setJob(data)
         if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
           stopPolling()
-          if (data.status === 'completed' && currentFile) {
-            const { data: subs } = await listSubtitles(currentFile)
-            setSubtitles(subs || [])
-          }
+          void useJobStore.getState().fetchActiveJobs()
         }
       } catch {
-        stopPolling()
+        if (!cancelled) stopPolling()
       }
     }
     poll()
     pollRef.current = setInterval(poll, 2000)
-    return stopPolling
-  }, [jobId, currentFile, setSubtitles, stopPolling])
+    return () => { cancelled = true; stopPolling() }
+  }, [jobId, stopPolling])
 
   const handlePresetChange = (value: string) => {
     setPreset(value)
@@ -165,6 +164,7 @@ export default function SubtitleTranslate({ sourceSubtitle, onClose }: Props) {
         custom_prompt: actualPrompt || undefined,
       })
       setJobId(data.job_id)
+      void useJobStore.getState().fetchActiveJobs()
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start translation'
       setError(msg)

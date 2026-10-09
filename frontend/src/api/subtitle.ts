@@ -25,8 +25,8 @@ export interface TranslateParams {
   custom_prompt?: string
 }
 
-export const listSubtitles = (path: string) =>
-  client.get<SubtitleEntry[]>(`/subtitle/list/${encodeMediaPath(path)}`)
+export const listSubtitles = (path: string, signal?: AbortSignal) =>
+  client.get<SubtitleEntry[]>(`/subtitle/list/${encodeMediaPath(path)}`, { signal, timeout: 15000 })
 
 export const getSubtitleUrl = (videoPath: string, subtitleId: string, native = false) =>
   `/api/subtitle/content/${encodeMediaPath(videoPath)}?id=${encodeURIComponent(subtitleId)}${native ? '&mode=native' : ''}`

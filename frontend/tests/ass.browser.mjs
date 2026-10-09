@@ -22,6 +22,7 @@ Style: Default,Arial,32,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:01:41.00,0:01:42.00,Default,,0,0,0,,{\\an7\\pos(40,30)}Positioned text
 `
+let contentDelay = 0
 const html = `<!doctype html><html><body><div id="root"></div><script type="module">
 import React,{useRef} from 'react';import{createRoot}from'react-dom/client';
 import SubtitleDisplay from '/src/components/Player/SubtitleDisplay.tsx';
@@ -30,7 +31,7 @@ import'/src/index.css';
 window.playerStore=usePlayerStore;window.settings=useSubtitleSettings;window.originTime=100;window.changing=false;
 usePlayerStore.setState({currentTime:0,activeSubtitle:'external:test.ass',secondarySubtitle:null,subtitleVisible:true,subtitles:[{id:'external:test.ass',format:'ass'}]});
 function App(){const ref=useRef(null);return React.createElement('div',{style:{position:'relative',width:640,height:480}},React.createElement('video',{ref,src:'/fixture.mp4',muted:true,style:{width:'100%',height:'100%',objectFit:'contain'}}),React.createElement(SubtitleDisplay,{videoRef:ref,path:'test.mkv',getTime:()=>window.changing?null:(ref.current?.currentTime||0)+window.originTime}));}
-createRoot(document.getElementById('root')).render(React.createElement(App));
+createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(App)));
 </script></body></html>`
 const server = await createServer({ server:{host:'127.0.0.1',port:0}, plugins:[{name:'ass-fixture',configureServer(server){
   server.middlewares.use(async(req,res,next)=>{
@@ -49,6 +50,14 @@ try {
   await server.listen()
   browser = await (process.env.TEST_BROWSER === 'firefox' ? firefox : chromium).launch({headless:true})
   const page = await browser.newPage()
+  await page.addInitScript(() => {
+    window.clockMessages=[]
+    const post=Worker.prototype.postMessage
+    Worker.prototype.postMessage=function(message,...args){
+      if(message?.target==='video')window.clockMessages.push(message)
+      return post.call(this,message,...args)
+    }
+  })
   const errors=[]
   page.on('pageerror',error=>{errors.push(error.message);console.error(error.message)})
   page.on('console',msg=>console.log(msg.type(),msg.text()))
@@ -60,7 +69,10 @@ try {
     const url=new URL(route.request().url())
     if(url.pathname.includes('/fonts/')) return route.fulfill({json:[]})
     if(url.pathname.includes('/font/')) return route.fulfill({body:font,contentType:'font/ttf'})
-    return route.fulfill({body:url.searchParams.get('mode')==='native'?ass:'WEBVTT\n\n00:01:41.000 --> 00:01:42.000\nPlain text\n',contentType:'text/plain'})
+    const body=url.searchParams.get('mode')==='native'?ass:'WEBVTT\n\n00:01:41.000 --> 00:01:42.000\nPlain text\n'
+    const delay=contentDelay;contentDelay=0
+    if(delay)await new Promise(resolve=>setTimeout(resolve,delay))
+    return route.fulfill({body,contentType:'text/plain'}).catch(()=>{})
   })
   await page.goto(`${server.resolvedUrls.local[0]}__ass_test.html`)
   await page.waitForFunction(()=>document.querySelector('video')?.readyState>=2)
@@ -83,6 +95,36 @@ try {
     return{minY,maxY,height:c.height}
   })
   assert.ok(bounds.maxY<bounds.height/2,'위치 지정 자막이 하단으로 이동됨')
+  await page.evaluate(()=>{window.clockMessages=[];return document.querySelector('video').play()})
+  await page.waitForFunction(()=>document.querySelector('video').currentTime>=2.2)
+  assert.ok(await page.evaluate(()=>window.clockMessages.some(m=>m.isPaused===false)),'Worker에 재생 상태 전달')
+  assert.ok(await page.evaluate(()=>window.clockMessages.filter(m=>m.currentTime!==undefined).length)<35,'매 화면마다 렌더링 요청이 쌓이지 않음')
+  await page.evaluate(()=>document.querySelector('video').pause())
+  await page.waitForFunction(()=>{const c=document.querySelector('canvas');return !c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i)=>i%4===3&&v)})
+  console.log('실제 영상 재생 중 자막 만료 및 Worker 재생 시각/요청 수 확인 통과')
+
+  await page.evaluate(()=>document.querySelector('video').currentTime=1.2)
+  await page.waitForFunction(()=>{const c=document.querySelector('canvas');return c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i)=>i%4===3&&v)})
+  const originalASS=ass
+  ass=ass.replace('pos(40,30)','pos(40,230)')
+  contentDelay=700
+  await page.evaluate(()=>{window.oldCanvas=document.querySelector('canvas');window.playerStore.getState().setSubtitles([{id:'external:test.ass',format:'ass'}])})
+  await page.waitForFunction(()=>!window.oldCanvas.isConnected)
+  assert.equal(await page.locator('canvas:visible').count(),0,'재조회 중 이전 그림을 남기지 않음')
+  await page.waitForFunction(()=>{
+    const c=document.querySelector('canvas');if(!c||getComputedStyle(c).visibility==='hidden')return false
+    const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data
+    return d.some((v,i)=>i%4===3&&v&&Math.floor(i/4/c.width)>c.height/2)
+  },null,{timeout:45000})
+  console.log('같은 ID ASS 재조회 중 이전 캔버스 제거 및 새 내용 표시 통과')
+  ass=originalASS
+  contentDelay=600
+  await page.evaluate(()=>window.playerStore.setState({activeSubtitle:'generated:ko.ass',subtitles:[{id:'generated:ko.ass',format:'ass'},{id:'external:test.ass',format:'ass'}]}))
+  await page.waitForTimeout(100)
+  await page.evaluate(()=>window.playerStore.getState().setActiveSubtitle('external:test.ass'))
+  await page.waitForFunction(()=>{const c=document.querySelector('canvas');return c&&c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i)=>i%4===3&&v)})
+  await page.waitForTimeout(700)
+  assert.equal(await page.locator('canvas').count(),1,'늦은 이전 자막 초기화가 되살아나지 않음')
   await page.evaluate(()=>document.querySelector('video').currentTime=2.2)
   await page.waitForFunction(()=>{const c=document.querySelector('canvas');return !c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i)=>i%4===3&&v)})
   await page.evaluate(()=>{document.querySelector('video').currentTime=1.2;window.settings.getState().setPlainText(true)})

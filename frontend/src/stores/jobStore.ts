@@ -13,6 +13,7 @@ interface JobState {
 
 const ACTIVE_INTERVAL = 3000   // 3s when jobs are active
 const IDLE_INTERVAL = 30000    // 30s when no active jobs
+let fetchSequence = 0
 
 export const useJobStore = create<JobState>((set, get) => ({
   jobs: [],
@@ -21,8 +22,10 @@ export const useJobStore = create<JobState>((set, get) => ({
   intervalId: null,
 
   fetchActiveJobs: async () => {
+    const sequence = ++fetchSequence
     try {
       const { data } = await getActiveJobs()
+      if (sequence !== fetchSequence) return
       const jobs = data || []
       set({ jobs })
 
@@ -40,6 +43,7 @@ export const useJobStore = create<JobState>((set, get) => ({
         set({ intervalId: null })
       }
     } catch {
+      if (sequence !== fetchSequence) return
       if (get().subscribers > 0 && !get().intervalId) {
         const newId = setInterval(() => get().fetchActiveJobs(), IDLE_INTERVAL)
         set({ intervalId: newId })

@@ -3,7 +3,7 @@ import { Subtitles, Settings, Wand2, Languages, Trash2, Upload, Download, Clock 
 import { usePlayerStore } from '@/stores/playerStore'
 import { useToastStore } from '@/stores/toastStore'
 import { useAuthStore } from '@/stores/authStore'
-import { deleteSubtitle, listSubtitles, uploadSubtitle, convertSubtitle, requestSubtitleDelete, listMyDeleteRequests } from '@/api/subtitle'
+import { deleteSubtitle, uploadSubtitle, convertSubtitle, requestSubtitleDelete, listMyDeleteRequests } from '@/api/subtitle'
 import SubtitleSettings from './SubtitleSettings'
 import SubtitleGenerate from './SubtitleGenerate'
 import SubtitleTranslate from './SubtitleTranslate'
@@ -20,6 +20,7 @@ export default function SubtitleSelector() {
   const [deleting, setDeleting] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [converting, setConverting] = useState(false)
+  const [downloadId, setDownloadId] = useState<string | null>(null)
   const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set())
   const addToast = useToastStore((s) => s.addToast)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -34,9 +35,11 @@ export default function SubtitleSelector() {
     setActiveSubtitle,
     setSecondarySubtitle,
     setSubtitleVisible,
-    setSubtitles,
+    requestSubtitleRefresh,
   } = usePlayerStore()
   const [subMode, setSubMode] = useState<'primary' | 'secondary'>('primary')
+
+  useEffect(() => { setDownloadId(null) }, [panel, currentFile, subMode])
 
   // Close menu on outside click
   useEffect(() => {
@@ -48,7 +51,14 @@ export default function SubtitleSelector() {
       }
     }
     document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setDownloadId(null); setPanel(null) }
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleKey)
+    }
   }, [panel])
 
   // Fetch pending delete requests for non-admin users
@@ -92,13 +102,13 @@ export default function SubtitleSelector() {
     setDeleting(sub.id)
     try {
       await deleteSubtitle(currentFile, sub.id)
+      if (usePlayerStore.getState().currentFile !== currentFile) return
       // If the deleted subtitle was active, clear it
       if (activeSubtitle === sub.id) {
         setActiveSubtitle(null)
       }
       // Refresh the subtitle list
-      const { data } = await listSubtitles(currentFile)
-      setSubtitles(data || [])
+      requestSubtitleRefresh(currentFile)
     } catch {
       // Silent fail
     } finally {
@@ -116,8 +126,12 @@ export default function SubtitleSelector() {
       const a = document.createElement('a')
       a.href = url
       a.download = `${sub.label}.${targetFormat}`
+      document.body.appendChild(a)
       a.click()
-      URL.revokeObjectURL(url)
+      a.remove()
+      // 브라우저가 다운로드를 인계받기 전에 Blob 주소를 해제하지 않는다.
+      window.setTimeout(() => URL.revokeObjectURL(url), 10000)
+      setDownloadId(null)
       addToast({ type: 'success', message: `Converted to ${targetFormat.toUpperCase()}` })
     } catch {
       addToast({ type: 'error', message: 'Conversion failed' })
@@ -132,8 +146,7 @@ export default function SubtitleSelector() {
     setUploading(true)
     try {
       await uploadSubtitle(currentFile, file)
-      const { data } = await listSubtitles(currentFile)
-      setSubtitles(data || [])
+      requestSubtitleRefresh(currentFile)
     } catch {
       // Silent fail
     } finally {
@@ -248,25 +261,31 @@ export default function SubtitleSelector() {
                       }`}>
                         {/* Download/convert dropdown */}
                         {canEdit && sub.type !== 'embedded' && (
-                          <div className="relative group/dl">
+                          <div className="relative">
                             <button
+                              onClick={() => setDownloadId(downloadId === sub.id ? null : sub.id)}
                               className="p-1 text-gray-500 hover:text-green-400"
-                              title="Download / Convert"
+                              title="자막 다운로드"
+                              aria-label={`${sub.label} 다운로드 형식`}
+                              aria-expanded={downloadId === sub.id}
+                              aria-haspopup="menu"
                               disabled={converting}
                             >
                               <Download className="w-3.5 h-3.5" />
                             </button>
-                            <div className="hidden group-hover/dl:block absolute bottom-full right-0 mb-1 bg-dark-800 border border-dark-600 rounded-lg shadow-xl z-50 py-1 min-w-[80px]">
-                              {['srt', 'vtt', 'ass'].filter(f => f !== sub.format).map(fmt => (
+                            {downloadId === sub.id && <div role="menu" aria-label="자막 다운로드 형식" className="absolute bottom-full right-0 bg-gray-900 border border-gray-600 rounded-lg shadow-xl z-50 py-1 min-w-[110px]">
+                              {['ass', 'srt', 'vtt'].map(fmt => (
                                 <button
                                   key={fmt}
+                                  role="menuitem"
+                                  disabled={converting}
                                   onClick={() => handleConvert(sub, fmt)}
-                                  className="block w-full text-left px-3 py-1 text-xs text-gray-300 hover:bg-dark-700 uppercase"
+                                  className="block w-full text-left px-3 py-2 text-xs text-slate-100 hover:bg-gray-700 disabled:opacity-50"
                                 >
-                                  {fmt}
+                                  {fmt.toUpperCase()}{fmt === sub.format.toLowerCase() ? ' (원본)' : ''}
                                 </button>
                               ))}
-                            </div>
+                            </div>}
                           </div>
                         )}
                         {canEdit && (
