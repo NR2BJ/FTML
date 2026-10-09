@@ -120,9 +120,13 @@ func (h *SubtitleHandler) ListSubtitles(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var entries []SubtitleEntry
+	entries := h.subtitleEntries(path, fullPath, true)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entries)
+}
 
-	// 1. Find embedded subtitles via FFprobe
+func embeddedSubtitleEntries(fullPath string) []SubtitleEntry {
+	entries := make([]SubtitleEntry, 0)
 	info, err := ffmpeg.Probe(fullPath)
 	if err == nil {
 		for _, s := range info.Streams {
@@ -152,6 +156,14 @@ func (h *SubtitleHandler) ListSubtitles(w http.ResponseWriter, r *http.Request) 
 				Format:   s.CodecName,
 			})
 		}
+	}
+	return entries
+}
+
+func (h *SubtitleHandler) subtitleEntries(path, fullPath string, includeEmbedded bool) []SubtitleEntry {
+	entries := make([]SubtitleEntry, 0)
+	if includeEmbedded {
+		entries = embeddedSubtitleEntries(fullPath)
 	}
 
 	// 2. Find external subtitle files in the same directory
@@ -236,8 +248,7 @@ func (h *SubtitleHandler) ListSubtitles(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(entries)
+	return entries
 }
 
 // ServeSubtitle는 기본 일반 표시와 ASS 원형 표시를 분리한다.
@@ -274,386 +285,64 @@ func langFromTags(tags map[string]string) string {
 	return ""
 }
 
+// 기존 주소는 공통 실행 경로의 호환용 진입점으로 유지한다.
 func (h *SubtitleHandler) GenerateSubtitle(w http.ResponseWriter, r *http.Request) {
-	path := extractPath(r)
-	fullPath, ok := h.safeVideoPath(path)
-	if !ok {
-		jsonError(w, "invalid path", http.StatusForbidden)
-		return
-	}
-
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		jsonError(w, "file not found", http.StatusNotFound)
-		return
-	}
-
 	var params job.TranscribeParams
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
-		jsonError(w, "invalid request body", http.StatusBadRequest)
+	if !decodeSubtitleRequest(w, r, &params) {
 		return
 	}
-	if params.AudioTrack < 0 {
-		jsonError(w, "잘못된 음성 트랙", http.StatusBadRequest)
-		return
+	mode := "generate"
+	if params.ChainTranslate != nil {
+		mode = "generate-translate"
 	}
-
-	// Defaults
-	if params.Language == "" {
-		params.Language = "auto"
-	}
-
-	j, err := h.jobQueue.Enqueue(job.JobTranscribe, path, params)
-	if err != nil {
-		jsonError(w, "failed to create job: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	h.logSubtitleOp(r, "subtitle_generate", path, params.Language)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"job_id": j.ID,
-	})
+	h.submitSubtitleTasks(w, r, SubtitleTaskRequest{Paths: []string{extractPath(r)}, Mode: mode, Generate: params, Translate: params.ChainTranslate}, true)
 }
 
-// TranslateSubtitle creates a translation job
 func (h *SubtitleHandler) TranslateSubtitle(w http.ResponseWriter, r *http.Request) {
-	path := extractPath(r)
-	fullPath, ok := h.safeVideoPath(path)
-	if !ok {
-		jsonError(w, "invalid path", http.StatusForbidden)
-		return
-	}
-
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		jsonError(w, "file not found", http.StatusNotFound)
-		return
-	}
-
 	var params job.TranslateParams
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
-		jsonError(w, "invalid request body", http.StatusBadRequest)
+	if !decodeSubtitleRequest(w, r, &params) {
 		return
 	}
-
 	if params.SubtitleID == "" {
-		jsonError(w, "subtitle_id required", http.StatusBadRequest)
+		jsonError(w, "번역할 자막을 선택해 주세요", http.StatusBadRequest)
 		return
 	}
-	if params.TargetLang == "" {
-		jsonError(w, "target_lang required", http.StatusBadRequest)
-		return
-	}
-	if params.Engine == "" {
-		params.Engine = "gemini"
-	}
-	if params.Engine != "gemini" {
-		jsonError(w, "번역은 Gemini만 지원합니다", http.StatusBadRequest)
-		return
-	}
-	if params.Preset == "" {
-		params.Preset = "movie"
-	}
-
-	j, err := h.jobQueue.Enqueue(job.JobTranslate, path, params)
-	if err != nil {
-		jsonError(w, "failed to create job: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	h.logSubtitleOp(r, "subtitle_translate", path, params.TargetLang)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"job_id": j.ID,
-	})
+	h.submitSubtitleTasks(w, r, SubtitleTaskRequest{Paths: []string{extractPath(r)}, Mode: "translate", Translate: &params}, true)
 }
 
-// BatchGenerate creates transcription jobs for multiple files
 func (h *SubtitleHandler) BatchGenerate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Paths    []string `json:"paths"`
-		Engine   string   `json:"engine"`
-		Model    string   `json:"model"`
-		Language string   `json:"language"`
+		Paths []string `json:"paths"`
+		job.TranscribeParams
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid request body", http.StatusBadRequest)
+	if !decodeSubtitleRequest(w, r, &req) {
 		return
 	}
-
-	if len(req.Paths) == 0 {
-		jsonError(w, "paths required", http.StatusBadRequest)
-		return
-	}
-
-	// Defaults
-	if req.Language == "" {
-		req.Language = "auto"
-	}
-
-	var jobIDs []string
-	var skipped []string
-
-	for _, path := range req.Paths {
-		fullPath, ok := h.safeVideoPath(path)
-		if !ok {
-			skipped = append(skipped, path)
-			continue
-		}
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-			skipped = append(skipped, path)
-			continue
-		}
-
-		params := job.TranscribeParams{
-			Engine:   req.Engine,
-			Model:    req.Model,
-			Language: req.Language,
-		}
-
-		j, err := h.jobQueue.Enqueue(job.JobTranscribe, path, params)
-		if err != nil {
-			skipped = append(skipped, path)
-			continue
-		}
-		jobIDs = append(jobIDs, j.ID)
-		h.logSubtitleOp(r, "subtitle_generate", path, req.Language)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"job_ids": jobIDs,
-		"skipped": skipped,
-	})
+	h.submitSubtitleTasks(w, r, SubtitleTaskRequest{Paths: req.Paths, Mode: "generate", Generate: req.TranscribeParams}, false)
 }
 
-// BatchTranslate creates translation jobs for multiple files
 func (h *SubtitleHandler) BatchTranslate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Paths        []string `json:"paths"`
-		TargetLang   string   `json:"target_lang"`
-		Engine       string   `json:"engine"`
-		Preset       string   `json:"preset"`
-		CustomPrompt string   `json:"custom_prompt,omitempty"`
+		Paths []string `json:"paths"`
+		job.TranslateParams
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid request body", http.StatusBadRequest)
+	if !decodeSubtitleRequest(w, r, &req) {
 		return
 	}
-
-	if len(req.Paths) == 0 {
-		jsonError(w, "paths required", http.StatusBadRequest)
-		return
-	}
-	if req.TargetLang == "" {
-		jsonError(w, "target_lang required", http.StatusBadRequest)
-		return
-	}
-	if req.Engine == "" {
-		req.Engine = "gemini"
-	}
-	if req.Engine != "gemini" {
-		jsonError(w, "번역은 Gemini만 지원합니다", http.StatusBadRequest)
-		return
-	}
-	if req.Preset == "" {
-		req.Preset = "movie"
-	}
-
-	var jobIDs []string
-	var skipped []string
-
-	for _, path := range req.Paths {
-		fullPath, ok := h.safeVideoPath(path)
-		if !ok {
-			skipped = append(skipped, path)
-			continue
-		}
-
-		// Find the first generated subtitle for this file
-		hash := videoHash(path)
-		genDir := filepath.Join(h.subtitlePath, hash)
-		subtitleID := ""
-
-		genEntries, err := os.ReadDir(genDir)
-		if err == nil {
-			for _, entry := range genEntries {
-				name := entry.Name()
-				if strings.HasPrefix(name, "whisper_") && strings.HasSuffix(name, ".vtt") {
-					subtitleID = "generated:" + name
-					break
-				}
-			}
-			// Also try translate files as source
-			if subtitleID == "" {
-				for _, entry := range genEntries {
-					name := entry.Name()
-					if !entry.IsDir() && storage.IsSubtitleFile(name) && !strings.HasPrefix(name, "translate_") {
-						subtitleID = "generated:" + name
-						break
-					}
-				}
-			}
-		}
-
-		// Fallback: try embedded text subtitles
-		if subtitleID == "" {
-			info, probeErr := ffmpeg.Probe(fullPath)
-			if probeErr == nil {
-				for _, s := range info.Streams {
-					if s.CodecType == "subtitle" && textSubtitleCodecs[s.CodecName] {
-						subtitleID = fmt.Sprintf("embedded:%d", s.Index)
-						break
-					}
-				}
-			}
-		}
-
-		// Fallback: try external subtitle files
-		if subtitleID == "" {
-			videoDir := filepath.Dir(fullPath)
-			videoBase := strings.TrimSuffix(filepath.Base(fullPath), filepath.Ext(fullPath))
-			dirEntries, readErr := os.ReadDir(videoDir)
-			if readErr == nil {
-				for _, entry := range dirEntries {
-					if entry.IsDir() {
-						continue
-					}
-					name := entry.Name()
-					if !storage.IsSubtitleFile(name) {
-						continue
-					}
-					subBase := strings.TrimSuffix(name, filepath.Ext(name))
-					if strings.HasPrefix(subBase, videoBase) {
-						subtitleID = "external:" + name
-						break
-					}
-				}
-			}
-		}
-
-		if subtitleID == "" {
-			skipped = append(skipped, path)
-			continue
-		}
-
-		params := job.TranslateParams{
-			SubtitleID:   subtitleID,
-			TargetLang:   req.TargetLang,
-			Engine:       req.Engine,
-			Preset:       req.Preset,
-			CustomPrompt: req.CustomPrompt,
-		}
-
-		j, err := h.jobQueue.Enqueue(job.JobTranslate, path, params)
-		if err != nil {
-			skipped = append(skipped, path)
-			continue
-		}
-		jobIDs = append(jobIDs, j.ID)
-		h.logSubtitleOp(r, "subtitle_translate", path, req.TargetLang)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"job_ids": jobIDs,
-		"skipped": skipped,
-	})
+	h.submitSubtitleTasks(w, r, SubtitleTaskRequest{Paths: req.Paths, Mode: "translate", Translate: &req.TranslateParams}, false)
 }
 
-// BatchGenerateTranslate creates transcription jobs with chained translation for multiple files
 func (h *SubtitleHandler) BatchGenerateTranslate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Paths     []string `json:"paths"`
-		Engine    string   `json:"engine"`
-		Model     string   `json:"model"`
-		Language  string   `json:"language"`
-		Translate struct {
-			TargetLang   string `json:"target_lang"`
-			Engine       string `json:"engine"`
-			Preset       string `json:"preset"`
-			CustomPrompt string `json:"custom_prompt,omitempty"`
-		} `json:"translate"`
+		Paths []string `json:"paths"`
+		job.TranscribeParams
+		Translate *job.TranslateParams `json:"translate"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid request body", http.StatusBadRequest)
+	if !decodeSubtitleRequest(w, r, &req) {
 		return
 	}
-
-	if len(req.Paths) == 0 {
-		jsonError(w, "paths required", http.StatusBadRequest)
-		return
-	}
-	if req.Translate.TargetLang == "" {
-		jsonError(w, "translate.target_lang required", http.StatusBadRequest)
-		return
-	}
-
-	// Defaults
-	if req.Language == "" {
-		req.Language = "auto"
-	}
-	if req.Translate.Engine == "" {
-		req.Translate.Engine = "gemini"
-	}
-	if req.Translate.Engine != "gemini" {
-		jsonError(w, "번역은 Gemini만 지원합니다", http.StatusBadRequest)
-		return
-	}
-	if req.Translate.Preset == "" {
-		req.Translate.Preset = "movie"
-	}
-
-	var jobIDs []string
-	var skipped []string
-
-	for _, path := range req.Paths {
-		fullPath, ok := h.safeVideoPath(path)
-		if !ok {
-			skipped = append(skipped, path)
-			continue
-		}
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-			skipped = append(skipped, path)
-			continue
-		}
-
-		params := job.TranscribeParams{
-			Engine:   req.Engine,
-			Model:    req.Model,
-			Language: req.Language,
-			ChainTranslate: &job.TranslateParams{
-				TargetLang:   req.Translate.TargetLang,
-				Engine:       req.Translate.Engine,
-				Preset:       req.Translate.Preset,
-				CustomPrompt: req.Translate.CustomPrompt,
-			},
-		}
-
-		j, err := h.jobQueue.Enqueue(job.JobTranscribe, path, params)
-		if err != nil {
-			skipped = append(skipped, path)
-			continue
-		}
-		jobIDs = append(jobIDs, j.ID)
-		h.logSubtitleOp(r, "subtitle_generate_translate", path, req.Language)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"job_ids": jobIDs,
-		"skipped": skipped,
-	})
+	h.submitSubtitleTasks(w, r, SubtitleTaskRequest{Paths: req.Paths, Mode: "generate-translate", Generate: req.TranscribeParams, Translate: req.Translate}, false)
 }
-
-// UploadSubtitle allows uploading an external subtitle file (User+ only)
-// POST /subtitle/upload/* — multipart/form-data with "file" field
 func (h *SubtitleHandler) UploadSubtitle(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
 	fullPath, ok := h.safeVideoPath(path)

@@ -28,6 +28,8 @@ const (
 // Job represents a queued task (subtitle generation or translation)
 type Job struct {
 	ID          string          `json:"id"`
+	ParentID    string          `json:"parent_id,omitempty"`
+	RetryOf     string          `json:"retry_of,omitempty"`
 	Type        JobType         `json:"type"`
 	Status      JobStatus       `json:"status"`
 	FilePath    string          `json:"file_path"`

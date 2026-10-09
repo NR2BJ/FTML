@@ -130,6 +130,9 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 			// Jobs — read-only
 			r.Get("/jobs", jobHandler.ListJobs)
 			r.Get("/jobs/active", jobHandler.ListActiveJobs)
+			r.Get("/jobs/videos", jobHandler.VideoHistory)
+			r.Get("/jobs/history", jobHandler.HistoryForVideo)
+			r.Get("/jobs/tracked", jobHandler.TrackedJobs)
 			r.Get("/jobs/{id}", jobHandler.GetJob)
 
 			// User self-service
@@ -150,6 +153,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				r.Post("/subtitle/translate/*", subtitleHandler.TranslateSubtitle)
 				r.Post("/subtitle/upload/*", subtitleHandler.UploadSubtitle)
 				r.Post("/subtitle/batch-generate", subtitleHandler.BatchGenerate)
+				r.Post("/subtitle/tasks", subtitleHandler.SubmitSubtitleTasks)
 				r.Post("/subtitle/batch-translate", subtitleHandler.BatchTranslate)
 				r.Post("/subtitle/batch-generate-translate", subtitleHandler.BatchGenerateTranslate)
 				r.Post("/subtitle/convert/*", subtitleHandler.ConvertSubtitle)

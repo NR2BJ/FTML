@@ -86,10 +86,11 @@ func (h *JobHandler) RetryJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.queue.RetryJob(id); err != nil {
+	j, err := h.queue.RetryJob(id)
+	if err != nil {
 		jsonError(w, "failed to retry job: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	jsonResponse(w, map[string]string{"status": "retrying"}, http.StatusOK)
+	jsonResponse(w, map[string]string{"status": "retrying", "job_id": j.ID}, http.StatusOK)
 }

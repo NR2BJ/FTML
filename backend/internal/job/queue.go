@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 type JobQueue struct {
 	db                *sql.DB
 	mu                sync.RWMutex
+	submitMu          sync.Mutex
 	pendingTranscribe chan string // transcribe jobs (GPU-bound, processed one at a time)
 	pendingTranslate  chan string // translate jobs (web API, runs concurrently with transcribe)
 	cancels           map[string]context.CancelFunc
@@ -74,12 +74,24 @@ func (q *JobQueue) RegisterHandler(jobType JobType, handler JobHandler) {
 
 // Enqueue creates a new job and adds it to the queue
 func (q *JobQueue) Enqueue(jobType JobType, filePath string, params interface{}) (*Job, error) {
+	q.submitMu.Lock()
+	defer q.submitMu.Unlock()
 	if jobType != JobTranscribe && jobType != JobTranslate {
 		return nil, fmt.Errorf("unsupported job type: %s", jobType)
 	}
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("marshal params: %w", err)
+	}
+	// 실행 중인 같은 요청만 합친다. 완료 후 의도적인 재작업은 별도 이력으로 남긴다.
+	var existing string
+	err = q.db.QueryRow(`SELECT id FROM jobs WHERE type = ? AND file_path = ? AND CAST(params AS TEXT) = ? AND status IN (?, ?) ORDER BY created_at LIMIT 1`,
+		jobType, filePath, string(paramsJSON), StatusPending, StatusRunning).Scan(&existing)
+	if err == nil {
+		return q.GetJob(existing)
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
 	}
 
 	job := &Job{
@@ -95,7 +107,7 @@ func (q *JobQueue) Enqueue(jobType JobType, filePath string, params interface{})
 	_, err = q.db.Exec(`
 		INSERT INTO jobs (id, type, status, file_path, params, progress, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		job.ID, job.Type, job.Status, job.FilePath, job.Params, job.Progress, job.CreatedAt,
+		job.ID, job.Type, job.Status, job.FilePath, string(job.Params), job.Progress, job.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert job: %w", err)
@@ -135,10 +147,10 @@ func (q *JobQueue) GetJob(id string) (*Job, error) {
 	var errMsg sql.NullString
 
 	err := q.db.QueryRow(`
-		SELECT id, type, status, file_path, params, progress, result, error, created_at, started_at, completed_at
+		SELECT id, type, status, file_path, params, progress, result, error, created_at, started_at, completed_at, parent_id, retry_of
 		FROM jobs WHERE id = ?`, id,
 	).Scan(&job.ID, &job.Type, &job.Status, &job.FilePath, &params, &job.Progress,
-		&result, &errMsg, &job.CreatedAt, &startedAt, &completedAt)
+		&result, &errMsg, &job.CreatedAt, &startedAt, &completedAt, &job.ParentID, &job.RetryOf)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +177,7 @@ func (q *JobQueue) GetJob(id string) (*Job, error) {
 // ListJobs returns all jobs ordered by creation time (newest first)
 func (q *JobQueue) ListJobs() ([]*Job, error) {
 	rows, err := q.db.Query(`
-		SELECT id, type, status, file_path, params, progress, result, error, created_at, started_at, completed_at
+		SELECT id, type, status, file_path, params, progress, result, error, created_at, started_at, completed_at, parent_id, retry_of
 		FROM jobs ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -179,7 +191,7 @@ func (q *JobQueue) ListJobs() ([]*Job, error) {
 func (q *JobQueue) ListActiveJobs() ([]*Job, error) {
 	cutoff := time.Now().Add(-60 * time.Second)
 	rows, err := q.db.Query(`
-		SELECT id, type, status, file_path, params, progress, result, error, created_at, started_at, completed_at
+		SELECT id, type, status, file_path, params, progress, result, error, created_at, started_at, completed_at, parent_id, retry_of
 		FROM jobs
 		WHERE status IN (?, ?)
 		   OR (status IN (?, ?) AND completed_at > ?)
@@ -203,7 +215,7 @@ func (q *JobQueue) scanJobs(rows *sql.Rows) ([]*Job, error) {
 		var errMsg sql.NullString
 
 		if err := rows.Scan(&job.ID, &job.Type, &job.Status, &job.FilePath, &params, &job.Progress,
-			&result, &errMsg, &job.CreatedAt, &startedAt, &completedAt); err != nil {
+			&result, &errMsg, &job.CreatedAt, &startedAt, &completedAt, &job.ParentID, &job.RetryOf); err != nil {
 			return nil, err
 		}
 
@@ -226,7 +238,7 @@ func (q *JobQueue) scanJobs(rows *sql.Rows) ([]*Job, error) {
 		jobs = append(jobs, job)
 	}
 
-	return jobs, nil
+	return jobs, rows.Err()
 }
 
 // CancelJob cancels a pending or running job
@@ -247,31 +259,33 @@ func (q *JobQueue) CancelJob(id string) error {
 }
 
 // RetryJob re-queues a failed or cancelled job
-func (q *JobQueue) RetryJob(id string) error {
-	job, err := q.GetJob(id)
+func (q *JobQueue) RetryJob(id string) (*Job, error) {
+	q.submitMu.Lock()
+	defer q.submitMu.Unlock()
+	previous, err := q.GetJob(id)
 	if err != nil {
-		return fmt.Errorf("job not found")
+		return nil, fmt.Errorf("작업을 찾을 수 없습니다")
 	}
-
-	if job.Status != StatusFailed && job.Status != StatusCancelled {
-		return fmt.Errorf("only failed or cancelled jobs can be retried")
+	if previous.Status != StatusFailed && previous.Status != StatusCancelled {
+		return nil, fmt.Errorf("실패하거나 취소된 작업만 재시도할 수 있습니다")
 	}
-
-	// Reset job state to pending
-	_, err = q.db.Exec(`
-		UPDATE jobs SET status = ?, progress = 0, error = NULL, result = NULL, started_at = NULL, completed_at = NULL
-		WHERE id = ?`,
-		StatusPending, id,
-	)
+	var existing string
+	err = q.db.QueryRow("SELECT id FROM jobs WHERE retry_of = ? ORDER BY created_at DESC LIMIT 1", id).Scan(&existing)
+	if err == nil {
+		return q.GetJob(existing)
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
+	}
+	next := &Job{ID: uuid.NewString(), Type: previous.Type, FilePath: previous.FilePath,
+		Params: previous.Params, ParentID: previous.ParentID, RetryOf: id, Status: StatusPending, CreatedAt: time.Now()}
+	_, err = q.db.Exec(`INSERT INTO jobs(id, type, status, file_path, params, progress, created_at, parent_id, retry_of)
+		VALUES(?, ?, ?, ?, ?, 0, ?, ?, ?)`, next.ID, next.Type, next.Status, next.FilePath, string(next.Params), next.CreatedAt, next.ParentID, next.RetryOf)
 	if err != nil {
-		return fmt.Errorf("failed to reset job: %w", err)
+		return nil, err
 	}
-
-	// Push to appropriate worker channel
-	q.enqueueToChannel(job.Type, id)
-
-	log.Printf("[job] retrying job %s", id)
-	return nil
+	q.enqueueToChannel(next.Type, next.ID)
+	return next, nil
 }
 
 // UpdateProgress updates the progress of a running job
@@ -397,62 +411,63 @@ func (q *JobQueue) processJob(jobID string) {
 	cancelFn()
 }
 
-func (q *JobQueue) completeJob(job *Job) {
-	now := time.Now()
-	// Persist result to DB (handlers set job.Result before returning)
-	result, err := q.db.Exec("UPDATE jobs SET status = ?, progress = 1.0, result = ?, completed_at = ? WHERE id = ? AND status = ?",
-		StatusCompleted, string(job.Result), now, job.ID, StatusRunning)
+func (q *JobQueue) completeJob(j *Job) {
+	// 추출 완료와 다음 번역의 등록을 같은 트랜잭션으로 묶어 재시작 사이의 유실을 막는다.
+	var child *Job
+	if j.Type == JobTranscribe {
+		var params TranscribeParams
+		if err := json.Unmarshal(j.Params, &params); err != nil {
+			q.failJob(j, "추출 설정 읽기 실패")
+			return
+		}
+		if params.ChainTranslate != nil {
+			var result TranscribeResult
+			if err := json.Unmarshal(j.Result, &result); err != nil || result.OutputPath == "" {
+				q.failJob(j, "번역에 전달할 추출 결과가 없습니다")
+				return
+			}
+			translation := *params.ChainTranslate
+			translation.SubtitleID = result.OutputPath
+			data, err := json.Marshal(translation)
+			if err != nil {
+				q.failJob(j, err.Error())
+				return
+			}
+			child = &Job{ID: uuid.NewString(), Type: JobTranslate, FilePath: j.FilePath,
+				Params: data, ParentID: j.ID, Status: StatusPending, CreatedAt: time.Now()}
+		}
+	}
+	tx, err := q.db.Begin()
 	if err != nil {
-		log.Printf("[job] completion persistence failed: %v", err)
+		q.failJob(j, "작업 완료 저장 실패")
 		return
 	}
-	changed, err := result.RowsAffected()
-	if err != nil || changed != 1 {
-		return
+	defer tx.Rollback()
+	result, err := tx.Exec("UPDATE jobs SET status = ?, progress = 1.0, result = ?, completed_at = ? WHERE id = ? AND status = ?",
+		StatusCompleted, string(j.Result), time.Now(), j.ID, StatusRunning)
+	if err == nil {
+		var changed int64
+		changed, err = result.RowsAffected()
+		if err == nil && changed == 0 {
+			return
+		}
 	}
-	log.Printf("[job] job %s completed", job.ID)
-
-	// Chain: if transcribe job has ChainTranslate, auto-enqueue translation
-	if job.Type == JobTranscribe {
-		q.maybeChainTranslate(job)
+	if err == nil && child != nil {
+		_, err = tx.Exec(`INSERT INTO jobs(id, type, status, file_path, params, progress, created_at, parent_id)
+			VALUES(?, ?, ?, ?, ?, 0, ?, ?)`, child.ID, child.Type, child.Status, child.FilePath, string(child.Params), child.CreatedAt, child.ParentID)
 	}
-}
-
-// maybeChainTranslate checks if a completed transcribe job should trigger a translation job
-func (q *JobQueue) maybeChainTranslate(job *Job) {
-	var params TranscribeParams
-	if err := json.Unmarshal(job.Params, &params); err != nil {
-		return
+	if err == nil {
+		err = tx.Commit()
 	}
-	if params.ChainTranslate == nil {
-		return
-	}
-
-	var result TranscribeResult
-	if err := json.Unmarshal(job.Result, &result); err != nil {
-		log.Printf("[job] chain: failed to parse transcribe result for job %s: %v", job.ID, err)
-		return
-	}
-
-	// Extract subtitle ID from output path (e.g., "generated:whisper_ja.vtt")
-	subtitleID := result.OutputPath
-	if subtitleID == "" {
-		log.Printf("[job] chain: no output path in transcribe result for job %s", job.ID)
-		return
-	}
-
-	// Build translate params from chain config
-	translateParams := *params.ChainTranslate
-	translateParams.SubtitleID = subtitleID
-
-	chainJob, err := q.Enqueue(JobTranslate, job.FilePath, translateParams)
 	if err != nil {
-		log.Printf("[job] chain: failed to enqueue translation for job %s: %v", job.ID, err)
+		tx.Rollback()
+		q.failJob(j, "작업 완료와 후속 작업 저장 실패: "+err.Error())
 		return
 	}
-
-	fileName := filepath.Base(job.FilePath)
-	log.Printf("[job] chain: transcribe %s → translate %s (file: %s)", job.ID, chainJob.ID, fileName)
+	if child != nil {
+		q.enqueueToChannel(child.Type, child.ID)
+	}
+	log.Printf("[job] job %s completed", j.ID)
 }
 
 func (q *JobQueue) failJob(job *Job, errMsg string) {

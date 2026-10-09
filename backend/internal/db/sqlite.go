@@ -140,10 +140,47 @@ func (d *Database) migrate() error {
 	if err := d.ensureAuthVersion(); err != nil {
 		return err
 	}
+	if err := d.ensureJobLinks(); err != nil {
+		return err
+	}
 	d.migrateWhisperBackends()
 	// Migrate legacy roles: viewer/editor → user
 	d.db.Exec("UPDATE users SET role = 'user' WHERE role IN ('viewer', 'editor')")
 	return nil
+}
+
+func (d *Database) ensureJobLinks() error {
+	rows, err := d.db.Query("PRAGMA table_info(jobs)")
+	if err != nil {
+		return err
+	}
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var cid, required, primary int
+		var name, kind string
+		var value sql.NullString
+		if err := rows.Scan(&cid, &name, &kind, &required, &value, &primary); err != nil {
+			rows.Close()
+			return err
+		}
+		columns[name] = true
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, column := range []string{"parent_id", "retry_of"} {
+		if !columns[column] {
+			if _, err := d.db.Exec("ALTER TABLE jobs ADD COLUMN " + column + " TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_jobs_file_created ON jobs(file_path, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_id);
+		CREATE INDEX IF NOT EXISTS idx_jobs_retry ON jobs(retry_of);`)
+	return err
 }
 
 func (d *Database) ensureAuthVersion() error {
