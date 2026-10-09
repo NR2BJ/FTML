@@ -16,9 +16,12 @@ interface ControlsProps {
   onSeek: (time: number) => void
   onToggleFullscreen: () => void
   filePath: string
+  onTogglePiP: () => void
+  pipSupported: boolean
+  renderWindow?: Window
 }
 
-export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFullscreen, filePath }: ControlsProps) {
+export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFullscreen, filePath, onTogglePiP, pipSupported, renderWindow = window }: ControlsProps) {
   const {
     isPlaying,
     currentTime,
@@ -86,17 +89,17 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
       setPreviewTime(null)
       setDragging(false)
     }
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-    window.addEventListener('touchmove', handleTouchMove)
-    window.addEventListener('touchend', handleUp)
+    renderWindow.addEventListener('mousemove', handleMove)
+    renderWindow.addEventListener('mouseup', handleUp)
+    renderWindow.addEventListener('touchmove', handleTouchMove)
+    renderWindow.addEventListener('touchend', handleUp)
     return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-      window.removeEventListener('touchmove', handleTouchMove)
-      window.removeEventListener('touchend', handleUp)
+      renderWindow.removeEventListener('mousemove', handleMove)
+      renderWindow.removeEventListener('mouseup', handleUp)
+      renderWindow.removeEventListener('touchmove', handleTouchMove)
+      renderWindow.removeEventListener('touchend', handleUp)
     }
-  }, [dragging, duration, onSeek])
+  }, [dragging, duration, onSeek, renderWindow])
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = parseFloat(e.target.value)
@@ -123,21 +126,6 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
     if (videoRef.current) videoRef.current.playbackRate = next
   }
 
-  // PiP toggle
-  const togglePiP = async () => {
-    const video = videoRef.current
-    if (!video) return
-    try {
-      if (document.pictureInPictureElement) {
-        await document.exitPictureInPicture()
-      } else if (document.pictureInPictureEnabled) {
-        await video.requestPictureInPicture()
-      }
-    } catch {
-      addToast({ type: 'error', message: 'PiP not supported' })
-    }
-  }
-
   // Screenshot
   const takeScreenshot = () => {
     const video = videoRef.current
@@ -157,7 +145,7 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
   const loopBPos = abLoop.b !== null && duration > 0 ? (abLoop.b / duration) * 100 : null
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+    <div className="player-controls absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
       {/* Progress bar */}
       <div
         ref={progressBarRef}
@@ -235,16 +223,16 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
         <div className="flex-1" />
 
         {/* Audio Track */}
-        <AudioSelector />
+        <AudioSelector ownerDocument={renderWindow.document} />
 
         {/* Chapters */}
         <ChapterList onSeek={onSeek} />
 
         {/* Subtitles */}
-        <SubtitleSelector />
+        <SubtitleSelector ownerDocument={renderWindow.document} />
 
         {/* Quality */}
-        <QualitySelector />
+        <QualitySelector ownerDocument={renderWindow.document} />
 
         {/* A-B Loop */}
         <button
@@ -267,11 +255,11 @@ export default function Controls({ videoRef, onTogglePlay, onSeek, onToggleFulls
         </button>
 
         {/* PiP */}
-        {document.pictureInPictureEnabled && (
+        {pipSupported && (
           <button
-            onClick={togglePiP}
+            onClick={onTogglePiP}
             className="text-gray-300 hover:text-white transition-colors px-1"
-            title="Picture-in-Picture (P)"
+            title={window.documentPictureInPicture ? '자막 포함 PiP / 돌아오기 (P)' : 'Picture-in-Picture (P)'}
           >
             <PictureInPicture2 className="w-4.5 h-4.5" />
           </button>

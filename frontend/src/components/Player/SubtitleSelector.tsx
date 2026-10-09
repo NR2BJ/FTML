@@ -12,7 +12,7 @@ import type { SubtitleEntry } from '@/api/subtitle'
 
 type Panel = 'menu' | 'settings' | 'generate' | 'translate'
 
-export default function SubtitleSelector() {
+export default function SubtitleSelector({ownerDocument = document}: {ownerDocument?: Document} = {}) {
   const { user } = useAuthStore()
   const isAdmin = user?.role === 'admin'
   const canEdit = isAdmin || user?.role === 'user'
@@ -51,16 +51,16 @@ export default function SubtitleSelector() {
         setTranslateSource(null)
       }
     }
-    document.addEventListener('mousedown', handleClick)
+    ownerDocument.addEventListener('mousedown', handleClick)
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { setDownloadId(null); setPanel(null) }
     }
-    document.addEventListener('keydown', handleKey)
+    ownerDocument.addEventListener('keydown', handleKey)
     return () => {
-      document.removeEventListener('mousedown', handleClick)
-      document.removeEventListener('keydown', handleKey)
+      ownerDocument.removeEventListener('mousedown', handleClick)
+      ownerDocument.removeEventListener('keydown', handleKey)
     }
-  }, [panel])
+  }, [panel,ownerDocument])
 
   // Fetch pending delete requests for non-admin users
   useEffect(() => {

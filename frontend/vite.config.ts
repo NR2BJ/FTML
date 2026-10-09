@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 import fs from 'node:fs'
 
-const assFiles = ['subtitles-octopus-worker.js', 'subtitles-octopus-worker.wasm', 'COPYRIGHT']
+const assFiles = ['subtitles-octopus.js', 'subtitles-octopus-worker.js', 'subtitles-octopus-worker.wasm', 'COPYRIGHT']
 const assRoot = path.resolve(__dirname, 'node_modules/libass-wasm/dist/js')
 
 export default defineConfig({

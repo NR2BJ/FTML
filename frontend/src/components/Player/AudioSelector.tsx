@@ -33,7 +33,7 @@ function formatLanguage(lang?: string): string {
   return langMap[lang.toLowerCase()] || lang.toUpperCase()
 }
 
-export default function AudioSelector() {
+export default function AudioSelector({ownerDocument = document}: {ownerDocument?: Document} = {}) {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -51,9 +51,9 @@ export default function AudioSelector() {
         setOpen(false)
       }
     }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [open])
+    ownerDocument.addEventListener('mousedown', handleClick)
+    return () => ownerDocument.removeEventListener('mousedown', handleClick)
+  }, [open,ownerDocument])
 
   const audioStreams = mediaInfo?.audio_streams
   if (!audioStreams || audioStreams.length <= 1) return null

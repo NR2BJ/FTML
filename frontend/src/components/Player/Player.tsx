@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import Hls from 'hls.js'
 import { getHLSUrl, getDirectUrl, getPresets, getCapabilities, getSessionStatus, sendHeartbeat, stopSession, pauseSession, resumeSession } from '@/api/stream'
 import { getFileInfo } from '@/api/files'
@@ -19,6 +20,7 @@ import PlaybackStats from './PlaybackStats'
 import SubtitleDisplay from './SubtitleDisplay'
 import NextEpisodeOverlay from './NextEpisodeOverlay'
 import { usePlayerSubtitles } from './usePlayerSubtitles'
+import { usePictureInPicture } from './usePictureInPicture'
 
 const HEARTBEAT_INTERVAL_MS = 3000
 const POSITION_SAVE_INTERVAL_MS = 10000
@@ -29,6 +31,10 @@ interface PlayerProps {
 
 export default function Player({ path }: PlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const pip = usePictureInPicture(path,videoRef)
+  const renderWindow = pip.pipWindow || window
+  const pipToggleRef = useRef(pip.toggle)
+  pipToggleRef.current = pip.toggle
   const containerRef = useRef<HTMLDivElement>(null)
   const hlsRef = useRef<Hls | null>(null)
   const probeDurationRef = useRef<number>(0)
@@ -172,7 +178,7 @@ export default function Player({ path }: PlayerProps) {
       const frames = video.getVideoPlaybackQuality?.()
       const reason = watch.check({ now: performance.now(), time: video.currentTime + hlsStartTimeRef.current,
         rate: video.playbackRate, frames: frames?.totalVideoFrames ?? 0, dropped: frames?.droppedVideoFrames ?? 0,
-        buffer, paused: video.paused, seeking: video.seeking, visible: !document.hidden,
+        buffer, paused: video.paused, seeking: video.seeking, visible: !video.ownerDocument.hidden,
         server: usePlayerStore.getState().playbackStatus ?? undefined })
       if (reason) recoverRef.current(reason)
     }, 1000)
@@ -287,13 +293,13 @@ export default function Player({ path }: PlayerProps) {
         if (data.frag.sn === 'initSegment' || data.type === 'audio' || startupTimer !== null || startupFinished) return
         // 일부 HEVC 디코더는 append 성공 후에도 프레임을 버리고 오류를 보내지 않는다.
         const watch = new PlaybackStartupWatch()
-        watch.check(performance.now(), videoEl.readyState, !document.hidden)
+        watch.check(performance.now(), videoEl.readyState, !videoEl.ownerDocument.hidden)
         startupTimer = setInterval(() => {
           if (startRequestSeqRef.current !== requestSeq || videoEl.error) {
             clearStartupTimer()
             return
           }
-          const result = watch.check(performance.now(), videoEl.readyState, !document.hidden)
+          const result = watch.check(performance.now(), videoEl.readyState, !videoEl.ownerDocument.hidden)
           if (result === 'waiting') return
           startupFinished = true
           clearStartupTimer()
@@ -721,10 +727,11 @@ export default function Player({ path }: PlayerProps) {
   const toggleFullscreen = useCallback(() => {
     const container = containerRef.current
     if (!container) return
-    if (document.fullscreenElement) {
-      document.exitFullscreen()
+    const owner = container.ownerDocument
+    if (owner.fullscreenElement) {
+      owner.exitFullscreen().catch(() => {})
     } else {
-      container.requestFullscreen()
+      container.requestFullscreen().catch(() => {})
     }
   }, [])
 
@@ -822,7 +829,8 @@ export default function Player({ path }: PlayerProps) {
     const handleKeyDown = (e: KeyboardEvent) => {
       const video = videoRef.current
       if (!video) return
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      const target = e.target as HTMLElement | null
+      if (target && (['INPUT','TEXTAREA','SELECT'].includes(target.tagName) || target.isContentEditable || target.tagName === 'BUTTON' && [' ','Enter'].includes(e.key))) return
 
       // Current absolute time (video.currentTime is relative to HLS start offset)
       const absTime = video.currentTime + hlsStartTimeRef.current
@@ -875,14 +883,7 @@ export default function Player({ path }: PlayerProps) {
           break
         case 'p':
         case 'P': {
-          // PiP
-          if (document.pictureInPictureEnabled) {
-            if (document.pictureInPictureElement) {
-              document.exitPictureInPicture().catch(() => {})
-            } else {
-              video.requestPictureInPicture().catch(() => {})
-            }
-          }
+          void pipToggleRef.current()
           break
         }
         case 's':
@@ -927,11 +928,14 @@ export default function Player({ path }: PlayerProps) {
       }
     }
 
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [togglePlay, toggleFullscreen, seek, showStats, setShowStats, subtitleVisible, setSubtitleVisible, playbackRate, setPlaybackRate, duration])
+    renderWindow.addEventListener('keydown', handleKeyDown)
+    return () => renderWindow.removeEventListener('keydown', handleKeyDown)
+  }, [togglePlay, toggleFullscreen, seek, showStats, setShowStats, subtitleVisible, setSubtitleVisible, playbackRate, setPlaybackRate, duration, renderWindow])
 
   return (
+    <div ref={pip.dockRef} className="relative h-full w-full bg-black">
+    {pip.pipWindow && <div className="absolute inset-0 flex items-center justify-center"><button className="rounded bg-gray-800 px-4 py-2 text-white" onClick={pip.toggle}>PiP에서 재생 중 · 여기로 가져오기</button></div>}
+    {createPortal(
     <div
       ref={containerRef}
       className="player-container relative bg-black rounded-lg overflow-hidden h-full group"
@@ -966,7 +970,7 @@ export default function Player({ path }: PlayerProps) {
           </div>
         </div>
       )}
-      <SubtitleDisplay videoRef={videoRef} path={path} getTime={() => {
+      <SubtitleDisplay videoRef={videoRef} path={path} renderWindow={renderWindow} getTime={() => {
         const video = videoRef.current
         return sourceChangingRef.current || !video || video.readyState < 2 ? null : video.currentTime + hlsStartTimeRef.current
       }} />
@@ -978,7 +982,12 @@ export default function Player({ path }: PlayerProps) {
         onSeek={seek}
         onToggleFullscreen={toggleFullscreen}
         filePath={path}
+        onTogglePiP={pip.toggle}
+        pipSupported={pip.supported}
+        renderWindow={renderWindow}
       />
+    </div>
+    ,pip.host)}
     </div>
   )
 }

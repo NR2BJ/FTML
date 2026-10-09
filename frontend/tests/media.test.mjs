@@ -18,6 +18,16 @@ const { PlaybackStartupWatch } = await loadSource('../src/utils/playbackStartup.
 const { playbackDelta } = await loadSource('../src/utils/playbackMetrics.ts')
 const { PlaybackHealthWatch } = await loadSource('../src/utils/playbackHealth.ts')
 const { workflowJobs, workflowFinished } = await loadSource('../src/utils/subtitleTasks.ts')
+const { nativeSubtitleCues } = await loadSource('../src/utils/nativeSubtitleCues.ts')
+
+test('기본 PiP 자막은 HLS 원점과 자막 보정을 빼고 이전 구간과 태그 해석을 제거한다', () => {
+  const cues=[{start:95,end:98,text:'이전'}, {start:99,end:102,text:'<안녕> & hello'}, {start:103,end:104,text:'다음'}]
+  assert.deepEqual(nativeSubtitleCues(cues,100,0.5),[
+    {start:0,end:1.5,text:'&lt;안녕&gt; &amp; hello'}, {start:2.5,end:3.5,text:'다음'}
+  ])
+  assert.deepEqual(nativeSubtitleCues(cues,200,0),[])
+  assert.deepEqual(nativeSubtitleCues(cues,NaN,0),[])
+})
 
 test('추출 후 번역은 후속 단계까지 기다리고 재시도 이전의 실패는 종료 판정에서 제외한다', () => {
   const root = {id:'root', type:'transcribe', status:'completed', params:{chain_translate:{target_lang:'ko'}}}

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { usePlayerStore } from '@/stores/playerStore'
 
-export default function QualitySelector() {
+export default function QualitySelector({ownerDocument = document}: {ownerDocument?: Document} = {}) {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const { quality, qualityPresets, setQuality, negotiatedCodec, compatibilityMode, activeAttempt } = usePlayerStore()
@@ -14,9 +14,9 @@ export default function QualitySelector() {
         setOpen(false)
       }
     }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [open])
+    ownerDocument.addEventListener('mousedown', handleClick)
+    return () => ownerDocument.removeEventListener('mousedown', handleClick)
+  }, [open,ownerDocument])
 
   const effectiveQuality = activeAttempt?.quality ?? quality
   const currentPreset = qualityPresets.find((q) => q.value === effectiveQuality)

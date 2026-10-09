@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 기본 PiP에는 이 트랙을 전달하고 웹 화면은 기존 ASS/일반 표시만 그린다. */
+.ftml-native-captions::cue { color: transparent; background: transparent; text-shadow: none; }
+body[data-ftml-pip] .player-controls > .flex { flex-wrap: wrap; gap: 0.5rem; }
+body[data-ftml-pip] .subtitle-text-overlay { bottom: 3rem; padding-inline: 0.5rem; }
+
 /* Theme CSS variables */
 :root {
   --color-dark-50: #f8fafc;
