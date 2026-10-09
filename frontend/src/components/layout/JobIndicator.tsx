@@ -76,7 +76,7 @@ export default function JobIndicator() {
       {open && (
         <div className="absolute right-0 top-full mt-2 w-80 bg-dark-800 border border-dark-700 rounded-lg shadow-xl z-50 py-1 max-h-96 overflow-auto">
           <div className="px-3 py-2 border-b border-dark-700 flex items-center justify-between">
-            <span className="text-sm font-medium text-white">Jobs</span>
+            <span className="text-sm font-medium text-white">자막 작업</span>
             <button
               onClick={() => useJobStore.getState().fetchActiveJobs()}
               className="text-gray-400 hover:text-white transition-colors"
@@ -184,7 +184,7 @@ export default function JobIndicator() {
             onClick={() => { setOpen(false); navigate('/jobs') }}
             className="w-full px-3 py-2 text-xs text-gray-400 hover:text-primary-400 hover:bg-dark-700/50 transition-colors flex items-center justify-center gap-1 border-t border-dark-700"
           >
-            View all jobs
+            영상별 작업 이력 보기
             <ArrowRight className="w-3 h-3" />
           </button>
         </div>

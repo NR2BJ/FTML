@@ -3,7 +3,8 @@ import { Subtitles, Settings, Wand2, Languages, Trash2, Upload, Download, Clock 
 import { usePlayerStore } from '@/stores/playerStore'
 import { useToastStore } from '@/stores/toastStore'
 import { useAuthStore } from '@/stores/authStore'
-import { deleteSubtitle, uploadSubtitle, convertSubtitle, requestSubtitleDelete, listMyDeleteRequests } from '@/api/subtitle'
+import { deleteSubtitle, uploadSubtitle, requestSubtitleDelete, listMyDeleteRequests } from '@/api/subtitle'
+import { downloadSubtitle } from '@/utils/downloadSubtitle'
 import SubtitleSettings from './SubtitleSettings'
 import SubtitleGenerate from './SubtitleGenerate'
 import SubtitleTranslate from './SubtitleTranslate'
@@ -120,17 +121,7 @@ export default function SubtitleSelector() {
     if (!currentFile) return
     setConverting(true)
     try {
-      const { data } = await convertSubtitle(currentFile, sub.id, targetFormat)
-      const blob = new Blob([data as BlobPart])
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${sub.label}.${targetFormat}`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      // 브라우저가 다운로드를 인계받기 전에 Blob 주소를 해제하지 않는다.
-      window.setTimeout(() => URL.revokeObjectURL(url), 10000)
+      await downloadSubtitle(currentFile, sub, targetFormat)
       setDownloadId(null)
       addToast({ type: 'success', message: `Converted to ${targetFormat.toUpperCase()}` })
     } catch {

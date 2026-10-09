@@ -45,6 +45,7 @@ try {
       return route.fulfill({contentType:'application/json',body:snapshot})
     }
     if(url.pathname==='/api/jobs/translate-1')return route.fulfill({json:jobs.find(j=>j.id==='translate-1')})
+    if(url.pathname==='/api/jobs/tracked')return route.fulfill({json:jobs})
     if(url.pathname==='/api/presets')return route.fulfill({json:[]})
     if(url.pathname.startsWith('/api/subtitle/list/')) {
       listRequests++
@@ -53,9 +54,12 @@ try {
       if(delay)await new Promise(r=>setTimeout(r,delay))
       return route.fulfill({status:fail?503:200,contentType:'application/json',body:fail?'{}':snapshot})
     }
-    if(url.pathname.startsWith('/api/subtitle/translate/')) {
+    if(url.pathname==='/api/subtitle/tasks') {
+      const request=route.request().postDataJSON()
+      assert.equal(request.mode,'translate')
+      assert.equal(request.translate.subtitle_id,source.id)
       jobs=[{id:'translate-1',type:'translate',status:'running',file_path:'first.mkv',params:{},progress:0.1}]
-      return route.fulfill({json:{job_id:'translate-1'}})
+      return route.fulfill({json:{items:[{path:'first.mkv',job_id:'translate-1'}],job_ids:['translate-1'],skipped:[]}})
     }
     if(url.pathname.startsWith('/api/subtitle/content/'))return route.fulfill({body:`WEBVTT\n\n00:00.000 --> 00:04.000\n${text}\n`,contentType:'text/vtt'})
     if(url.pathname.startsWith('/api/subtitle/convert/')){
@@ -68,8 +72,10 @@ try {
   await page.waitForFunction(()=>window.player.getState().subtitles.length===1)
   await page.getByTitle('Subtitles',{exact:true}).click()
   await page.getByTitle('Translate this subtitle',{exact:true}).click()
-  await page.getByRole('button',{name:'Translate',exact:true}).click()
-  await page.locator('#outside').click()
+  assert.equal(await page.getByRole('dialog',{name:'자막 작업'}).evaluate(el=>getComputedStyle(el).color),'rgb(15, 23, 42)')
+  assert.equal(await page.getByRole('dialog',{name:'자막 작업'}).evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(255, 255, 255)')
+  await page.getByRole('button',{name:'자막 번역 시작',exact:true}).click()
+  await page.getByRole('button',{name:'자막 작업 닫기',exact:true}).click()
   await page.waitForFunction(()=>window.jobs.getState().jobs.some(j=>j.status==='running'))
   entries=[source,result]
   jobs=[{...jobs[0],status:'completed',completed_at:'2026-10-09T00:00:01Z'}]

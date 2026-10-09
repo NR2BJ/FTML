@@ -17,6 +17,23 @@ const { buildPlaybackPlan, attemptKey, rejectAttempt } = await loadSource('../sr
 const { PlaybackStartupWatch } = await loadSource('../src/utils/playbackStartup.ts')
 const { playbackDelta } = await loadSource('../src/utils/playbackMetrics.ts')
 const { PlaybackHealthWatch } = await loadSource('../src/utils/playbackHealth.ts')
+const { workflowJobs, workflowFinished } = await loadSource('../src/utils/subtitleTasks.ts')
+
+test('추출 후 번역은 후속 단계까지 기다리고 재시도 이전의 실패는 종료 판정에서 제외한다', () => {
+  const root = {id:'root', type:'transcribe', status:'completed', params:{chain_translate:{target_lang:'ko'}}}
+  const child = {id:'child', parent_id:'root', type:'translate', status:'pending'}
+  assert.equal(workflowFinished('root', []), false)
+  assert.equal(workflowFinished('root', [root]), false)
+  assert.equal(workflowFinished('root', [root,child]), false)
+  const failed = {...child, status:'failed'}
+  assert.equal(workflowFinished('root', [root,failed]), true)
+  const retry = {...child, id:'retry', retry_of:'child', status:'running'}
+  assert.deepEqual(workflowJobs('root', [root,failed,retry]).map(j=>j.id), ['root','retry'])
+  assert.equal(workflowFinished('root', [root,failed,retry]), false)
+  assert.equal(workflowFinished('root', [root,failed,{...retry,status:'completed'}]), true)
+  assert.equal(workflowFinished('root', [{...root,status:'cancelled'}]), true)
+  assert.equal(workflowFinished('root', [{...root,params:{}}]), true)
+})
 
 test('일반 자막의 문자 참조는 글자로 표시하고 HTML로 해석하지 않는다', () => {
   const cues = parseVTT('WEBVTT\n\n00:01.000 --> 00:02.000\n&lt;안녕&gt; &amp; &#54620;&#xAE00;\n')

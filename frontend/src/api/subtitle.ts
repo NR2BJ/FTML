@@ -12,7 +12,7 @@ export interface SubtitleEntry {
 
 export interface GenerateParams {
   audio_track?: number
-  engine: string   // "whisper.cpp" | "openai"
+  engine: string   // Whisper 연결 식별자
   model?: string
   language: string // "auto" | "ko" | "en" | "ja" etc.
 }
@@ -20,10 +20,16 @@ export interface GenerateParams {
 export interface TranslateParams {
   subtitle_id: string
   target_lang: string
-  engine: string   // "gemini" | "openai" | "deepl"
+  engine: 'gemini'
   preset: string   // "anime" | "movie" | "documentary" | "custom"
   custom_prompt?: string
 }
+
+export type SubtitleTaskMode = 'generate' | 'translate' | 'generate-translate'
+export interface SubtitleTaskItem { path: string; job_id?: string; subtitle_id?: string; reason?: string }
+export const submitSubtitleTasks = (request: {
+  paths: string[]; mode: SubtitleTaskMode; generate: GenerateParams; translate?: TranslateParams
+}) => client.post<{items: SubtitleTaskItem[]; job_ids: string[]; skipped: string[]}>('/subtitle/tasks', request)
 
 export const listSubtitles = (path: string, signal?: AbortSignal) =>
   client.get<SubtitleEntry[]>(`/subtitle/list/${encodeMediaPath(path)}`, { signal, timeout: 15000 })
@@ -34,12 +40,6 @@ export const getSubtitleUrl = (videoPath: string, subtitleId: string, native = f
 export const getSubtitleFontsUrl = (path: string) => `/api/subtitle/fonts/${encodeMediaPath(path)}`
 export const getSubtitleFontUrl = (path: string, font: number | 'default') =>
   `/api/subtitle/font/${encodeMediaPath(path)}?font=${font}`
-
-export const generateSubtitle = (path: string, params: GenerateParams) =>
-  client.post<{ job_id: string }>(`/subtitle/generate/${encodeMediaPath(path)}`, params)
-
-export const translateSubtitle = (path: string, params: TranslateParams) =>
-  client.post<{ job_id: string }>(`/subtitle/translate/${encodeMediaPath(path)}`, params)
 
 export const deleteSubtitle = (path: string, subtitleId: string) =>
   client.delete(`/subtitle/delete/${encodeMediaPath(path)}?id=${encodeURIComponent(subtitleId)}`)
@@ -71,29 +71,6 @@ export const updatePreset = (id: number, name: string, prompt: string) =>
 
 export const deletePreset = (id: number) =>
   client.delete(`/presets/${id}`)
-
-// Batch Operations
-export interface BatchResult {
-  job_ids: string[]
-  skipped?: string[]
-}
-
-export const batchGenerate = (paths: string[], params: Omit<GenerateParams, 'path'>) =>
-  client.post<BatchResult>('/subtitle/batch-generate', { paths, ...params })
-
-export const batchTranslate = (paths: string[], params: { target_lang: string; engine: string; preset: string; custom_prompt?: string }) =>
-  client.post<BatchResult>('/subtitle/batch-translate', { paths, ...params })
-
-export const batchGenerateTranslate = (
-  paths: string[],
-  generate: Omit<GenerateParams, 'path'>,
-  translate: { target_lang: string; engine: string; preset: string; custom_prompt?: string }
-) =>
-  client.post<BatchResult>('/subtitle/batch-generate-translate', {
-    paths,
-    ...generate,
-    translate,
-  })
 
 // Delete requests
 export interface DeleteRequest {

@@ -361,7 +361,7 @@ export default function Header() {
                 className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 flex items-center gap-2"
               >
                 <Briefcase className="w-4 h-4" />
-                Jobs
+                자막 작업
               </button>
               <button
                 onClick={() => navigate('/account')}

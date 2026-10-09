@@ -101,6 +101,12 @@ body {
 :root:not(.dark) .player-container .border-gray-600 { border-color: #4b5563 !important; }
 :root:not(.dark) .player-container .border-gray-700 { border-color: #374151 !important; }
 
+/* 공통 작업 창은 재생기 안에서도 밝은 화면의 배경과 글자 색을 함께 사용한다. */
+:root:not(.dark) .subtitle-task-dialog .text-white { color: var(--color-text-primary) !important; }
+:root:not(.dark) .subtitle-task-dialog .text-gray-300 { color: #334155 !important; }
+:root:not(.dark) .subtitle-task-dialog .text-gray-400 { color: #475569 !important; }
+:root:not(.dark) .subtitle-task-dialog .text-gray-500 { color: #64748b !important; }
+
 ::-webkit-scrollbar {
   width: 8px;
 }
