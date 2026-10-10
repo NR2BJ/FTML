@@ -1,241 +1,50 @@
-# FTML — Folder Tree Media Library
+# FTML · Folder Tree Media Library
 
-A self-hosted media server that browses your folder structure as-is, streams video with real-time transcoding, and provides AI-powered subtitle generation and translation.
+폴더 구조 그대로 탐색·검색하고 브라우저에서 영상을 재생하는 개인용 미디어 라이브러리다. Debian Docker와 Intel Arc A380을 기준으로 관리한다.
 
-Unlike Jellyfin or Plex, FTML doesn't scrape metadata or reorganize your files. Your folders are your library.
+## 주요 기능
 
-## Features
+- 폴더 탐색·파일 검색·이어 보기·다음 영상 재생
+- 브라우저 코덱 지원에 따른 원본 재생, 오디오 변환, 하드웨어 HLS 변환
+- 다중 음성 트랙·자막 선택·배속·A-B 반복·재생 정보·PiP
+- ASS 효과 표시와 일반 자막 전환, SRT/VTT/ASS 내려받기
+- 로컬 Whisper large-v3 INT8 추출, Qwen3-ASR 1.7B/0.6B 비교 추출
+- Gemini 번역·작품 용어 참고·영상별 작업 이력·일괄 작업
+- 관리자 파일 업로드·이동·휴지통·복원, 사용자별 접근·자막 작업 권한
 
-### Streaming & Playback
-- **HLS transcoding** — Real-time transcoding with hardware acceleration (Intel VAAPI, NVIDIA NVENC) and automatic CPU fallback
-- **Codec negotiation** — H.264, HEVC, AV1, VP9; server and browser negotiate the best option
-- **Passthrough** — Skip transcoding when the browser can play the source codec directly
-- **Dynamic quality presets** — Auto-generated based on source resolution (720p → 4K + passthrough + original)
-- **Multi-audio** — Switch between audio tracks (e.g. Japanese, English, commentary)
-- **Subtitle overlay** — Embedded, external, and AI-generated subtitles with style customization
-- **Resume playback** — Automatically saves and restores playback position
-- **Next episode** — Auto-advances to the next file in the folder with countdown
-- **Keyboard shortcuts** — Full keyboard control (seek, volume, fullscreen, speed, subtitle toggle)
-- **Playback stats** — Codec, bitrate, FPS, resolution, network overlay
+Whisper의 원음을 VAD로 잘라 내지 않는다. Silero는 선택적인 말소리 비교 진단만 수행한다. Qwen은 비교 기능이며 A380의 정확도·메모리·속도는 실제 영상으로 확인해야 한다. 번역은 Gemini만 사용하고 클라우드 음성 인식 키는 필요 없다.
 
-### AI Subtitles
-- **Whisper transcription** — Generate subtitles from audio using OpenVINO GenAI WhisperPipeline
-  - Silero VAD for speech detection
-  - 4 preprocessing modes: adaptive (BGM-aware), vocal separation, raw, none
-  - Runtime model swapping via web UI
-  - Automatic VRAM release after idle timeout
-- **LLM translation** — Translate subtitles using Gemini, OpenAI, or DeepL
-  - Custom translation presets (prompt templates for tone/style)
-  - Batch processing (50-cue chunks)
-  - Gemini safety-block recovery via binary subdivision retry
-- **Batch operations** — Generate/translate subtitles for entire folders at once
-- **Format conversion** — SRT ↔ VTT ↔ ASS
+## 배포
 
-### File Management
-- **Folder tree** — Browse your actual directory structure, grid or list view
-- **File info** — Codec, resolution, audio tracks, file size via ffprobe
-- **Thumbnails** — Auto-generated video thumbnails
-- **Search** — Filename search across the library
-- **Upload / Delete / Move** — Admin file management with trash bin and restore
+**[GHCR 이미지와 Portainer 편집기 배포 안내](docs/ghcr-portainer.md)**를 따른다. 기존 Git 스택은 Git 연결을 해제한 뒤 Portainer에서 YAML·폴더 경로·환경 변수를 직접 관리한다. 저장소의 `docker-compose.yml`은 첫 등록용 예시다.
 
-### Administration
-- **User management** — Admin/User roles, registration approval system
-- **Session monitoring** — Active HLS sessions with codec, quality, heartbeat info
-- **File logs** — Upload/delete/move audit trail
-- **Settings GUI** — API keys, Gemini model selection, Whisper model management
-- **Jobs dashboard** — Active jobs with progress/ETA, completed/failed history
-- **Translation presets** — CRUD for custom translation prompts
-- **Rate limiting** — Login/register brute-force protection
+GitHub Actions가 `main`의 세 서비스 이미지를 GHCR에 게시한다. 게시가 끝나면 Portainer에서 같은 `FTML_TAG`로 수동 업데이트한다. 서버에서 소스를 빌드할 필요가 없다.
 
-## Quick Start
-
-> 기존 설치의 UID/GID 변경 전에는 [Debian 권한 점검 및 안전한 재배포](docs/container-permissions.md)를 먼저 따른다. 백엔드와 Whisper는 1000:1000으로 실행하며, 기존 root 소유 볼륨은 백업 후 소유권 이전이 필요하다. Portainer에서는 전용 절차를 사용한다.
-
-### Prerequisites
-
-- Docker & Docker Compose
-- A media folder with video files
-- (Optional) Intel Arc GPU for hardware-accelerated transcoding and Whisper inference
-
-### 1. Clone
-
-```bash
-git clone https://github.com/NR2BJ/FTML.git
-cd FTML
+```text
+ghcr.io/nr2bj/ftml-frontend:<전체 커밋 SHA>
+ghcr.io/nr2bj/ftml-backend:<전체 커밋 SHA>
+ghcr.io/nr2bj/ftml-whisper:<전체 커밋 SHA>
 ```
 
-### 2. Configure
+처음 설치하는 경우 Docker Compose, 영상 폴더, `/dev/dri` 장치와 외부 볼륨 `ftml_data`, `whisper_models`, 네트워크 `homeserver-net`이 필요하다. 백엔드·음성 인식은 UID/GID `1000:1000`으로 실행한다. [볼륨 권한 안내](docs/container-permissions.md)에 따라 처음 한 번 권한을 준비한다. 기존 볼륨을 삭제하거나 다시 초기화하지 않는다.
 
-```bash
-cp .env.example .env
-```
+`.env.example`에는 비밀 값이 없다. 관리자 암호는 직접 지정하고 JWT 키는 기존 값을 유지한다. 모델은 `whisper_models`, DB·생성/번역 자막·썸네일·변환 캐시는 `ftml_data`에 저장한다. 미디어 마운트는 관리자 파일 관리를 위해 기본 읽기/쓰기이며 필요하면 `MEDIA_READ_ONLY=true`로 제한한다.
 
-Edit `.env`:
+직접 소스 빌드가 필요한 개발 환경은 `docker-compose.build.yml`을 추가한다. 기본 배포는 Linux amd64 + Intel GPU용이다. `docker-compose.nvidia.yml`은 기존 영상 변환용 보조 설정일 뿐 Qwen/Whisper CUDA 구성을 제공하지 않는다.
 
-```env
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=your-secure-password    # Change this!
-JWT_SECRET=your-random-secret-key      # Change this!
-MEDIA_PATH=/path/to/your/videos
-FTML_PORT=7979
-```
+## 사용 안내
 
-Debian에서 `stat -c '%u:%g %a %n' /dev/dri/*`로 확인한 renderD*의 GID와 card*의 GID를 `.env`의 `RENDER_GID`, `VIDEO_GID`에 각각 설정한다. 영상 폴더는 미리 존재해야 하며 UID 1000이 접근할 수 있어야 한다.
+자막 추출·타임라인·ASS 효과·PiP·번역 보존·배포 후 확인 항목은 [자막 처리 안내](docs/subtitles.md)를 참고한다. Firefox 내장 PiP는 일반 자막을 표시할 수 있지만 ASS 효과 보존은 서비스의 Document PiP 지원 환경과 구분해야 한다.
 
-### 3. Create Docker resources
+| 구성 | 사용 기술 |
+| --- | --- |
+| 백엔드 | Go, chi, SQLite WAL |
+| 화면 | React, TypeScript, Vite, Tailwind CSS |
+| 영상 | FFmpeg, VAAPI, hls.js |
+| 로컬 음성 인식 | OpenVINO GenAI, Whisper, Qwen3-ASR |
+| 번역 | Gemini |
+| 배포 | GitHub Actions, GHCR, Docker Compose / Portainer |
 
-```bash
-docker volume create ftml_data
-docker volume create whisper_models
-docker network create homeserver-net
-```
+## 라이선스
 
-이미 있는 볼륨/네트워크는 삭제하거나 다시 만들지 않는다. 새 설치도 시작 전에 다음 명령으로 전용 볼륨의 소유권을 준비한다. 기존 설치는 위 문서에 따라 먼저 서비스를 중지한다.
-
-```sh
-sh scripts/prepare-volume-permissions.sh --apply
-```
-
-### 4. Build & Run
-
-```bash
-docker compose up -d --build
-```
-
-For **NVIDIA GPU** users, add the override file:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d --build
-```
-
-### 5. Access
-
-Open `http://localhost:7979` and log in with your admin credentials.
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ADMIN_USERNAME` | `admin` | Initial admin account |
-| `ADMIN_PASSWORD` | `changeme` | Initial admin password (**change this**) |
-| `JWT_SECRET` | *(random)* | JWT signing key; set for persistent sessions across restarts |
-| `MEDIA_PATH` | `/mnt/storage/video` | Path to your media folder |
-| `FTML_PORT` | `7979` | External access port |
-| `CORS_ORIGINS` | `*` | Allowed CORS origins |
-| `WHISPER_DEVICE` | `GPU` | Whisper inference device (`GPU` or `CPU`) |
-| `RENDER_GID` | 필수 | 호스트의 GPU renderD* 장치 소유 그룹 번호 |
-| `VIDEO_GID` | 필수 | 호스트의 GPU card* 장치 소유 그룹 번호 |
-| `MEDIA_READ_ONLY` | `false` | `true`이면 미디어 쓰기 차단. 관리자 파일 관리도 사용할 수 없음 |
-
-### API Keys (Settings page)
-
-Configure these in the web UI under **Settings** after login:
-
-- **Gemini API Key** — For Gemini translation engine
-- **OpenAI API Key** — For OpenAI translation engine
-- **DeepL API Key** — For DeepL translation engine
-
-### Reverse Proxy
-
-**Caddy** (automatic HTTPS):
-
-```
-ftml.yourdomain.com {
-    reverse_proxy localhost:7979
-}
-```
-
-**Nginx**:
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name ftml.yourdomain.com;
-
-    location / {
-        proxy_pass http://localhost:7979;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-## Tech Stack
-
-| Layer | Stack |
-|-------|-------|
-| Backend | Go + chi router + SQLite (WAL mode) |
-| Frontend | React 18 + TypeScript + Vite + Zustand + Tailwind CSS |
-| Media | FFmpeg (VAAPI / NVENC / SW), ffprobe |
-| Subtitles | OpenVINO GenAI WhisperPipeline (FastAPI) |
-| Translation | Gemini / OpenAI / DeepL |
-| Player | hls.js + Media Source Extensions |
-| Deploy | Docker Compose (3 containers) |
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────┐
-│                   Docker Compose                     │
-│                                                      │
-│  ┌──────────────┐       ┌──────────────┐             │
-│  │   Frontend   │       │   Backend    │             │
-│  │ React + Nginx│──────▶│   Go :8080   │             │
-│  │   :7979      │       │              │             │
-│  └──────────────┘       └──────┬───────┘             │
-│                                │                     │
-│         ┌──────────────────────┼──────────────┐      │
-│         ▼                      ▼               ▼     │
-│  ┌────────────┐        ┌──────────┐     ┌──────────┐ │
-│  │  FFmpeg    │        │  SQLite  │     │  Whisper │ │
-│  │  HW Accel  │        │   (DB)   │     │ OpenVINO │ │
-│  └─────┬──────┘        └──────────┘     │  :8178   │ │
-│        ▼                                └─────┬────┘ │
-│  ┌───────────┐                          ┌─────┴────┐ │
-│  │  /media   │                          │ External │ │
-│  │ (volume)  │                          │   APIs   │ │
-│  └───────────┘                          └──────────┘ │
-└──────────────────────────────────────────────────────┘
-```
-
-### Transcoding Fallback Chain
-
-```
-VAAPI (full GPU decode + encode)
-  ↓ fails within 5s
-Hybrid (CPU decode + GPU encode)
-  ↓ fails within 5s
-Software (libx264 / libx265 / libsvtav1)
-```
-
-Fallback results are cached per session — subsequent session recreation skips directly to the working encoder.
-
-## Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| Space | Play / Pause |
-| ← / → | Seek ±5s |
-| J / L | Seek ±10s |
-| ↑ / ↓ | Volume |
-| M | Mute toggle |
-| F | Fullscreen toggle |
-| C | Subtitle toggle |
-| < / > | Playback speed |
-| 0–9 | Jump to 0%–90% |
-| I | Playback stats overlay |
-
-## 자막 처리
-
-자막 추출·ASS 효과·번역 보존·배포 후 확인은 [자막 처리 안내](docs/subtitles.md)를 참고하세요.
-
-## License
-
-MIT
-
-포함된 ASS 렌더러와 글꼴에는 각각의 라이선스가 적용됩니다. libass-wasm의 저작권 고지는 배포 파일의 `ass-renderer/4.1.0/COPYRIGHT`에 함께 제공됩니다.
+프로젝트 코드는 MIT 라이선스다. 포함된 ASS 렌더러와 글꼴에는 각각의 라이선스가 적용된다. libass-wasm 저작권 고지는 배포 파일의 `ass-renderer/4.1.0/COPYRIGHT`에 제공한다. 모델과 의존 라이브러리에도 각 배포처의 라이선스가 적용된다.

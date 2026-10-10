@@ -47,7 +47,7 @@ export default function SubtitleTaskDialog({
   const [engine, setEngine] = useState('')
   const [engines, setEngines] = useState<AvailableEngine[]>([])
   const [language, setLanguage] = useState('auto')
-  const [model, setModel] = useState('')
+  const [model, setModel] = useState('OpenVINO/whisper-large-v3-int8-ov')
   const [lyricsEnabled, setLyricsEnabled] = useState(false)
   const [observeSpeech, setObserveSpeech] = useState(false)
   const [lyrics, setLyrics] = useState({ start: 0, end: 0, text: '' })
@@ -79,7 +79,7 @@ export default function SubtitleTaskDialog({
         setEngine((current) => current || data?.[0]?.value || '')
       })
       .catch(() => {
-        if (!cancelled) setError('Whisper 연결 목록을 읽지 못했습니다.')
+        if (!cancelled) setError('로컬 음성 인식 연결 목록을 읽지 못했습니다.')
       })
     return () => {
       cancelled = true
@@ -213,9 +213,9 @@ export default function SubtitleTaskDialog({
               {mode !== 'translate' && (
                 <div className="space-y-3">
                   <label className="block text-xs text-gray-400">
-                    Whisper 연결
+                    로컬 음성 인식 연결
                     <select
-                      aria-label="Whisper 연결"
+                      aria-label="로컬 음성 인식 연결"
                       className="mt-1 w-full rounded border border-dark-600 bg-dark-800 p-2 text-white"
                       value={engine}
                       onChange={(e) => setEngine(e.target.value)}
@@ -229,14 +229,13 @@ export default function SubtitleTaskDialog({
                   </label>
                   {!engines.length && (
                     <p className="text-xs text-amber-400">
-                      설정에서 사용 가능한 Whisper 연결을 확인해 주세요.
+                      설정에서 사용 가능한 로컬 음성 인식 연결을 확인해 주세요.
                     </p>
                   )}
                   <label className="block text-xs text-gray-400">
                     추출 모델
                     <select aria-label="추출 모델" value={model} disabled={!localASR} onChange={(e) => setModel(e.target.value)}
                       className="mt-1 w-full rounded border border-dark-600 bg-dark-800 p-2 text-white">
-                      <option value="">현재 설정 모델</option>
                       <option value="OpenVINO/whisper-large-v3-int8-ov">Whisper large-v3 INT8</option>
                       <option value="Qwen/Qwen3-ASR-1.7B">Qwen3-ASR 1.7B INT8 (비교용)</option>
                       <option value="Qwen/Qwen3-ASR-0.6B">Qwen3-ASR 0.6B INT8 (가벼운 비교용)</option>
@@ -265,7 +264,7 @@ export default function SubtitleTaskDialog({
                   </label>
                   <p className="text-xs text-gray-500">
                     음성 트랙 {single ? audioTrack + 1 : 1}에서 추출합니다.
-                    비교 모델을 선택하지 않으면 연결의 현재 설정을 사용합니다.
+                    기본 모델은 Whisper large-v3 INT8입니다.
                   </p>
                   {localASR && <label className="flex items-center gap-2 text-xs text-gray-400"><input type="checkbox" checked={observeSpeech} onChange={(e) => setObserveSpeech(e.target.checked)} />Silero 말소리 검출 비교: 기록만 남기고 오디오·자막을 자르지 않음</label>}
                   {localASR && single && model.startsWith('Qwen/') && <details className="rounded border border-dark-600 p-3 text-xs text-gray-300">

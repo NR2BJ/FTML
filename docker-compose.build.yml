@@ -1,0 +1,17 @@
+# 소스 수정 검증용. Portainer 편집기에서는 이 파일을 사용하지 않는다.
+services:
+  frontend:
+    image: ftml-frontend:local
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+  backend:
+    image: ftml-backend:local
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+  whisper:
+    image: ftml-whisper:local
+    build:
+      context: ./whisper
+      dockerfile: Dockerfile.openvino-genai

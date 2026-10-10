@@ -101,7 +101,7 @@ func (h *SubtitleHandler) submitSubtitleTasks(w http.ResponseWriter, r *http.Req
 	}
 	// 등록 시 모델을 고정하고 실제 교체/추론은 서버의 동일 잠금 안에서 수행한다.
 	if req.Mode != "translate" && req.Generate.Model == "" {
-		req.Generate.Model = h.database.GetSetting("whisper_model_id", defaultModelID)
+		req.Generate.Model = defaultModelID
 	}
 	items := make([]SubtitleTaskItem, 0, len(req.Paths))
 	ids, skipped := []string{}, []string{}

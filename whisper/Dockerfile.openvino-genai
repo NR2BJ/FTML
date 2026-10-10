@@ -15,7 +15,6 @@ RUN pip3 install --break-system-packages --no-cache-dir torch==2.14.1 torchvisio
 COPY server.py inference_runtime.py subtitle_processing.py qwen_pipeline.py speech_observer.py benchmark.py /app/
 WORKDIR /app
 
-ENV MODEL_ID=OpenVINO/whisper-large-v3-int8-ov
 ENV DEVICE=GPU
 ENV PORT=8178
 ENV HOME=/home/ftml

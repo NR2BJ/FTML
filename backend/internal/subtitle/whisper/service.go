@@ -48,29 +48,13 @@ func (s *Service) resolveEngine(engineKey string) (Transcriber, error) {
 		if !backend.Enabled {
 			return nil, fmt.Errorf("backend %q is disabled", backend.Name)
 		}
-		if backend.BackendType == "openai" {
-			key := s.database.GetSetting("openai_api_key", "")
-			if key == "" {
-				return nil, fmt.Errorf("OpenAI API key not configured")
-			}
-			return NewOpenAIWhisperClient(key), nil
-		}
 		if backend.BackendType == "openvino-genai" {
 			return NewOpenVINOGenAIClient(backend.URL), nil
 		}
 		return nil, fmt.Errorf("unsupported backend type: %s", backend.BackendType)
 	}
 
-	// Legacy: "openai" → use OpenAI API key from settings
-	if engineKey == "openai" {
-		key := s.database.GetSetting("openai_api_key", "")
-		if key == "" {
-			return nil, fmt.Errorf("OpenAI API key not configured")
-		}
-		return NewOpenAIWhisperClient(key), nil
-	}
-
-	return nil, fmt.Errorf("unknown engine: %s", engineKey)
+	return nil, fmt.Errorf("로컬 음성 인식 연결을 선택해 새 작업을 등록해 주세요: %s", engineKey)
 }
 
 // HandleJob processes a transcription job
@@ -85,12 +69,12 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		return fmt.Errorf("resolve engine: %w", err)
 	}
 
-	// 과거 작업에 모델이 없으면 현재 설정을 사용한다. 교체와 추론은 한 요청이다.
-	if _, ok := engine.(*OpenVINOGenAIClient); ok && params.Model == "" {
-		params.Model = s.database.GetSetting("whisper_model_id", "OpenVINO/whisper-large-v3-int8-ov")
+	// 모델 없는 과거 작업도 고정된 기본값을 사용한다.
+	if params.Model == "" {
+		params.Model = DefaultModelID
 	}
-	if _, ok := engine.(*OpenVINOGenAIClient); !ok && strings.HasPrefix(params.Model, "Qwen/") {
-		return fmt.Errorf("Qwen은 로컬 OpenVINO 연결에서만 사용할 수 있습니다")
+	if !SupportedModel(params.Model) {
+		return fmt.Errorf("더 이상 지원하지 않는 모델입니다. large-v3 INT8 또는 Qwen으로 새 작업을 등록해 주세요")
 	}
 
 	// Resolve full path

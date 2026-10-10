@@ -103,7 +103,6 @@ export default function Settings() {
     general: 'General',
     translation: 'Translation API Keys',
     subtitle: 'Subtitle & Translation',
-    legacy: '기존 음성 인식 연결',
   }
 
   const timezoneOptions = [
@@ -118,7 +117,6 @@ export default function Settings() {
     timezone: 'IANA timezone for displaying dates and times (e.g. Asia/Seoul). Leave empty for browser default.',
     gemini_api_key: 'Google Gemini API key for subtitle translation. Get one at aistudio.google.com',
     gemini_model: 'Select a Gemini model for translation. Models are fetched from Google API automatically.',
-    openai_api_key: '기존 OpenAI 음성 인식 연결을 계속 사용할 때만 필요합니다. 자막 번역은 Gemini를 사용합니다.',
   }
 
   const renderSettingInput = (setting: SettingItem) => {
@@ -260,18 +258,18 @@ export default function Settings() {
       {/* Whisper Backend & Model Manager — always shown */}
       <div className="mb-6">
         <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-3">
-          Whisper STT (Speech-to-Text)
+          로컬 음성 인식
         </h2>
         <div className="space-y-4">
           <div>
             <h3 className="text-sm font-medium text-gray-400 mb-3">
-              Whisper Backends
+              서버 연결
             </h3>
             <WhisperBackendManager />
           </div>
           <div>
             <h3 className="text-sm font-medium text-gray-400 mb-3">
-              Whisper Models
+              추출 모델
             </h3>
             <WhisperModelManager />
           </div>

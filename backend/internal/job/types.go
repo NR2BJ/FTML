@@ -48,7 +48,7 @@ type TranscribeParams struct {
 	Lyrics         *LyricsReference `json:"lyrics,omitempty"`
 	Hints          string           `json:"hints,omitempty"`
 	AudioTrack     int              `json:"audio_track,omitempty"`
-	Engine         string           `json:"engine"`                    // backend:<id>, openai
+	Engine         string           `json:"engine"`                    // backend:<id>
 	Model          string           `json:"model"`                     // 로컬 모델 저장소 ID
 	Language       string           `json:"language"`                  // "auto", "ko", "en", "ja", etc.
 	ChainTranslate *TranslateParams `json:"chain_translate,omitempty"` // auto-translate after transcribe completes
@@ -65,7 +65,7 @@ type TranslateParams struct {
 	Reference    string `json:"reference,omitempty"`
 	SubtitleID   string `json:"subtitle_id"`   // source subtitle ID (e.g., "generated:whisper_ja.vtt")
 	TargetLang   string `json:"target_lang"`   // "ko", "en", "ja", etc.
-	Engine       string `json:"engine"`        // "gemini", "openai", "deepl"
+	Engine       string `json:"engine"`        // "gemini"
 	Preset       string `json:"preset"`        // "anime", "movie", "documentary", "custom"
 	CustomPrompt string `json:"custom_prompt"` // for "custom" preset
 }

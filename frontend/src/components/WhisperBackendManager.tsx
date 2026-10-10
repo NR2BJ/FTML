@@ -1,365 +1,91 @@
 import { useState, useEffect } from 'react'
-import {
-  Plus,
-  Trash2,
-  Activity,
-  Loader2,
-  Check,
-  AlertCircle,
-  Cpu,
-  Zap,
-  Cloud,
-  Server,
-} from 'lucide-react'
-import {
-  listWhisperBackends,
-  createWhisperBackend,
-  updateWhisperBackend,
-  deleteWhisperBackend,
-  healthCheckBackend,
-  type WhisperBackend,
-  type HealthResult,
-} from '@/api/whisperBackends'
+import { listWhisperBackends, createWhisperBackend, updateWhisperBackend, deleteWhisperBackend, healthCheckBackend, type WhisperBackend, type HealthResult } from '@/api/whisperBackends'
 
-const TYPE_CONFIG: Record<string, { label: string; color: string; icon: typeof Cpu }> = {
-  'openvino-genai': { label: 'OpenVINO GenAI', color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20', icon: Zap },
-  openai: { label: 'OpenAI', color: 'text-orange-400 bg-orange-500/10 border-orange-500/20', icon: Cloud },
-}
-
-const BACKEND_TYPES = [
-  { value: 'openvino-genai', label: 'OpenVINO GenAI (Intel Arc)' },
-  { value: 'openai', label: 'OpenAI (Cloud)' },
-]
-
-const DEFAULT_URLS: Record<string, string> = {
-  'openvino-genai': 'http://whisper:8178',
-  openai:   '',
-}
+const inputClass = 'w-full bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600'
+const buttonClass = 'text-xs border border-dark-600 rounded px-2 py-1 text-gray-300 disabled:opacity-50'
 
 export default function WhisperBackendManager() {
   const [backends, setBackends] = useState<WhisperBackend[]>([])
   const [loading, setLoading] = useState(true)
-  const [showAdd, setShowAdd] = useState(false)
-  const [healthResults, setHealthResults] = useState<Record<number, HealthResult | 'loading'>>({})
-
-  // Add form state
-  const [newName, setNewName] = useState('')
-  const [newType, setNewType] = useState('openvino-genai')
-  const [newURL, setNewURL] = useState(DEFAULT_URLS['openvino-genai'])
-  const [addError, setAddError] = useState<string | null>(null)
-
-  // Edit state
-  const [editingId, setEditingId] = useState<number | null>(null)
-  const [editName, setEditName] = useState('')
-  const [editURL, setEditURL] = useState('')
-
-  const loadBackends = async () => {
-    try {
-      const { data } = await listWhisperBackends()
-      setBackends(data || [])
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false)
-    }
-  }
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [editing, setEditing] = useState<number | 'new' | null>(null)
+  const [name, setName] = useState('')
+  const [url, setURL] = useState('http://whisper:8178')
+  const [health, setHealth] = useState<Record<number, HealthResult>>({})
 
   useEffect(() => {
-    loadBackends()
+    let cancelled = false
+    listWhisperBackends().then(({ data }) => { if (!cancelled) setBackends(data || []) })
+      .catch(() => { if (!cancelled) setError('서버 연결 목록을 읽지 못했습니다.') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [])
 
-  const handleAdd = async () => {
-    setAddError(null)
-    if (!newName.trim()) {
-      setAddError('Name is required')
-      return
-    }
-    if (newType !== 'openai' && !newURL.trim()) {
-      setAddError('URL is required for local backends')
-      return
-    }
-
-    try {
-      await createWhisperBackend({
-        name: newName.trim(),
-        backend_type: newType,
-        url: newType === 'openai' ? '' : newURL.trim(),
-      })
-      setNewName('')
-      setNewType('openvino-genai')
-      setNewURL(DEFAULT_URLS['openvino-genai'])
-      setShowAdd(false)
-      loadBackends()
-    } catch {
-      setAddError('Failed to add backend')
-    }
+  const run = async (action: () => Promise<void>) => {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try { await action() } catch { setError('요청에 실패했습니다. 서버 상태와 입력한 주소를 확인해 주세요.') }
+    finally { setBusy(false) }
   }
-
-  const handleDelete = async (id: number) => {
-    try {
-      await deleteWhisperBackend(id)
-      setBackends(prev => prev.filter(b => b.id !== id))
-    } catch {
-      // ignore
+  const edit = (backend?: WhisperBackend) => {
+    setEditing(backend?.id ?? 'new')
+    setName(backend?.name ?? '로컬 음성 인식')
+    setURL(backend?.url ?? 'http://whisper:8178')
+    setError('')
+  }
+  const save = () => run(async () => {
+    if (!name.trim() || !url.trim()) { setError('이름과 서버 주소를 입력해 주세요.'); return }
+    if (editing === 'new') {
+      await createWhisperBackend({ name: name.trim(), url: url.trim(), backend_type: 'openvino-genai' })
+    } else if (editing !== null) {
+      await updateWhisperBackend(editing, { name: name.trim(), url: url.trim() })
+      setHealth(prev => { const next = { ...prev }; delete next[editing]; return next })
     }
-  }
+    const { data } = await listWhisperBackends()
+    setBackends(data || [])
+    setEditing(null)
+  })
 
-  const handleToggle = async (backend: WhisperBackend) => {
-    try {
-      await updateWhisperBackend(backend.id, { enabled: !backend.enabled })
-      setBackends(prev =>
-        prev.map(b => (b.id === backend.id ? { ...b, enabled: !b.enabled } : b))
-      )
-    } catch {
-      // ignore
-    }
-  }
-
-  const handleHealthCheck = async (id: number) => {
-    setHealthResults(prev => ({ ...prev, [id]: 'loading' }))
-    try {
-      const { data } = await healthCheckBackend(id)
-      setHealthResults(prev => ({ ...prev, [id]: data }))
-    } catch {
-      setHealthResults(prev => ({ ...prev, [id]: { ok: false, error: 'Request failed' } }))
-    }
-  }
-
-  const handleEditSave = async (backend: WhisperBackend) => {
-    try {
-      await updateWhisperBackend(backend.id, {
-        name: editName,
-        url: backend.backend_type === 'openai' ? '' : editURL,
-      })
-      setBackends(prev =>
-        prev.map(b => (b.id === backend.id ? { ...b, name: editName, url: editURL } : b))
-      )
-      setEditingId(null)
-    } catch {
-      // ignore
-    }
-  }
-
-  const startEdit = (backend: WhisperBackend) => {
-    setEditingId(backend.id)
-    setEditName(backend.name)
-    setEditURL(backend.url)
-  }
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-20">
-        <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
-      </div>
-    )
-  }
-
+  if (loading) return <p className="text-sm text-gray-400">연결 목록을 읽는 중입니다.</p>
   return (
-    <div className="space-y-2">
-      {/* Backend list */}
-      {backends.map((backend) => {
-        const typeConfig = TYPE_CONFIG[backend.backend_type] || TYPE_CONFIG['openvino-genai']
-        const TypeIcon = typeConfig.icon
-        const health = healthResults[backend.id]
-        const isEditing = editingId === backend.id
-
-        return (
-          <div
-            key={backend.id}
-            className={`bg-dark-900 border rounded-lg px-3 py-2.5 ${
-              backend.enabled ? 'border-dark-700' : 'border-dark-800 opacity-60'
-            }`}
-          >
-            {isEditing ? (
-              /* Edit mode */
-              <div className="space-y-2">
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="w-full bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600 focus:outline-none focus:border-primary-500"
-                  placeholder="Backend name"
-                />
-                {backend.backend_type !== 'openai' && (
-                  <input
-                    type="text"
-                    value={editURL}
-                    onChange={(e) => setEditURL(e.target.value)}
-                    className="w-full bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600 focus:outline-none focus:border-primary-500"
-                    placeholder="http://whisper:8178"
-                  />
-                )}
-                <div className="flex gap-2 justify-end">
-                  <button
-                    onClick={() => setEditingId(null)}
-                    className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => handleEditSave(backend)}
-                    className="text-xs bg-primary-600 hover:bg-primary-500 text-white px-3 py-1 rounded"
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
-            ) : (
-              /* View mode */
-              <div className="flex items-center gap-2">
-                {/* Type badge */}
-                <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border ${typeConfig.color}`}>
-                  <TypeIcon className="w-3 h-3" />
-                  {typeConfig.label}
-                </span>
-
-                {/* Name */}
-                <span className="text-sm text-white font-medium flex-1 truncate">
-                  {backend.name}
-                </span>
-
-                {/* URL (for local backends) */}
-                {backend.backend_type !== 'openai' && (
-                  <span className="text-xs text-gray-500 truncate max-w-[180px] hidden sm:block">
-                    {backend.url}
-                  </span>
-                )}
-                {backend.backend_type === 'openai' && (
-                  <span className="text-xs text-gray-500">Cloud API</span>
-                )}
-
-                {/* Health indicator */}
-                {health && health !== 'loading' && (
-                  <span
-                    className={`w-2 h-2 rounded-full shrink-0 ${
-                      health.ok ? 'bg-green-400' : 'bg-red-400'
-                    }`}
-                    title={health.ok ? `OK (${health.latency_ms}ms)` : health.error}
-                  />
-                )}
-                {health === 'loading' && (
-                  <Loader2 className="w-3 h-3 text-gray-400 animate-spin shrink-0" />
-                )}
-
-                {/* Health check button */}
-                <button
-                  onClick={() => handleHealthCheck(backend.id)}
-                  className="text-gray-500 hover:text-primary-400 transition-colors p-1"
-                  title="Test connection"
-                >
-                  <Activity className="w-3.5 h-3.5" />
-                </button>
-
-                {/* Toggle enabled */}
-                <button
-                  onClick={() => handleToggle(backend)}
-                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
-                    backend.enabled ? 'bg-primary-600' : 'bg-dark-600'
-                  }`}
-                  title={backend.enabled ? 'Disable' : 'Enable'}
-                >
-                  <span
-                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      backend.enabled ? 'translate-x-4' : 'translate-x-1'
-                    }`}
-                  />
-                </button>
-
-                {/* Edit */}
-                <button
-                  onClick={() => startEdit(backend)}
-                  className="text-gray-500 hover:text-white transition-colors p-1"
-                  title="Edit"
-                >
-                  <Server className="w-3.5 h-3.5" />
-                </button>
-
-                {/* Delete */}
-                <button
-                  onClick={() => handleDelete(backend.id)}
-                  className="text-gray-500 hover:text-red-400 transition-colors p-1"
-                  title="Delete"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
+    <div className="space-y-3">
+      <p className="text-xs text-gray-500">OpenVINO GenAI 연결에서 Whisper와 Qwen을 함께 사용합니다. 기본 주소는 http://whisper:8178입니다.</p>
+      {backends.map(backend => (
+        <div key={backend.id} className="rounded-lg border border-dark-700 bg-dark-900 p-3 space-y-2">
+          <div className="text-sm text-white">{backend.name} · {backend.enabled ? '사용 중' : '사용 안 함'}</div>
+          <div className="break-all text-xs text-gray-400">{backend.url}</div>
+          <div className="flex flex-wrap gap-2">
+            <button className={buttonClass} disabled={busy} onClick={() => run(async () => {
+              const { data } = await healthCheckBackend(backend.id)
+              setHealth(prev => ({ ...prev, [backend.id]: data }))
+            })}>연결 확인</button>
+            <button className={buttonClass} disabled={busy} onClick={() => run(async () => {
+              await updateWhisperBackend(backend.id, { enabled: !backend.enabled })
+              setBackends(prev => prev.map(b => b.id === backend.id ? { ...b, enabled: !b.enabled } : b))
+            })}>{backend.enabled ? '사용 중지' : '사용'}</button>
+            <button className={buttonClass} disabled={busy} onClick={() => edit(backend)}>수정</button>
+            <button className={buttonClass} disabled={busy} onClick={() => {
+              if (!window.confirm('이 연결을 삭제할까요? 이 연결을 사용한 작업은 다시 실행할 수 없습니다. 자막과 이력은 유지됩니다.')) return
+              void run(async () => {
+                await deleteWhisperBackend(backend.id)
+                setBackends(prev => prev.filter(b => b.id !== backend.id))
+                if (editing === backend.id) setEditing(null)
+              })
+            }}>삭제</button>
           </div>
-        )
-      })}
-
-      {backends.length === 0 && !showAdd && (
-        <div className="text-center py-4 text-sm text-gray-500">
-          No whisper backends registered. Add one to enable subtitle generation.
+          {health[backend.id] && <p role="status" className="text-xs text-gray-300">
+            {health[backend.id].ok ? `연결됨 (${health[backend.id].latency_ms ?? 0}ms)` : `연결 실패: ${health[backend.id].error}`}
+          </p>}
         </div>
-      )}
-
-      {/* Add form */}
-      {showAdd ? (
-        <div className="bg-dark-900 border border-primary-500/30 rounded-lg px-3 py-3 space-y-2">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              className="flex-1 bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600 focus:outline-none focus:border-primary-500"
-              placeholder="Name (e.g. OpenVINO GenAI)"
-              autoFocus
-            />
-            <select
-              value={newType}
-              onChange={(e) => {
-                const t = e.target.value
-                setNewType(t)
-                setNewURL(DEFAULT_URLS[t] || '')
-              }}
-              className="bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600"
-            >
-              {BACKEND_TYPES.map(t => (
-                <option key={t.value} value={t.value}>{t.label}</option>
-              ))}
-            </select>
-          </div>
-          {newType !== 'openai' && (
-            <input
-              type="text"
-              value={newURL}
-              onChange={(e) => setNewURL(e.target.value)}
-              className="w-full bg-dark-800 text-sm text-white rounded px-2 py-1.5 border border-dark-600 focus:outline-none focus:border-primary-500"
-              placeholder={DEFAULT_URLS[newType] || 'http://whisper:8178'}
-            />
-          )}
-          {addError && (
-            <div className="text-xs text-red-400 flex items-center gap-1">
-              <AlertCircle className="w-3 h-3" />
-              {addError}
-            </div>
-          )}
-          <div className="flex gap-2 justify-end">
-            <button
-              onClick={() => { setShowAdd(false); setAddError(null) }}
-              className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleAdd}
-              className="text-xs bg-primary-600 hover:bg-primary-500 text-white px-3 py-1 rounded flex items-center gap-1"
-            >
-              <Check className="w-3 h-3" />
-              Add
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button
-          onClick={() => setShowAdd(true)}
-          className="w-full border border-dashed border-dark-600 hover:border-primary-500 rounded-lg py-2 text-sm text-gray-400 hover:text-primary-400 transition-colors flex items-center justify-center gap-1.5"
-        >
-          <Plus className="w-4 h-4" />
-          Add Backend
-        </button>
-      )}
+      ))}
+      {editing !== null ? <form className="space-y-2 rounded-lg border border-dark-600 p-3" onSubmit={e => { e.preventDefault(); void save() }}>
+        <label className="block text-xs text-gray-400">연결 이름<input required aria-label="연결 이름" className={inputClass} value={name} onChange={e => setName(e.target.value)} disabled={busy} /></label>
+        <label className="block text-xs text-gray-400">서버 주소<input required type="url" aria-label="서버 주소" className={inputClass} value={url} onChange={e => setURL(e.target.value)} disabled={busy} /></label>
+        <div className="flex gap-2"><button className={buttonClass} disabled={busy} type="submit">저장</button><button className={buttonClass} disabled={busy} type="button" onClick={() => setEditing(null)}>취소</button></div>
+      </form> : <button className={buttonClass} disabled={busy} onClick={() => edit()}>로컬 연결 추가</button>}
+      {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
     </div>
   )
 }

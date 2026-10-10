@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -30,8 +31,14 @@ func (h *WhisperBackendsHandler) ListBackends(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	local := []db.WhisperBackend{}
+	for _, b := range backends {
+		if b.BackendType == "openvino-genai" {
+			local = append(local, b)
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(backends)
+	json.NewEncoder(w).Encode(local)
 }
 
 // AvailableEngine is the dropdown-friendly format for frontends
@@ -52,7 +59,7 @@ func (h *WhisperBackendsHandler) ListAvailable(w http.ResponseWriter, r *http.Re
 
 	var engines []AvailableEngine
 	for _, b := range backends {
-		if !b.Enabled {
+		if !b.Enabled || b.BackendType != "openvino-genai" {
 			continue
 		}
 		engines = append(engines, AvailableEngine{
@@ -88,16 +95,8 @@ func (h *WhisperBackendsHandler) CreateBackend(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Validate backend_type
-	validTypes := map[string]bool{"openvino-genai": true, "openai": true}
-	if !validTypes[req.BackendType] {
-		jsonError(w, "backend_type must be one of: openvino-genai, openai", http.StatusBadRequest)
-		return
-	}
-
-	// Local backends require a URL
-	if req.BackendType != "openai" && req.URL == "" {
-		jsonError(w, "url is required for local backends", http.StatusBadRequest)
+	if err := validateLocalBackend(req.BackendType, req.URL); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -126,11 +125,11 @@ func (h *WhisperBackendsHandler) UpdateBackend(w http.ResponseWriter, r *http.Re
 	}
 
 	var req struct {
-		Name        string `json:"name"`
-		BackendType string `json:"backend_type"`
-		URL         string `json:"url"`
-		Enabled     *bool  `json:"enabled"`
-		Priority    int    `json:"priority"`
+		Name        string  `json:"name"`
+		BackendType string  `json:"backend_type"`
+		URL         *string `json:"url"`
+		Enabled     *bool   `json:"enabled"`
+		Priority    *int    `json:"priority"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -151,14 +150,18 @@ func (h *WhisperBackendsHandler) UpdateBackend(w http.ResponseWriter, r *http.Re
 	if req.BackendType != "" {
 		existing.BackendType = req.BackendType
 	}
-	if req.URL != "" || req.BackendType == "openai" {
-		existing.URL = req.URL
+	if req.URL != nil {
+		existing.URL = *req.URL
 	}
 	if req.Enabled != nil {
 		existing.Enabled = *req.Enabled
 	}
-	if req.Priority != 0 {
-		existing.Priority = req.Priority
+	if req.Priority != nil {
+		existing.Priority = *req.Priority
+	}
+	if err := validateLocalBackend(existing.BackendType, existing.URL); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	if err := h.database.UpdateWhisperBackend(id, existing.Name, existing.BackendType, existing.URL, existing.Enabled, existing.Priority); err != nil {
@@ -211,30 +214,20 @@ func (h *WhisperBackendsHandler) HealthCheck(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 
-	if backend.BackendType == "openai" {
-		// For OpenAI, just check if API key is configured
-		key := h.database.GetSetting("openai_api_key", "")
-		if key != "" {
-			json.NewEncoder(w).Encode(HealthResult{OK: true})
-		} else {
-			json.NewEncoder(w).Encode(HealthResult{OK: false, Error: "OpenAI API key not configured"})
-		}
-		return
-	}
-
-	// For local backends, try to connect to the URL
-	if backend.URL == "" {
-		json.NewEncoder(w).Encode(HealthResult{OK: false, Error: "no URL configured"})
+	if err := validateLocalBackend(backend.BackendType, backend.URL); err != nil {
+		json.NewEncoder(w).Encode(HealthResult{OK: false, Error: err.Error()})
 		return
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	healthURL := backend.URL
-	if backend.BackendType == "openvino-genai" {
-		healthURL = strings.TrimRight(backend.URL, "/") + "/health"
+	healthURL := strings.TrimRight(backend.URL, "/") + "/health"
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, healthURL, nil)
+	if err != nil {
+		json.NewEncoder(w).Encode(HealthResult{OK: false, Error: err.Error()})
+		return
 	}
 	start := time.Now()
-	resp, err := client.Get(healthURL)
+	resp, err := client.Do(req)
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {
@@ -242,6 +235,21 @@ func (h *WhisperBackendsHandler) HealthCheck(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		json.NewEncoder(w).Encode(HealthResult{OK: false, Error: fmt.Sprintf("음성 인식 서버 응답: %d", resp.StatusCode)})
+		return
+	}
 
 	json.NewEncoder(w).Encode(HealthResult{OK: true, LatencyMs: latency})
+}
+
+func validateLocalBackend(kind, address string) error {
+	if kind != "openvino-genai" {
+		return fmt.Errorf("로컬 OpenVINO 음성 인식만 지원합니다")
+	}
+	u, err := url.Parse(address)
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("음성 인식 서버의 HTTP(S) 주소를 입력해 주세요")
+	}
+	return nil
 }

@@ -55,8 +55,8 @@ word_timestamps_active = False
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle for FastAPI."""
-    mid = os.environ.get("MODEL_ID", DEFAULT_MODEL_ID)
-    await asyncio.to_thread(load_model_by_id, mid)
+    # 모델 다운로드/GPU 준비는 첫 작업에서 한다. 네트워크 장애로 HTTP 시작을 막지 않는다.
+    log.info("Local ASR ready; default model loads on first task: %s", DEFAULT_MODEL_ID)
     if IDLE_TIMEOUT > 0:
         log.info(f"VRAM auto-release enabled: model unloads after {IDLE_TIMEOUT}s idle")
     else:
@@ -166,7 +166,7 @@ def ensure_model_loaded():
     global pipeline
     if pipeline is not None:
         return
-    mid = model_id_str or os.environ.get("MODEL_ID", DEFAULT_MODEL_ID)
+    mid = model_id_str or DEFAULT_MODEL_ID
     log.info(f"Reloading model for inference: {mid}")
     load_model_by_id(mid)
 
@@ -371,7 +371,8 @@ async def transcribe_openai(
     reference_lyrics: str = Form(default="", max_length=24000),
     observe_speech: bool = Form(default=False),
 ):
-    if model and model not in QWEN_MODELS and not model.startswith("OpenVINO/whisper-") and not model.startswith("OpenVINO/distil-whisper-"):
+    model = model or DEFAULT_MODEL_ID
+    if model != DEFAULT_MODEL_ID and model not in QWEN_MODELS:
         raise HTTPException(400, "지원하지 않는 추출 모델입니다")
     lyrics = None
     if reference_lyrics:
@@ -434,6 +435,8 @@ class ModelLoadRequest(BaseModel):
 @app.post("/v1/model/load")
 async def load_new_model(req: ModelLoadRequest):
     """Load a new model at runtime (downloads from HuggingFace if needed)."""
+    if req.model_id != DEFAULT_MODEL_ID and req.model_id not in QWEN_MODELS:
+        raise HTTPException(400, "지원하지 않는 추출 모델입니다")
     if loading_model:
         raise HTTPException(409, "Another model is currently loading")
     if req.model_id == model_id_str and pipeline is not None:

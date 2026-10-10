@@ -66,7 +66,7 @@ try {
     throw new Error(`예상하지 않은 요청: ${url.pathname}`)
   })
   await page.goto(`${server.resolvedUrls.local[0]}__tasks.html`)
-  await page.getByLabel('Whisper 연결',{exact:true}).selectOption('backend:1')
+  await page.getByLabel('로컬 음성 인식 연결',{exact:true}).selectOption('backend:1')
   await page.getByLabel('음성 언어',{exact:true}).selectOption('ja')
   await page.getByLabel('번역 지침',{exact:true}).selectOption('saved:1')
   await page.getByRole('button',{name:'추출 후 번역 시작',exact:true}).click()

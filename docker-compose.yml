@@ -1,8 +1,7 @@
 services:
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ${FTML_IMAGE_PREFIX:-ghcr.io/nr2bj/ftml}-frontend:${FTML_TAG:-latest}
+    platform: linux/amd64
     ports:
       - "${FTML_PORT:-7979}:80"
     depends_on:
@@ -17,9 +16,8 @@ services:
       retries: 3
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ${FTML_IMAGE_PREFIX:-ghcr.io/nr2bj/ftml}-backend:${FTML_TAG:-latest}
+    platform: linux/amd64
     user: "1000:1000"
     security_opt:
       - no-new-privileges:true
@@ -36,13 +34,12 @@ services:
       - ftml_data:/data
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?기존 관리자 암호 또는 새 설치 암호를 지정하세요}
       - JWT_SECRET=${JWT_SECRET:-}
       - MEDIA_PATH=/media
       - DATA_PATH=/data
       - DB_PATH=/data/videostream.db
       - SUBTITLE_PATH=/data/subtitles
-      # WHISPER_MODEL_PATH no longer needed — models cached on whisper container
       - PORT=8080
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - LIBVA_DRIVER_NAME=iHD
@@ -60,12 +57,10 @@ services:
       timeout: 10s
       retries: 3
 
-  # Whisper STT - OpenVINO GenAI (Intel Arc GPU accelerated)
-  # Model is managed via web UI Settings — no MODEL_ID env var needed
+  # Whisper large-v3 INT8 기본값, Qwen은 자막 작업 창에서 선택한다.
   whisper:
-    build:
-      context: ./whisper
-      dockerfile: Dockerfile.openvino-genai
+    image: ${FTML_IMAGE_PREFIX:-ghcr.io/nr2bj/ftml}-whisper:${FTML_TAG:-latest}
+    platform: linux/amd64
     user: "1000:1000"
     security_opt:
       - no-new-privileges:true

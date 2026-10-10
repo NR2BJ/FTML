@@ -143,7 +143,9 @@ func (d *Database) migrate() error {
 	if err := d.ensureJobLinks(); err != nil {
 		return err
 	}
-	d.migrateWhisperBackends()
+	if err := d.migrateWhisperBackends(); err != nil {
+		return err
+	}
 	// Migrate legacy roles: viewer/editor → user
 	d.db.Exec("UPDATE users SET role = 'user' WHERE role IN ('viewer', 'editor')")
 	return nil
@@ -758,22 +760,16 @@ func (d *Database) ListFileLogs(limit int, action string) ([]FileLog, error) {
 	return logs, nil
 }
 
-// migrateWhisperBackends seeds the whisper_backends table from legacy settings on first run
-func (d *Database) migrateWhisperBackends() {
-	var count int
-	d.db.QueryRow("SELECT COUNT(*) FROM whisper_backends").Scan(&count)
-	if count > 0 {
-		return
-	}
-
-	whisperURL := d.GetSetting("whisper_url", "")
-	if whisperURL != "" {
-		d.CreateWhisperBackend("Whisper (Local)", "sycl", whisperURL, 0)
-	}
-	openAIKey := d.GetSetting("openai_api_key", "")
-	if openAIKey != "" {
-		d.CreateWhisperBackend("OpenAI Whisper", "openai", "", 10)
-	}
+func (d *Database) migrateWhisperBackends() error {
+	// 이력에서 참조하는 연결 ID는 보존한다. 지원이 끝난 연결만 비활성화한다.
+	_, err := d.db.Exec(`
+		DELETE FROM settings WHERE key IN ('openai_api_key', 'whisper_model_id');
+		UPDATE whisper_backends SET enabled = 0 WHERE backend_type != 'openvino-genai';
+		INSERT INTO whisper_backends (name, backend_type, url, priority)
+		SELECT '로컬 음성 인식', 'openvino-genai', 'http://whisper:8178', 0
+		WHERE NOT EXISTS (SELECT 1 FROM whisper_backends WHERE backend_type = 'openvino-genai');
+	`)
+	return err
 }
 
 // --- Delete Requests ---

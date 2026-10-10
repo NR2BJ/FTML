@@ -1,5 +1,5 @@
 # Build stage - use Debian-based image so binary links against glibc (matching Ubuntu runtime)
-FROM golang:1.25 AS builder
+FROM golang:1.25-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 

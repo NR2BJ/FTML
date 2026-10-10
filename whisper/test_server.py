@@ -65,6 +65,12 @@ class ServerTests(unittest.TestCase):
 
     def setUp(self):
         server.gate.idle_timeout = 0
+        model_patch = patch.object(server, "model_id_str", server.DEFAULT_MODEL_ID)
+        model_patch.start()
+        self.addCleanup(model_patch.stop)
+        download_patch = patch("huggingface_hub.snapshot_download", side_effect=AssertionError("시험 중 모델 다운로드 금지"))
+        download_patch.start()
+        self.addCleanup(download_patch.stop)
         self.client = TestClient(server.app)
         self.addCleanup(self.client.close)
 
@@ -159,6 +165,23 @@ class ServerTests(unittest.TestCase):
                 response = self.client.post("/v1/audio/transcriptions",data={"reference_lyrics":json.dumps(lyrics)},files={"file":("a.wav",self.wav(2))})
                 self.assertEqual(response.status_code,400,response.text)
             run.assert_not_called()
+
+    def test_only_fixed_whisper_and_qwen_models_are_accepted(self):
+        with patch.object(server, "_run_upload") as run, patch.object(server, "load_model_by_id") as load:
+            for mid in ["OpenVINO/whisper-tiny-int8-ov", "OpenVINO/whisper-large-v3-fp16-ov", "whisper-1"]:
+                response = self.client.post("/v1/audio/transcriptions", data={"model":mid}, files={"file":("a.wav",self.wav(1))})
+                self.assertEqual(response.status_code, 400)
+                response = self.client.post("/v1/model/load", json={"model_id":mid})
+                self.assertEqual(response.status_code, 400)
+            run.assert_not_called()
+            load.assert_not_called()
+
+    def test_startup_does_not_download_or_load_models(self):
+        # 이 시험은 gate를 닫으므로 별도 gate를 사용한다.
+        with patch.object(server, "gate", server.ModelGate(0)), patch.object(server, "load_model_by_id") as load:
+            with TestClient(server.app) as client:
+                self.assertEqual(client.get("/health").status_code, 200)
+            load.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -21,6 +21,9 @@ func TestSubtitleSubmissionPathsShareValidationAndMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
+	if err = d.SetSetting("whisper_model_id", "OpenVINO/whisper-tiny-int8-ov"); err != nil {
+		t.Fatal(err)
+	}
 	q := job.NewJobQueue(d.DB())
 	defer q.Stop()
 	h := NewSubtitleHandler(media, subtitles, q, d)
@@ -56,6 +59,10 @@ func TestSubtitleSubmissionPathsShareValidationAndMapping(t *testing.T) {
 	}
 	json.Unmarshal(w.Body.Bytes(), &result)
 	first := result.Items[0].JobID
+	firstJob, err := q.GetJob(first)
+	if err != nil || !strings.Contains(string(firstJob.Params), defaultModelID) {
+		t.Fatal("이전 모델 설정이 기본값을 덮어씀", err, firstJob)
+	}
 	w = post("/generate/a.mkv", `{"language":"ja","audio_track":1}`)
 	if w.Code != 201 || !strings.Contains(w.Body.String(), first) {
 		t.Fatal("단일/공통 중복 작업", w.Body.String())
