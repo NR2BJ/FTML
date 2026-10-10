@@ -89,7 +89,7 @@ docker compose stop
 sh scripts/prepare-volume-permissions.sh --apply
 docker compose up -d --no-build --force-recreate
 docker compose ps
-docker compose logs --tail=100 backend whisper
+docker compose logs --tail=100 ftml-backend ftml-whisper
 ```
 
 한 명령이 실패하면 다음 단계로 진행하지 않는다. `down -v`, `volume rm`, `volume prune`는 사용하지 않는다. 새 설치도 외부 볼륨을 만든 뒤 이 준비 도구를 실행할 수 있다. 기존 데이터가 없다면 백업은 빈 볼륨의 자료만 포함한다.
@@ -99,11 +99,11 @@ docker compose logs --tail=100 backend whisper
 직접 Compose이면 다음 명령을 사용한다. Portainer이면 각 컨테이너의 Console에서 `id` 등의 내부 명령을 실행하거나 `docker exec 실제컨테이너이름 ...`을 사용한다.
 
 ```sh
-docker compose exec backend id
-docker compose exec whisper id
-docker compose exec backend sh -ec 'test -r /media; test -x /media; test -w /data; stat -c "%u:%g %a %n" /data /data/videostream.db; ls -ln /dev/dri'
-docker compose exec whisper sh -ec 'test -w /models; test -w "$HOME"; test -w "$NUMBA_CACHE_DIR"; printf "%s\n" "$HF_HOME" "$HF_HUB_CACHE"; ls -ln /dev/dri'
-docker compose exec backend vainfo --display drm --device /dev/dri/renderD128
+docker compose exec ftml-backend id
+docker compose exec ftml-whisper id
+docker compose exec ftml-backend sh -ec 'test -r /media; test -x /media; test -w /data; stat -c "%u:%g %a %n" /data /data/videostream.db; ls -ln /dev/dri'
+docker compose exec ftml-whisper sh -ec 'test -w /models; test -w "$HOME"; test -w "$NUMBA_CACHE_DIR"; printf "%s\n" "$HF_HOME" "$HF_HUB_CACHE"; ls -ln /dev/dri'
+docker compose exec ftml-backend vainfo --display drm --device /dev/dri/renderD128
 ```
 
 UID/GID가 1000인지, 실제 GPU 그룹이 보조 그룹에 있는지 확인한다. GPU 장치 경로가 다르면 `vainfo`의 경로를 바꾼다. 이어서 실제 영상 재생/GPU 변환, 자막 생성/번역을 확인한다. 미디어 마운트의 읽기 전용 여부는 `docker inspect 실제백엔드이름 --format '{{json .Mounts}}'`에서 `Destination: /media`의 `RW: false`로 확인한다. 실제 미디어 파일을 만들어 검사하지 않는다. Whisper 로그에 모델 쓰기 거부나 `/root` 접근 오류가 없어야 한다. UID 1000 표시는 앱 로그인 계정과 무관하며 관리자/일반 사용자 모두 서버의 파일 접근은 같은 OS 계정으로 수행한다.

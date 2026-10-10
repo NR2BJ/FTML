@@ -1,5 +1,5 @@
 services:
-  backend:
+  ftml-backend:
     deploy:
       resources:
         reservations:

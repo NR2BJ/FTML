@@ -28,6 +28,8 @@ ghcr.io/nr2bj/ftml-whisper:<전체 커밋 SHA>
 
 처음 설치하는 경우 Docker Compose, 영상 폴더, `/dev/dri` 장치와 외부 볼륨 `ftml_data`, `whisper_models`가 필요하다. 네트워크는 Compose가 스택별로 자동 생성한다(스택 이름이 `ftml`이면 `ftml_default`). 백엔드·음성 인식은 UID/GID `1000:1000`으로 실행한다. [볼륨 권한 안내](docs/container-permissions.md)에 따라 처음 한 번 권한을 준비한다. 기존 볼륨을 삭제하거나 다시 초기화하지 않는다.
 
+서비스와 컨테이너 이름은 모두 `ftml-frontend`, `ftml-backend`, `ftml-whisper`로 고정한다. 기존 `ftml-*-1` 컨테이너에서 전환할 때는 [이름 변경 절차](docs/ghcr-portainer.md#서비스컨테이너-이름-전환)를 먼저 따른다. 고정 이름을 쓰므로 같은 Docker 호스트에서 두 번째 FTML 스택을 동시에 실행하려면 별도 이름이 필요하다.
+
 `.env.example`에는 비밀 값이 없다. 관리자 암호는 직접 지정하고 JWT 키는 기존 값을 유지한다. 모델은 `whisper_models`, DB·생성/번역 자막·썸네일·변환 캐시는 `ftml_data`에 저장한다. 미디어 마운트는 읽기 전용이다. 영상 업로드·이동·삭제는 copyparty 등 별도 도구에서 처리하며 앱의 자막 추출·번역·삭제는 계속 가능하다.
 
 직접 소스 빌드가 필요한 개발 환경은 `docker-compose.build.yml`을 추가한다. 기본 배포는 Linux amd64 + Intel GPU용이다. `docker-compose.nvidia.yml`은 기존 영상 변환용 보조 설정일 뿐 Qwen/Whisper CUDA 구성을 제공하지 않는다.

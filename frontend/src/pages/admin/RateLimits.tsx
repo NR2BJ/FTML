@@ -169,7 +169,7 @@ export default function RateLimits() {
           Rate limits can also be managed via Docker CLI for emergency access:
         </p>
         <code className="block mt-2 text-xs text-gray-500 font-mono bg-dark-950 rounded px-3 py-2">
-          docker exec ftml-backend-1 curl -X DELETE http://localhost:8080/internal/ratelimit
+          docker exec ftml-backend curl -X DELETE http://localhost:8080/internal/ratelimit
         </code>
       </div>
     </div>

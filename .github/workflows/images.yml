@@ -33,6 +33,8 @@ jobs:
         working-directory: backend
       - run: npm ci && npm test && npm run build
         working-directory: frontend
+      - name: 배포 설정 및 볼륨 안전장치 검사
+        run: python3 -m unittest discover -s tests -v
       - name: Compose 검사
         env:
           ADMIN_PASSWORD: ci-only-password

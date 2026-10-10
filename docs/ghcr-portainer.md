@@ -22,7 +22,7 @@ GitHub 공개 저장소와 GHCR 공개 여부는 별개다. 최초 게시 후 Gi
 2. 백엔드를 중지한 상태에서 `ftml_data` 볼륨 전체를 백업한다. 실행 중 SQLite 파일 하나만 복사하면 WAL 변경이 빠질 수 있다. 미디어와 모델 볼륨을 삭제하거나 초기화하지 않는다.
 3. GitHub Actions의 이미지 게시 성공과 세 패키지 공개 상태를 먼저 확인한다.
 4. Portainer → Stacks → 기존 FTML 스택 → **Detach from Git**을 선택한다. Git 연결 해제는 되돌릴 수 없으나 컨테이너·외부 볼륨을 삭제하는 작업은 아니다. 기존 `.env`나 추가 Compose 파일은 자동 보존되지 않으므로 1번의 환경 변수를 확인한다.
-5. 같은 스택의 **Editor**에서 저장소의 새 `docker-compose.yml` 내용을 기준으로 변경한다. `build:` 대신 `image:`를 사용하며 기존 서비스 이름, 미디어 경로, 외부 볼륨·네트워크 이름을 유지한다.
+5. 같은 스택의 **Editor**에서 저장소의 새 `docker-compose.yml` 내용을 기준으로 변경한다. `build:` 대신 `image:`를 사용하며 미디어 경로와 외부 볼륨 이름은 유지한다. 예전 서비스 이름을 쓰고 있다면 아래 이름 전환 절차를 먼저 따른다.
 6. 아래 환경 변수를 확인하고 **Update the stack**을 실행한다. `latest`를 쓰면 이미지 다시 받기 옵션(Re-pull image / Pull latest image)을 켠다. SHA 변경 시에도 새 이미지가 정상적으로 받아졌는지 확인한다.
 7. 세 컨테이너의 상태와 로그를 확인하고 브라우저를 새로고침한다. 로그인·영상 목록·재생·기존 자막·작업 이력이 유지되는지 확인한다.
 
@@ -42,11 +42,30 @@ GitHub 공개 저장소와 GHCR 공개 여부는 별개다. 최초 게시 후 Gi
 
 `ftml_data`, `whisper_models`는 기존 외부 볼륨 이름 그대로다. 이미 UID/GID 1000으로 이전했다면 이번에 다시 전체 파일의 소유권을 바꿀 필요가 없다. 다른 볼륨 이름을 쓰던 설치는 YAML의 외부 이름을 실제 값과 맞춘다.
 
-네트워크는 외부 `homeserver-net` 대신 Compose의 스택별 기본 네트워크를 사용한다. 스택 이름이 `ftml`이면 보통 `ftml_default`이며, 세 서비스는 `backend:8080`, `whisper:8178` 같은 서비스 이름으로 서로 접근한다. Portainer Editor에서 각 서비스의 `networks`와 마지막 외부 `networks` 선언을 제거한 뒤 재배포해야 적용된다. 외부 역방향 프록시가 `frontend:80` 같은 컨테이너 이름으로 접속하고 있었다면 연결이 끊길 수 있으므로, 게시한 호스트 포트(기본 7979)로 접근하도록 별도로 확인한다. 기존 공유 네트워크 자체는 삭제하지 않는다.
+네트워크는 외부 `homeserver-net` 대신 Compose의 스택별 기본 네트워크를 사용한다. 스택 이름이 `ftml`이면 보통 `ftml_default`다. 현재 YAML의 `networks: default`와 `aliases`는 이 기본 네트워크 안에서 이전 내부 주소를 보존하기 위한 설정이며 외부 네트워크를 연결하지 않는다. 서비스는 새 이름으로도 접속할 수 있고, 기존 이미지의 `backend:8080` 및 DB에 저장된 `whisper:8178`도 계속 사용할 수 있다. 외부 역방향 프록시가 `frontend:80` 같은 컨테이너 이름으로 접속하고 있었다면 연결이 끊길 수 있으므로, 게시한 호스트 포트(기본 7979)로 접근하도록 별도로 확인한다. 기존 공유 네트워크 자체는 삭제하지 않는다. [Docker 네트워크 별칭 안내](https://docs.docker.com/reference/compose-file/services/#aliases).
+
+## 서비스·컨테이너 이름 전환
+
+현재 YAML은 서비스 키와 `container_name`을 모두 `ftml-frontend`, `ftml-backend`, `ftml-whisper`로 맞춘다. `-1` 접미사가 붙지 않는다. 이미지·외부 볼륨 이름과 저장 데이터는 바꾸지 않는다. 고정 컨테이너 이름은 같은 Docker 호스트에서 중복 사용할 수 없으며 서비스 복제에도 사용하지 않는다.
+
+예전 서비스 키 `frontend`, `backend`, `whisper`에서 바꾸는 경우에는 단순 이미지 교체가 아니라 새 서비스 생성으로 처리될 수 있다. 기존 컨테이너가 남아 포트나 DB를 중복 사용하지 않게 **첫 전환 때만** 아래 절차를 따른다.
+
+1. 진행 중 추출·번역과 재생을 마무리한다. Portainer의 현재 YAML과 환경 변수는 보관한다.
+2. 예전 FTML 컨테이너 세 개를 중지하고 제거한다. 스택 자체나 볼륨을 삭제하지 않는다. 실제 이름이 아래와 같을 때만 다음 명령을 사용한다.
+
+```sh
+docker stop --time 120 ftml-frontend-1 ftml-backend-1 ftml-whisper-1
+docker rm ftml-frontend-1 ftml-backend-1 ftml-whisper-1
+```
+
+3. 같은 Portainer 스택의 Editor에 새 YAML을 넣고 기존 환경 변수를 유지하여 업데이트한다. 이미지 다시 받기를 켠다. `ftml_data`, `whisper_models`는 그대로 연결한다. 이미 새 이름으로 전환했다면 2번은 반복하지 않는다.
+4. 새 이름의 컨테이너 세 개가 정상인지, 로그인·기존 자막·시청 이력·음성 인식 연결이 유지되는지 확인한다. 서비스 라벨로 조회하는 명령도 앞으로 `com.docker.compose.service=ftml-whisper`처럼 바꾼다.
+
+위 `docker rm`에는 `-v`가 없으며 저장 데이터가 있는 외부 볼륨을 지우지 않는다. 업데이트에 실패했을 때도 볼륨을 초기화하지 않는다. 이전 YAML로 되돌려야 한다면 새 이름의 컨테이너부터 중지하여 동일 DB에 두 백엔드가 동시에 접근하지 않게 한다.
 
 ## 다음 업데이트와 복구
 
-이번 읽기 전용 변경은 **Portainer Editor의 backend → volumes → /media 항목에 `read_only: true`를 직접 설정**한다. 짧은 표기라면 `/실제/영상/폴더:/media:ro`다. 예전 `MEDIA_READ_ONLY` 참조는 제거한다. 코드에서 미디어 쓰기 API도 제거했으며, 기존 미디어와 과거 `.trash`는 삭제하지 않는다.
+이번 읽기 전용 변경은 **Portainer Editor의 ftml-backend → volumes → /media 항목에 `read_only: true`를 직접 설정**한다. 짧은 표기라면 `/실제/영상/폴더:/media:ro`다. 예전 `MEDIA_READ_ONLY` 참조는 제거한다. 코드에서 미디어 쓰기 API도 제거했으며, 기존 미디어와 과거 `.trash`는 삭제하지 않는다.
 
 Whisper의 `environment` 목록에 `WHISPER_SPEECH_BOUNDARIES=${WHISPER_SPEECH_BOUNDARIES:-true}`를 추가하면 Portainer 환경 변수로 보정을 끌 수 있다. 미지정 시에도 서버 기본값은 켜짐이다. 자막과 시청 이력은 기존 볼륨을 유지한다.
 

@@ -146,12 +146,23 @@ class VolumePermissionsTests(unittest.TestCase):
 
 
 class RuntimeImageTests(unittest.TestCase):
-    def test_compose_uses_implicit_stack_network_and_keeps_external_volumes(self):
+    def test_compose_uses_default_stack_network_and_keeps_external_volumes(self):
         content = (ROOT / "docker-compose.yml").read_text()
-        self.assertNotRegex(content, r"(?m)^\s*networks:")
+        self.assertRegex(content, r"(?m)^networks:\n  default: \{\}")
         self.assertNotIn("homeserver-net", content)
         self.assertRegex(content, r"ftml_data:\s+external: true")
         self.assertRegex(content, r"whisper_models:\s+external: true")
+
+    def test_compose_names_match_and_preserve_old_connection_aliases(self):
+        content = (ROOT / "docker-compose.yml").read_text()
+        for service in ("frontend", "backend", "whisper"):
+            name = "ftml-" + service
+            self.assertIn(f"  {name}:\n    container_name: {name}\n", content)
+            self.assertIn(f"aliases: [{service}]", content)
+            self.assertNotRegex(content, rf"(?m)^  {service}:")
+            self.assertIn(f"  {name}:\n", (ROOT / "docker-compose.build.yml").read_text())
+        self.assertIn("depends_on:\n      - ftml-backend", content)
+        self.assertIn("  ftml-backend:\n", (ROOT / "docker-compose.nvidia.yml").read_text())
 
     def test_image_includes_context_alignment_module(self):
         content = (ROOT / "whisper/Dockerfile.openvino-genai").read_text()
