@@ -84,8 +84,13 @@ func (q *JobQueue) Enqueue(jobType JobType, filePath string, params interface{})
 		return nil, fmt.Errorf("marshal params: %w", err)
 	}
 	// 실행 중인 같은 요청만 합친다. 완료 후 의도적인 재작업은 별도 이력으로 남긴다.
+	comparison := "CAST(params AS TEXT) = ?"
+	if jobType == JobTranslate {
+		// 표시용 원본 이름의 추가/변경으로 같은 번역이 중복 실행되면 안 된다.
+		comparison = "json_remove(CAST(params AS TEXT), '$.source_label') = json_remove(?, '$.source_label')"
+	}
 	var existing string
-	err = q.db.QueryRow(`SELECT id FROM jobs WHERE type = ? AND file_path = ? AND CAST(params AS TEXT) = ? AND status IN (?, ?) ORDER BY created_at LIMIT 1`,
+	err = q.db.QueryRow(`SELECT id FROM jobs WHERE type = ? AND file_path = ? AND `+comparison+` AND status IN (?, ?) ORDER BY created_at LIMIT 1`,
 		jobType, filePath, string(paramsJSON), StatusPending, StatusRunning).Scan(&existing)
 	if err == nil {
 		return q.GetJob(existing)

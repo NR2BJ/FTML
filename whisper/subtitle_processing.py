@@ -4,7 +4,7 @@ import math
 from difflib import SequenceMatcher
 
 
-def timed_words_to_chunks(words, segments, offset=0, total_duration=None):
+def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, engine="whisper"):
     """유효한 단어 시각은 보존하고 불일치한 원문 부분만 이웃 시각으로 제한한다."""
     fallback = normalize_chunks(segments, offset, total_duration)
     if not words:
@@ -23,7 +23,7 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None):
         entries.append((len(word_text), len(word_text)+len(key), start, end))
         word_text += key
     blocks = SequenceMatcher(None, canonical(source), word_text, autojunk=False).get_matching_blocks()
-    timed, cursor = [], 0
+    result, timed, cursor = [], [], 0
     for segment in fallback:
         first_item = len(timed)
         text = segment["text"]
@@ -70,16 +70,27 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None):
                 del timed[first_item:]
                 timed.append(dict(segment))
         cursor += len(letters)
-    return group_timed_words(timed, total_duration)
+        # 모델이 나눈 발언 경계는 후처리에서 다시 합치지 않는다.
+        result.extend(group_timed_words(timed[first_item:], total_duration,
+                                        gap_threshold=0.65 if engine == "qwen" else 0.3))
+    return normalize_chunks(result, total_duration=total_duration)
 
 
-def group_timed_words(timed, total_duration=None):
+def group_timed_words(timed, total_duration=None, *, gap_threshold=0.3):
     result, current = [], None
     for word in timed:
+        gap = word["start_ts"] - current["end_ts"] if current else 0
+        # 길이 목표를 넘겨도 일본어의 단어 조각 한가운데를 먼저 자르지 않는다.
+        boundary = bool(current and (gap >= 0.12 or current["text"].endswith((" ", "、", ",", ";", "；", ":", "："))
+                                     or word["text"].startswith(" ")))
+        length = len(current["text"] + word["text"]) if current else 0
+        duration = word["end_ts"] - current["start_ts"] if current else 0
         if current and (word["start_ts"] < current["end_ts"]
-                        or word["start_ts"] - current["end_ts"] >= 0.45
-                        or word["end_ts"] - current["start_ts"] > 6
-                        or len(current["text"] + word["text"]) > 56):
+                        or gap >= gap_threshold
+                        or (gap >= 0.3 and current["end_ts"]-current["start_ts"] >= 0.4
+                            and current["text"].rstrip().endswith(("、", ",", ";", "；", ":", "：")))
+                        or (boundary and (duration > 6 or length > 56))
+                        or duration > 12 or length > 112):
             result.append(current)
             current = None
         if current is None:
@@ -87,12 +98,31 @@ def group_timed_words(timed, total_duration=None):
         else:
             current["text"] += word["text"]
             current["end_ts"] = max(current["end_ts"], word["end_ts"])
-        if current["text"].rstrip().endswith(("。", "！", "？", ".", "!", "?")):
+        if current["text"].rstrip(' \t\n\"\'」』）)]').endswith(("。", "！", "？", ".", "!", "?")):
             result.append(current)
             current = None
     if current:
         result.append(current)
     return normalize_chunks(result, total_duration=total_duration)
+
+
+def stabilize_short_cues(chunks, total_duration):
+    """Qwen의 순간 표시만 완화한다. 시작을 당기거나 다음 발언을 덮지 않는다."""
+    result = [dict(cue) for cue in chunks]
+    previous_end = -math.inf
+    for index, cue in enumerate(result):
+        overlapping = previous_end > cue["start_ts"]
+        previous_end = max(previous_end, cue["end_ts"])
+        if cue["end_ts"] - cue["start_ts"] >= 0.65:
+            continue
+        # 겹친 화자의 자막은 그대로 둔다. 긴 무음을 채우지 않고 최대 0.55초만 연장한다.
+        if overlapping:
+            continue
+        limit = total_duration
+        if index+1 < len(result):
+            limit = min(limit, result[index+1]["start_ts"] - 0.04)
+        cue["end_ts"] = max(cue["end_ts"], min(cue["start_ts"] + 0.65, cue["end_ts"] + 0.55, limit))
+    return result
 
 
 def format_ts(seconds):

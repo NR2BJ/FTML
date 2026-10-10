@@ -84,6 +84,11 @@ func TestSubtitleSubmissionPathsShareValidationAndMapping(t *testing.T) {
 	if result.Items[1].SubtitleID != "external:b.zh.vtt" {
 		t.Fatal(w.Body.String())
 	}
+	translated, err := q.GetJob(result.Items[1].JobID)
+	var translation job.TranslateParams
+	if err != nil || json.Unmarshal(translated.Params, &translation) != nil || translation.SourceLabel != "외부 자막 b.zh.vtt" {
+		t.Fatal("실제 원본 이름 저장 실패", err)
+	}
 	w = post("/tasks", `{"paths":["a.mkv"],"mode":"generate-translate","generate":{"language":"ja"},"translate":{"target_lang":"ko","engine":"deepl"}}`)
 	if w.Code != 400 {
 		t.Fatal("연속 작업 번역 설정 검증 누락", w.Body.String())

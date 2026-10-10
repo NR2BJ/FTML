@@ -1,10 +1,43 @@
 package job
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 )
+
+type TranslationSource struct {
+	ID    string
+	Label string
+}
+
+// 완료 이력으로 원본이 삭제된 번역본과 예전 파일 이름의 출처도 복원한다.
+func (q *JobQueue) TranslationSources(path string) (map[string]TranslationSource, error) {
+	rows, err := q.db.Query(`SELECT params, result FROM jobs
+		WHERE file_path = ? AND type = 'translate' AND status = 'completed'
+		ORDER BY completed_at DESC, created_at DESC, id DESC`, path)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	sources := make(map[string]TranslationSource)
+	for rows.Next() {
+		var params, result []byte
+		if err := rows.Scan(&params, &result); err != nil {
+			return nil, err
+		}
+		var p TranslateParams
+		var r TranslateResult
+		if json.Unmarshal(params, &p) != nil || json.Unmarshal(result, &r) != nil || p.SubtitleID == "" || r.OutputPath == "" {
+			continue
+		}
+		if _, exists := sources[r.OutputPath]; !exists {
+			sources[r.OutputPath] = TranslationSource{ID: p.SubtitleID, Label: p.SourceLabel}
+		}
+	}
+	return sources, rows.Err()
+}
 
 const jobColumns = "id, type, status, file_path, params, progress, result, error, created_at, started_at, completed_at, parent_id, retry_of"
 

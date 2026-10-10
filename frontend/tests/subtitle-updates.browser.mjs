@@ -47,6 +47,7 @@ try {
     if(url.pathname==='/api/jobs/translate-1')return route.fulfill({json:jobs.find(j=>j.id==='translate-1')})
     if(url.pathname==='/api/jobs/tracked')return route.fulfill({json:jobs})
     if(url.pathname==='/api/presets')return route.fulfill({json:[]})
+    if(url.pathname.startsWith('/api/subtitle/reference/'))return route.fulfill({json:{scope:'first.mkv',title:'',terms:[],songs:[],sources:[]}})
     if(url.pathname.startsWith('/api/subtitle/list/')) {
       listRequests++
       const snapshot=JSON.stringify(url.pathname.endsWith('second.mkv')?[{...source,id:'external:second.ass',label:'두 번째 영상 자막'}]:entries)
@@ -81,7 +82,7 @@ try {
   jobs=[{...jobs[0],status:'completed',completed_at:'2026-10-09T00:00:01Z'}]
   await page.waitForFunction(()=>window.player.getState().subtitles.length===2,null,{timeout:8000})
   await page.getByTitle('Subtitles',{exact:true}).click()
-  await page.getByRole('button',{name:/한국어 번역\s*AI/}).click()
+  await page.getByRole('button',{name:/한국어 번역\s*저장/}).click()
   await page.getByText('새 한국어 자막',{exact:true}).waitFor()
   console.log('번역 창을 닫아도 3초 주기로 완료 감지, 목록 갱신 및 새 자막 선택 통과')
 

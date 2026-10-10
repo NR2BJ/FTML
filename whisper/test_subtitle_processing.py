@@ -1,6 +1,6 @@
 import unittest
 
-from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks, timed_words_to_chunks, stitch_chunks
+from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks, timed_words_to_chunks, stitch_chunks, group_timed_words, stabilize_short_cues
 
 
 def cue(text, start, end):
@@ -8,6 +8,58 @@ def cue(text, start, end):
 
 
 class SubtitleProcessingTests(unittest.TestCase):
+    def test_native_utterances_remain_separate_without_punctuation(self):
+        segments = [cue("三時です", 0, 1), cue("はい", 1, 1.2), cue("入口はどこ", 1.2, 2.5)]
+        words = [{"word": c["text"], "start_ts": c["start_ts"], "end_ts": c["end_ts"]} for c in segments]
+        self.assertEqual(timed_words_to_chunks(words, segments), segments)
+
+    def test_model_specific_pause_does_not_join_sentences_or_long_silence(self):
+        words = [dict(word="続き", start_ts=0, end_ts=1), dict(word="です。", start_ts=1.5, end_ts=2),
+                 dict(word="次。", start_ts=2.1, end_ts=3), dict(word="後。", start_ts=4, end_ts=5)]
+        segments = [cue("続きです。次。後。", 0, 5)]
+        self.assertEqual(len(timed_words_to_chunks(words, segments)), 4)
+        self.assertEqual(timed_words_to_chunks(words, segments, engine="qwen"),
+                         [cue("続きです。", 0, 2), cue("次。", 2.1, 3), cue("後。", 4, 5)])
+
+    def test_soft_length_limit_does_not_cut_japanese_fragments(self):
+        parts = [cue(c, i*0.5, (i+1)*0.5) for i, c in enumerate("明日の仕事について説明します")]
+        result = group_timed_words(parts)
+        self.assertEqual(result, [cue("明日の仕事について説明します", 0, len(parts)*0.5)])
+
+    def test_length_limit_still_splits_at_spaces_and_has_hard_bound(self):
+        english = [cue("word ", i*0.5, (i+1)*0.5) for i in range(30)]
+        self.assertGreater(len(group_timed_words(english)), 1)
+        continuous = [cue("あ", i*0.2, (i+1)*0.2) for i in range(150)]
+        result = group_timed_words(continuous)
+        self.assertEqual("".join(c["text"] for c in result), "あ"*150)
+        self.assertTrue(all(c["end_ts"]-c["start_ts"] <= 12.001 for c in result))
+
+    def test_quotes_keep_sentence_boundary_and_slashes_are_not_removed(self):
+        result = group_timed_words([cue("「はい。」", 0, 1), cue("A / B", 1, 2)])
+        self.assertEqual(result, [cue("「はい。」", 0, 1), cue("A / B", 1, 2)])
+
+    def test_qwen_keeps_pause_after_clause_but_joins_flash_fragment(self):
+        clauses = [cue("田中さん、", 0, 0.5), cue("いつですか？", 1.1, 2)]
+        self.assertEqual(group_timed_words(clauses, gap_threshold=0.65), clauses)
+        fragment = [cue("あ、", 0, 0.08), cue("続き。", 0.56, 2)]
+        self.assertEqual(group_timed_words(fragment, gap_threshold=0.65), [cue("あ、続き。", 0, 2)])
+
+    def test_short_hold_never_advances_start_or_covers_next_utterance(self):
+        original = [cue("a", 1, 1.08), cue("b", 3, 3.16), cue("c", 3.4, 3.48), cue("end", 9.9, 9.98)]
+        result = stabilize_short_cues(original, 10)
+        self.assertAlmostEqual(result[0]["end_ts"], 1.63)
+        self.assertAlmostEqual(result[1]["end_ts"], 3.36)
+        self.assertAlmostEqual(result[-1]["end_ts"], 10)
+        for before, after in zip(original, result):
+            self.assertEqual(before["text"], after["text"])
+            self.assertEqual(before["start_ts"], after["start_ts"])
+            self.assertLessEqual(after["end_ts"]-before["end_ts"], 0.550001)
+        self.assertEqual(original[0]["end_ts"], 1.08)
+
+    def test_short_hold_preserves_overlaps_and_long_silence(self):
+        cues = [cue("speaker one", 0, 3), cue("speaker two", 2, 2.1), cue("speaker three", 2.5, 2.6), cue("later", 20, 22)]
+        self.assertEqual(stabilize_short_cues(cues, 30), cues)
+
     def test_one_bad_segment_does_not_reset_good_segment_timing(self):
         words = [{"word":"first", "start_ts":2, "end_ts":3}, {"word":"mismatch", "start_ts":7, "end_ts":8}]
         self.assertEqual(timed_words_to_chunks(words, [cue("first",0,4),cue("second",6,10)]), [cue("first",2,3),cue("second",6,10)])

@@ -32,7 +32,7 @@ from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel
 from inference_runtime import ModelGate, STORAGE_FULL_MESSAGE, is_storage_full
-from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks, timed_words_to_chunks, stitch_chunks
+from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks, timed_words_to_chunks, stitch_chunks, stabilize_short_cues
 from qwen_pipeline import MODELS as QWEN_MODELS
 from qwen_alignment import QwenAlignmentError
 
@@ -223,7 +223,8 @@ def _generate_timed_chunks(audio, config, offset, total_duration, cancel=None, d
             log.info("Qwen 정렬 구간 재처리 완료: %.3f~%.3fs, %d개 자막", *window, len(recovered))
         return recovered
     check_cancelled(cancel)
-    return timed_words_to_chunks(getattr(result, "words", None), getattr(result, "chunks", []) or [], offset, total_duration)
+    return timed_words_to_chunks(getattr(result, "words", None), getattr(result, "chunks", []) or [], offset, total_duration,
+                                 engine="qwen" if model_id_str in QWEN_MODELS else "whisper")
 
 
 def _recover_gaps(audio_getter, chunks, config, total_duration, sr=16000, cancel=None):
@@ -290,6 +291,8 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
             break
         position = end - overlap_samples
     chunks = _recover_gaps(audio_getter, chunks, config, total_duration, sr, cancel)
+    if model_id_str in QWEN_MODELS:
+        chunks = stabilize_short_cues(chunks, total_duration)
     # 완전한 디지털 무음만 자른다. 배경음/작은 목소리를 VAD처럼 판정하지 않는다.
     trimmed = []
     for cue in chunks:
@@ -371,7 +374,7 @@ def _run_upload(file_obj, language, cancel, model="", prompt="", lyrics=None, ob
             original = " ".join(c["text"] for c in chunks if start <= c["start_ts"] and c["end_ts"] <= end)
             aligned = pipeline.align_reference(audio, lyrics["text"], language, original)
             check_cancelled(cancel)
-            replacement = timed_words_to_chunks(aligned.words, aligned.chunks, start, duration)
+            replacement = timed_words_to_chunks(aligned.words, aligned.chunks, start, duration, engine="qwen")
             if not replacement:
                 raise ValueError("참고 가사의 시각을 확인하지 못했습니다")
             chunks = normalize_chunks([c for c in chunks if c["end_ts"] <= start or c["start_ts"] >= end] + replacement)

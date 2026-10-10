@@ -129,10 +129,10 @@ export default function SubtitleManagerDialog({ file, onClose, onTranslate }: Su
                   >
                     <div className="flex items-center gap-2.5 min-w-0 flex-1">
                       <span className={`text-[10px] px-1.5 py-0.5 rounded border shrink-0 ${typeColors[sub.type] || ''}`}>
-                        {sub.type}
+                        {sub.type === 'generated' ? '저장' : sub.type === 'embedded' ? '내장' : '외부'}
                       </span>
                       <div className="min-w-0">
-                        <p className="text-sm text-gray-300 truncate">{sub.label}</p>
+                        <p className="text-sm text-gray-300 break-words [overflow-wrap:anywhere]" title={sub.label}>{sub.label}</p>
                         <p className="text-xs text-gray-600">
                           {sub.language && <span>{sub.language}</span>}
                           {sub.format && <span> · {sub.format}</span>}

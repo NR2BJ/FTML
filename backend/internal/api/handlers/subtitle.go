@@ -222,28 +222,7 @@ func (h *SubtitleHandler) subtitleEntries(path, fullPath string, includeEmbedded
 				continue
 			}
 
-			label := name
-			lang := ""
-			// Parse generated subtitle filenames: whisper_ja.vtt, translate_ko_gemini.vtt
-			baseName := strings.TrimSuffix(name, ext)
-			if strings.HasPrefix(baseName, "whisper_") {
-				detail := strings.TrimPrefix(baseName, "whisper_")
-				lang = strings.SplitN(detail, "_", 2)[0]
-				label = fmt.Sprintf("생성 (%s)", detail)
-			} else if strings.HasPrefix(baseName, "qwen3_") {
-				detail := strings.TrimPrefix(baseName, "qwen3_")
-				lang = strings.SplitN(detail, "_", 2)[0]
-				label = fmt.Sprintf("Qwen3 추출 (%s)", detail)
-				if strings.HasSuffix(detail, "_lyrics") {
-					label = fmt.Sprintf("Qwen3 가사 보정 (%s)", lang)
-				}
-			} else if strings.HasPrefix(baseName, "translate_") {
-				parts := strings.SplitN(strings.TrimPrefix(baseName, "translate_"), "_", 2)
-				if len(parts) == 2 {
-					lang = parts[0]
-					label = fmt.Sprintf("Translated %s (%s)", lang, parts[1])
-				}
-			}
+			label, lang := generatedSubtitleLabel(name)
 
 			entries = append(entries, SubtitleEntry{
 				ID:       "generated:" + name,
@@ -255,6 +234,16 @@ func (h *SubtitleHandler) subtitleEntries(path, fullPath string, includeEmbedded
 		}
 	}
 
+	var sources map[string]job.TranslationSource
+	if h.jobQueue != nil {
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.ID, "generated:translate_") {
+				sources, _ = h.jobQueue.TranslationSources(path)
+				break
+			}
+		}
+	}
+	applyTranslationLabels(entries, sources)
 	return entries
 }
 

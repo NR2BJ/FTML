@@ -63,6 +63,7 @@ type LyricsReference struct {
 // TranslateParams are parameters for a translation job
 type TranslateParams struct {
 	Reference    string `json:"reference,omitempty"`
+	SourceLabel  string `json:"source_label,omitempty"`
 	SubtitleID   string `json:"subtitle_id"`   // source subtitle ID (e.g., "generated:whisper_ja.vtt")
 	TargetLang   string `json:"target_lang"`   // "ko", "en", "ja", etc.
 	Engine       string `json:"engine"`        // "gemini"

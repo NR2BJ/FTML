@@ -89,6 +89,7 @@ func validateSubtitleTask(req *SubtitleTaskRequest) error {
 	if req.Mode == "generate-translate" {
 		copy := *req.Translate
 		copy.SubtitleID = ""
+		copy.SourceLabel = ""
 		req.Generate.ChainTranslate = &copy
 	}
 	return nil
@@ -138,6 +139,7 @@ func (h *SubtitleHandler) submitSubtitleTasks(w http.ResponseWriter, r *http.Req
 		kind := job.JobTranscribe
 		if item.Reason == "" && req.Mode == "translate" {
 			translation := *req.Translate
+			translation.SourceLabel = ""
 			translation.Reference = profile.TranslationContext()
 			entries := h.subtitleEntries(path, full, false)
 			// 추출본/업로드본이 있으면 일괄 등록 때 모든 영상을 다시 조사하지 않는다.
@@ -152,6 +154,7 @@ func (h *SubtitleHandler) submitSubtitleTasks(w http.ResponseWriter, r *http.Req
 			for _, entry := range entries {
 				if entry.ID == translation.SubtitleID {
 					found = true
+					translation.SourceLabel = subtitleSourceLabel(entry)
 					break
 				}
 			}

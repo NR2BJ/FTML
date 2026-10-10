@@ -22,6 +22,19 @@ except ImportError:
 
 @unittest.skipIf(server is None, "Install Whisper web/audio dependencies to run service tests")
 class ServerTests(unittest.TestCase):
+    def test_short_hold_is_qwen_only_and_does_not_override_digital_silence(self):
+        model = self.model([SimpleNamespace(text="reply", start_ts=1, end_ts=1.08)])
+        for engine, expected in [(server.DEFAULT_MODEL_ID, 1.08), ("Qwen/Qwen3-ASR-1.7B", 1.63)]:
+            with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", engine), patch.object(server, "GAP_MAX_RETRY_S", 0):
+                chunks, _, _, _ = server.run_inference(np.ones(3*16000), model=engine)
+                self.assertEqual(chunks[0]["start_ts"], 1)
+                self.assertAlmostEqual(chunks[0]["end_ts"], expected)
+        audio = np.zeros(3*16000)
+        audio[16000:round(1.08*16000)] = 1
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"), patch.object(server, "GAP_MAX_RETRY_S", 0):
+            chunks, _, _, _ = server.run_inference(audio, model="Qwen/Qwen3-ASR-1.7B")
+        self.assertAlmostEqual(chunks[0]["end_ts"], 1.10)
+
     def test_alignment_retry_is_local_and_keeps_absolute_timing(self):
         calls = []
         model = self.model([])

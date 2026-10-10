@@ -164,7 +164,7 @@ export default function SubtitleSelector({ownerDocument = document}: {ownerDocum
       </button>
 
       {panel === 'menu' && (
-        <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg py-1 min-w-[240px] z-50">
+        <div className="absolute bottom-8 right-0 bg-gray-900/95 border border-gray-700 rounded-lg py-1 w-[360px] max-w-[85vw] z-50">
           {/* Primary / Secondary tabs */}
           {subtitles.length > 0 && (
             <div className="flex border-b border-gray-700 mx-1 mb-1">
@@ -234,18 +234,19 @@ export default function SubtitleSelector({ownerDocument = document}: {ownerDocum
                         setSubtitleVisible(true)
                         setPanel(null)
                       }}
-                      className={`flex-1 text-left px-3 py-1.5 text-sm ${
+                      title={sub.label}
+                      className={`flex-1 min-w-0 break-words [overflow-wrap:anywhere] text-left px-3 py-1.5 text-sm ${
                         isActive ? 'text-primary-400' : 'text-gray-300'
                       }`}
                     >
                       <span>{sub.label}</span>
                       <span className="text-xs text-gray-500 ml-2">
-                        {sub.type === 'embedded' ? 'Embedded' : sub.type === 'generated' ? 'AI' : sub.format.toUpperCase()}
+                        {sub.type === 'embedded' ? '내장' : sub.type === 'generated' ? '저장' : sub.format.toUpperCase()}
                       </span>
                     </button>
                     {/* Action buttons (only for primary mode) */}
                     {subMode === 'primary' && (
-                      <div className={`flex items-center transition-opacity ${
+                      <div className={`flex shrink-0 items-center transition-opacity ${
                         sub.type === 'generated'
                           ? 'opacity-60 group-hover:opacity-100'
                           : 'opacity-0 group-hover:opacity-100'
