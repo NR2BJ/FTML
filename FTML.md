@@ -378,7 +378,7 @@ FTML/
 │       │   ├── Player/      # Player, Controls, QualitySelector, AudioSelector,
 │       │   │                # SubtitleDisplay/Selector/Generate/Translate/Settings,
 │       │   │                # PlaybackStats, NextEpisodeOverlay, ChapterList
-│       │   ├── Browse/      # BatchSubtitleDialog, ContextMenu, DetailsView
+│       │   ├── Browse/      # BatchSubtitleDialog, DetailsView, useBrowseSelection
 │       │   ├── layout/      # Header, Sidebar, Layout, JobIndicator
 │       │   └── WhisperModelManager, WhisperBackendManager, Toast
 │       └── pages/

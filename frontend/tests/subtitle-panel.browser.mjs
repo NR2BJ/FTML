@@ -2,13 +2,11 @@ import assert from 'node:assert/strict'
 import { createServer } from 'vite'
 const { chromium, firefox } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const html = `<!doctype html><html><body><div id="root"></div><script type="module">
-import React,{useState}from'react';import{createRoot}from'react-dom/client';import'/src/index.css';
-import Menu from'/src/components/Browse/ContextMenu.tsx';import Panel from'/src/components/Subtitles/SubtitleTaskDialog.tsx';
+import React from'react';import{createRoot}from'react-dom/client';import'/src/index.css';
+import{MemoryRouter}from'react-router-dom';import Browse from'/src/pages/Browse.tsx';
 import{useAuthStore}from'/src/stores/authStore.ts';import{useJobStore}from'/src/stores/jobStore.ts';import{usePlayerStore}from'/src/stores/playerStore.ts';
 window.auth=useAuthStore;window.jobs=useJobStore;window.player=usePlayerStore;useAuthStore.setState({user:{role:'admin'}});
-const entries=[{name:'a.mkv',path:'a.mkv',is_dir:false},{name:'b.mkv',path:'b.mkv',is_dir:false}];
-function App(){const[open,setOpen]=useState(false);return open?React.createElement(Panel,{paths:entries.map(e=>e.path),initialMode:'generate',onClose:()=>setOpen(false)}):React.createElement(Menu,{x:10,y:10,selectedEntries:entries,onClose:()=>{},onSubtitles:()=>setOpen(true)});}
-createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(App)));
+createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(MemoryRouter,null,React.createElement(Browse))));
 </script></body></html>`
 const server = await createServer({server:{host:'127.0.0.1',port:0,hmr:false},plugins:[{name:'subtitle-panel',configureServer(s){
   s.middlewares.use('/__panel.html',async(_req,res)=>{res.setHeader('Content-Type','text/html');res.end(await s.transformIndexHtml('/__panel.html',html))})
@@ -26,6 +24,9 @@ try {
   await page.route('**/api/**',async route=>{
     const url=new URL(route.request().url()), p=url.pathname
     if(!p.startsWith('/api/'))return route.continue()
+    if(p.startsWith('/api/files/tree/'))return route.fulfill({json:{entries:['a.mkv','b.mkv'].map(name=>({name,path:name,is_dir:false}))}})
+    if(p==='/api/files/batch-info')return route.fulfill({json:[]})
+    if(p.startsWith('/api/files/thumbnail/'))return route.fulfill({status:404})
     if(p==='/api/whisper/backends/available')return route.fulfill({json:[{value:'backend:1',label:'A380',type:'openvino-genai'}]})
     if(p==='/api/presets'||p==='/api/jobs/active')return route.fulfill({json:[]})
     if(p.startsWith('/api/subtitle/list/'))return route.fulfill({json:entries[p.split('/').at(-1)]})
@@ -43,8 +44,12 @@ try {
     throw Error(p)
   })
   await page.goto(`${server.resolvedUrls.local[0]}__panel.html`)
-  assert.equal(await page.getByRole('menuitem').count(),1)
-  await page.getByRole('menuitem',{name:'자막 패널',exact:true}).click()
+  await page.getByRole('button',{name:'a.mkv',exact:true}).click()
+  await page.getByRole('button',{name:'b.mkv',exact:true}).click({modifiers:['Shift']})
+  assert.equal(await page.getByRole('button',{name:'자막 패널',exact:true}).count(),0)
+  await page.getByRole('button',{name:'a.mkv',exact:true}).click({button:'right'})
+  await page.getByRole('dialog',{name:'자막 작업'}).waitFor()
+  assert.equal(await page.getByRole('menu').count(),0)
   const tabs=page.getByLabel('작업 종류',{exact:true}).getByRole('button')
   assert.equal(await tabs.last().innerText(),'자막 삭제')
   await page.getByRole('button',{name:'자막 삭제',exact:true}).click()
@@ -77,5 +82,5 @@ try {
   assert.equal(await page.getByRole('button',{name:'삭제 요청',exact:true}).count(),0)
   assert.equal(await page.getByLabel('작업 종류',{exact:true}).getByRole('button').count(),1)
   assert.deepEqual(errors,[])
-  console.log('단일 자막 메뉴, 오른쪽 삭제 탭, 확인/취소, 완료 결과 즉시 갱신, 영상별 목록, 관리자/사용자/열람 권한 통과')
+  console.log('우클릭 직접 패널, 오른쪽 삭제 탭, 확인/취소, 완료 결과 즉시 갱신, 영상별 목록, 관리자/사용자/열람 권한 통과')
 } finally {await browser?.close();await server.close()}
