@@ -115,6 +115,7 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		TargetLang:   params.TargetLang,
 		Preset:       params.Preset,
 		CustomPrompt: params.CustomPrompt,
+		Reference:    params.Reference,
 	}, updateProgress)
 	if err != nil {
 		return fmt.Errorf("translate: %w", err)
@@ -190,6 +191,9 @@ func detectSourceLang(subtitleID string) string {
 
 	if strings.HasPrefix(name, "whisper_") {
 		return strings.SplitN(strings.TrimPrefix(name, "whisper_"), "_", 2)[0]
+	}
+	if strings.HasPrefix(name, "qwen3_") {
+		return strings.SplitN(strings.TrimPrefix(name, "qwen3_"), "_", 2)[0]
 	}
 	if strings.HasPrefix(name, "translate_") {
 		parts := strings.SplitN(strings.TrimPrefix(name, "translate_"), "_", 2)

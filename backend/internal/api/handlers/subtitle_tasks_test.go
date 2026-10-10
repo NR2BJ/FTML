@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/job"
+	"github.com/video-stream/backend/internal/subtitle/reference"
 )
 
 func TestSubtitleSubmissionPathsShareValidationAndMapping(t *testing.T) {
@@ -87,6 +88,42 @@ func TestSubtitleSubmissionPathsShareValidationAndMapping(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &result)
 	if len(result.Items) != 2 || result.Items[0].Reason == "" || result.Items[1].Reason == "" {
 		t.Fatal(w.Body.String())
+	}
+	profile := reference.Profile{Scope: "a.mkv", Title: "작품", Terms: []reference.Term{{Original: "名前", Reading: "なまえ", Korean: "이름"}}}
+	if err = reference.Save(d, profile); err != nil {
+		t.Fatal(err)
+	}
+	w = post("/tasks", `{"paths":["a.mkv","b.mkv"],"mode":"generate-translate","generate":{"model":"Qwen/Qwen3-ASR-1.7B","language":"ja"},"translate":{"target_lang":"ko","engine":"gemini"}}`)
+	if w.Code != 201 {
+		t.Fatal(w.Body.String())
+	}
+	json.Unmarshal(w.Body.Bytes(), &result)
+	for i, item := range result.Items {
+		j, err := q.GetJob(item.JobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var params job.TranscribeParams
+		if json.Unmarshal(j.Params, &params) != nil || params.Model != "Qwen/Qwen3-ASR-1.7B" || params.ChainTranslate == nil {
+			t.Fatal(string(j.Params))
+		}
+		if i == 0 && (!strings.Contains(params.Hints, "なまえ") || !strings.Contains(params.ChainTranslate.Reference, "이름")) {
+			t.Fatal("작품 참고 누락", string(j.Params))
+		}
+		if i == 1 && (params.Hints != "" || params.ChainTranslate.Reference != "") {
+			t.Fatal("다른 작품 사전 적용", string(j.Params))
+		}
+	}
+	profile.Terms[0].Original = "changed"
+	if err = reference.Save(d, profile); err != nil {
+		t.Fatal(err)
+	}
+	if err = d.SetSetting("whisper_model_id", defaultModelID); err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := q.GetJob(result.Items[0].JobID)
+	if err != nil || !strings.Contains(string(frozen.Params), "名前") || !strings.Contains(string(frozen.Params), "Qwen/Qwen3-ASR-1.7B") {
+		t.Fatal("등록한 작업의 설정 변경", err)
 	}
 }
 

@@ -154,6 +154,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				r.Post("/subtitle/upload/*", subtitleHandler.UploadSubtitle)
 				r.Post("/subtitle/batch-generate", subtitleHandler.BatchGenerate)
 				r.Post("/subtitle/tasks", subtitleHandler.SubmitSubtitleTasks)
+				r.Get("/subtitle/reference/*", subtitleHandler.Reference)
 				r.Post("/subtitle/batch-translate", subtitleHandler.BatchTranslate)
 				r.Post("/subtitle/batch-generate-translate", subtitleHandler.BatchGenerateTranslate)
 				r.Post("/subtitle/convert/*", subtitleHandler.ConvertSubtitle)
@@ -169,6 +170,8 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 
 				// Subtitle delete — admin only
 				r.Delete("/subtitle/delete/*", subtitleHandler.DeleteSubtitle)
+				r.Put("/subtitle/reference/*", subtitleHandler.Reference)
+				r.Post("/subtitle/reference-search/*", subtitleHandler.SearchReference)
 
 				// Settings
 				r.Get("/settings", settingsHandler.GetSettings)

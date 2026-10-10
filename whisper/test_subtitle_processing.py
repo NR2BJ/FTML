@@ -1,6 +1,6 @@
 import unittest
 
-from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks, timed_words_to_chunks
+from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks, timed_words_to_chunks, stitch_chunks
 
 
 def cue(text, start, end):
@@ -8,6 +8,34 @@ def cue(text, start, end):
 
 
 class SubtitleProcessingTests(unittest.TestCase):
+    def test_one_bad_segment_does_not_reset_good_segment_timing(self):
+        words = [{"word":"first", "start_ts":2, "end_ts":3}, {"word":"mismatch", "start_ts":7, "end_ts":8}]
+        self.assertEqual(timed_words_to_chunks(words, [cue("first",0,4),cue("second",6,10)]), [cue("first",2,3),cue("second",6,10)])
+
+    def test_invalid_word_keeps_neighboring_word_time(self):
+        words = [{"word":"hello!", "start_ts":3, "end_ts":4}, {"word":"next", "start_ts":float("nan"), "end_ts":9}]
+        result = timed_words_to_chunks(words,[cue("hello! next",0,10)])
+        self.assertEqual(result[0],cue("hello!",3,4))
+        self.assertEqual("".join(c["text"] for c in result).replace(" ",""),"hello!next")
+
+    def test_quotes_and_original_spelling_are_preserved(self):
+        words = [{"word":"はい", "start_ts":2, "end_ts":3}]
+        self.assertEqual(timed_words_to_chunks(words,[cue("「はい。」",0,4)]), [cue("「はい。」",2,3)])
+
+    def test_recovery_cannot_add_different_dialogue_over_existing(self):
+        result = merge_chunks([cue("actual",10,12)],[cue("thanks",10,12),cue("new",15,16)],recovery=True)
+        self.assertEqual(result,[cue("actual",10,12),cue("new",15,16)])
+
+    def test_stitch_does_not_stack_two_inferences_of_same_window(self):
+        result = stitch_chunks([cue("first version",24,28)],[cue("second version",24.2,28.2),cue("next",29,30)],27.5)
+        self.assertEqual(result,[cue("first version",24,28),cue("next",29,30)])
+
+    def test_stitch_retains_words_missed_by_one_pass(self):
+        existing = [cue("a",24,25),cue("b",28,29)]
+        self.assertEqual(stitch_chunks(existing,[],27.5),existing)
+        self.assertEqual(stitch_chunks(existing,[cue("new",26,27),cue("c",31,32)],27.5),
+                         [cue("a",24,25),cue("new",26,27),cue("b",28,29),cue("c",31,32)])
+
     def test_word_boundaries_do_not_fill_silence(self):
         result = timed_words_to_chunks([
             {"word": "hello", "start_ts": 2, "end_ts": 2.5},

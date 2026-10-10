@@ -12,6 +12,7 @@ type SubtitleCue struct {
 
 // TranslateOptions configures translation behavior
 type TranslateOptions struct {
+	Reference    string `json:"reference,omitempty"`
 	SourceLang   string `json:"source_lang"`
 	TargetLang   string `json:"target_lang"`
 	Preset       string `json:"preset"`        // "anime", "movie", "documentary", "custom"

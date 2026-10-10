@@ -11,6 +11,8 @@ export interface SubtitleEntry {
 }
 
 export interface GenerateParams {
+  observe_speech?: boolean
+  lyrics?: { start: number; end: number; text: string }
   audio_track?: number
   engine: string   // Whisper 연결 식별자
   model?: string

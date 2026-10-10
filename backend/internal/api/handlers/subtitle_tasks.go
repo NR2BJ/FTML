@@ -3,14 +3,17 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/video-stream/backend/internal/job"
 	"github.com/video-stream/backend/internal/storage"
 	"github.com/video-stream/backend/internal/subtitle"
+	"github.com/video-stream/backend/internal/subtitle/reference"
 )
 
 type SubtitleTaskRequest struct {
@@ -50,6 +53,14 @@ func validateSubtitleTask(req *SubtitleTaskRequest) error {
 		return fmt.Errorf("잘못된 작업 종류")
 	}
 	if req.Mode != "translate" {
+		if l := req.Generate.Lyrics; l != nil {
+			if len(req.Paths) != 1 || !strings.HasPrefix(req.Generate.Model, "Qwen/") || req.Generate.Language == "" || req.Generate.Language == "auto" || math.IsNaN(l.Start) || math.IsNaN(l.End) || l.Start < 0 || l.End <= l.Start || l.End-l.Start > 180 || strings.TrimSpace(l.Text) == "" || utf8.RuneCountInString(l.Text) > 5000 {
+				return fmt.Errorf("가사 참고는 Qwen·음성 언어를 지정한 단일 영상, 최대 180초 구간에만 적용할 수 있습니다")
+			}
+		}
+		if req.Generate.Model != "" && req.Generate.Model != "Qwen/Qwen3-ASR-1.7B" && req.Generate.Model != "Qwen/Qwen3-ASR-0.6B" && req.Generate.Model != defaultModelID {
+			return fmt.Errorf("지원하지 않는 비교 모델입니다")
+		}
 		if req.Generate.AudioTrack < 0 {
 			return fmt.Errorf("잘못된 음성 트랙")
 		}
@@ -88,6 +99,10 @@ func (h *SubtitleHandler) submitSubtitleTasks(w http.ResponseWriter, r *http.Req
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// 등록 시 모델을 고정하고 실제 교체/추론은 서버의 동일 잠금 안에서 수행한다.
+	if req.Mode != "translate" && req.Generate.Model == "" {
+		req.Generate.Model = h.database.GetSetting("whisper_model_id", defaultModelID)
+	}
 	items := make([]SubtitleTaskItem, 0, len(req.Paths))
 	ids, skipped := []string{}, []string{}
 	seen := make(map[string]bool)
@@ -111,10 +126,19 @@ func (h *SubtitleHandler) submitSubtitleTasks(w http.ResponseWriter, r *http.Req
 				item.Reason = "영상 파일을 찾을 수 없습니다"
 			}
 		}
-		var params any = req.Generate
+		profile := reference.Load(h.database, path)
+		generation := req.Generate
+		generation.Hints = profile.Hints()
+		if generation.ChainTranslate != nil {
+			translation := *generation.ChainTranslate
+			translation.Reference = profile.TranslationContext()
+			generation.ChainTranslate = &translation
+		}
+		var params any = generation
 		kind := job.JobTranscribe
 		if item.Reason == "" && req.Mode == "translate" {
 			translation := *req.Translate
+			translation.Reference = profile.TranslationContext()
 			entries := h.subtitleEntries(path, full, false)
 			// 추출본/업로드본이 있으면 일괄 등록 때 모든 영상을 다시 조사하지 않는다.
 			if strings.HasPrefix(translation.SubtitleID, "embedded:") ||

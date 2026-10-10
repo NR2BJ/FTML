@@ -1,6 +1,7 @@
 """HTTP/inference-flow tests with a fake model; no GPU/model download or API calls."""
 
 import io
+import json
 import threading
 import unittest
 import wave
@@ -103,7 +104,7 @@ class ServerTests(unittest.TestCase):
             return SimpleNamespace(chunks=[] if len(calls) == 1 else [SimpleNamespace(text="hello", start_ts=1, end_ts=2)])
         model = self.model([])
         model.generate = generate
-        with patch.object(server, "pipeline", model):
+        with patch.object(server, "pipeline", model), patch.object(server, "GAP_MAX_RETRY_S", 300):
             chunks, _, _, duration = server.run_inference(np.ones(20*16000, dtype=np.float32))
         self.assertEqual(duration, 20)
         self.assertEqual(chunks[0]["text"], "hello")
@@ -132,6 +133,32 @@ class ServerTests(unittest.TestCase):
             server._recover_gaps(audio, [], SimpleNamespace(), 3600)
         self.assertEqual(len(sizes), 2)
         self.assertLessEqual(max(sizes), 34*16000)
+
+    def test_lyrics_result_keeps_original_and_reports_rejection_without_losing_extraction(self):
+        model = self.model([SimpleNamespace(text="original", start_ts=0.1, end_ts=0.5)])
+        model.align_reference = lambda *_: SimpleNamespace(
+            chunks=[{"text":"corrected", "start_ts":0, "end_ts":1}],
+            words=[{"word":"corrected", "start_ts":0.2, "end_ts":0.7}])
+        data = {"model":"Qwen/Qwen3-ASR-1.7B","language":"ja","response_format":"ftml_json",
+                "reference_lyrics":json.dumps({"start":0,"end":1,"text":"corrected"})}
+        with patch.object(server,"pipeline",model), patch.object(server,"model_id_str",data["model"]):
+            response = self.client.post("/v1/audio/transcriptions",data=data,files={"file":("a.wav",self.wav(2))})
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertIn("original",response.json()["raw_vtt"])
+            self.assertIn("corrected",response.json()["vtt"])
+            data["reference_lyrics"] = json.dumps({"start":0.3,"end":1,"text":"corrected"})
+            response = self.client.post("/v1/audio/transcriptions",data=data,files={"file":("a.wav",self.wav(2))})
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertIn("original",response.json()["vtt"])
+            self.assertEqual(response.json()["raw_vtt"], "")
+            self.assertIn("lyrics_error",response.json()["diagnostics"])
+
+    def test_invalid_lyrics_never_reaches_model(self):
+        with patch.object(server,"_run_upload") as run:
+            for lyrics in [[],{"start":0,"end":181,"text":"song"},{"start":0,"end":1,"text":""}]:
+                response = self.client.post("/v1/audio/transcriptions",data={"reference_lyrics":json.dumps(lyrics)},files={"file":("a.wav",self.wav(2))})
+                self.assertEqual(response.status_code,400,response.text)
+            run.assert_not_called()
 
 
 if __name__ == "__main__":

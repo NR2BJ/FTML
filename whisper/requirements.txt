@@ -5,3 +5,7 @@ python-multipart
 librosa
 numpy
 huggingface_hub
+qwen-asr==0.0.6
+optimum-intel==2.2.0
+silero-vad==6.2.3
+onnxruntime==1.24.2

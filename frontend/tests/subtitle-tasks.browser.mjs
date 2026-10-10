@@ -61,6 +61,7 @@ try {
       return route.fulfill({json:{items,total:items.length,page:1,page_size:50}})
     }
     if(url.pathname.startsWith('/api/subtitle/list/'))return route.fulfill({json:subtitleEntries})
+    if(url.pathname.startsWith('/api/subtitle/reference/'))return route.fulfill({json:{scope:'season',title:'',terms:[],songs:[],sources:[]}})
     if(url.pathname.startsWith('/api/subtitle/convert/'))return route.fulfill({body:'WEBVTT\n\n00:00.000 --> 00:01.000\n한국어\n',contentType:'text/vtt'})
     throw new Error(`예상하지 않은 요청: ${url.pathname}`)
   })

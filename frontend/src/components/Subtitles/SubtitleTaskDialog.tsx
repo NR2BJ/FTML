@@ -21,6 +21,8 @@ import {
   isJobTerminal,
 } from '@/utils/subtitleTasks'
 import { useSubtitleTasks } from './useSubtitleTasks'
+import WorkReference from './WorkReference'
+import ExtractionDiagnostics from './ExtractionDiagnostics'
 import TranslationOptions, {
   defaultTranslationOptions,
   subtitleLanguages,
@@ -45,6 +47,10 @@ export default function SubtitleTaskDialog({
   const [engine, setEngine] = useState('')
   const [engines, setEngines] = useState<AvailableEngine[]>([])
   const [language, setLanguage] = useState('auto')
+  const [model, setModel] = useState('')
+  const [lyricsEnabled, setLyricsEnabled] = useState(false)
+  const [observeSpeech, setObserveSpeech] = useState(false)
+  const [lyrics, setLyrics] = useState({ start: 0, end: 0, text: '' })
   const [translation, setTranslation] = useState(defaultTranslationOptions)
   const [source, setSource] = useState(subtitleId)
   const [subtitles, setSubtitles] = useState<SubtitleEntry[]>([])
@@ -59,6 +65,7 @@ export default function SubtitleTaskDialog({
   const { jobs, error: pollError, refresh } = useSubtitleTasks(roots)
   const firstPath = paths[0]
   const single = paths.length === 1
+  const localASR = engines.find((e) => e.value === engine)?.type === 'openvino-genai'
   const finished =
     roots.length > 0 && roots.every((id) => workflowFinished(id, jobs))
 
@@ -105,7 +112,13 @@ export default function SubtitleTaskDialog({
       const { data } = await submitSubtitleTasks({
         paths,
         mode,
-        generate: { engine, language, audio_track: single ? audioTrack : 0 },
+        generate: {
+          engine, language,
+          model: localASR ? model : '',
+          audio_track: single ? audioTrack : 0,
+          observe_speech: localASR && observeSpeech,
+          lyrics: localASR && single && lyricsEnabled && model.startsWith('Qwen/') ? lyrics : undefined,
+        },
         translate:
           mode === 'generate'
             ? undefined
@@ -119,8 +132,8 @@ export default function SubtitleTaskDialog({
       })
       setItems(data.items)
       void useJobStore.getState().fetchActiveJobs()
-    } catch {
-      setError('작업을 시작하지 못했습니다. 연결 상태와 설정을 확인해 주세요.')
+    } catch (error) {
+      setError((error as { response?: { data?: { error?: string } } }).response?.data?.error || '작업을 시작하지 못했습니다. 연결 상태와 설정을 확인해 주세요.')
     } finally {
       submission.current = false
       setSubmitting(false)
@@ -220,6 +233,21 @@ export default function SubtitleTaskDialog({
                     </p>
                   )}
                   <label className="block text-xs text-gray-400">
+                    추출 모델
+                    <select aria-label="추출 모델" value={model} disabled={!localASR} onChange={(e) => setModel(e.target.value)}
+                      className="mt-1 w-full rounded border border-dark-600 bg-dark-800 p-2 text-white">
+                      <option value="">현재 설정 모델</option>
+                      <option value="OpenVINO/whisper-large-v3-int8-ov">Whisper large-v3 INT8</option>
+                      <option value="Qwen/Qwen3-ASR-1.7B">Qwen3-ASR 1.7B INT8 (비교용)</option>
+                      <option value="Qwen/Qwen3-ASR-0.6B">Qwen3-ASR 0.6B INT8 (가벼운 비교용)</option>
+                    </select>
+                  </label>
+                  {localASR && model.startsWith('Qwen/') && <p className="text-xs text-amber-400">
+                    로컬 OpenVINO 연결용입니다. 최초 실행은 모델 다운로드·변환이 필요합니다.
+                    인식은 GPU, 시간 정렬은 CPU에서 수행하며 Whisper 결과는 보존합니다.
+                    A380에서 정확도와 메모리 사용량을 확인할 비교 기능입니다.
+                  </p>}
+                  <label className="block text-xs text-gray-400">
                     음성 언어
                     <select
                       aria-label="음성 언어"
@@ -237,8 +265,22 @@ export default function SubtitleTaskDialog({
                   </label>
                   <p className="text-xs text-gray-500">
                     음성 트랙 {single ? audioTrack + 1 : 1}에서 추출합니다.
-                    모델은 선택한 Whisper 연결의 설정을 사용합니다.
+                    비교 모델을 선택하지 않으면 연결의 현재 설정을 사용합니다.
                   </p>
+                  {localASR && <label className="flex items-center gap-2 text-xs text-gray-400"><input type="checkbox" checked={observeSpeech} onChange={(e) => setObserveSpeech(e.target.checked)} />Silero 말소리 검출 비교: 기록만 남기고 오디오·자막을 자르지 않음</label>}
+                  {localASR && single && model.startsWith('Qwen/') && <details className="rounded border border-dark-600 p-3 text-xs text-gray-300">
+                    <summary className="cursor-pointer">확보한 가사로 특정 구간 보정 (선택)</summary>
+                    <div className="mt-3 space-y-2">
+                      <label className="flex items-center gap-2"><input type="checkbox" checked={lyricsEnabled} onChange={(e) => setLyricsEnabled(e.target.checked)} />가사 참고 사용</label>
+                      <p>직접 확보한 원어 가사와 영상의 노래 구간을 지정하세요. 음성 언어도 직접 선택해야 합니다. 최대 180초, TV판 기준입니다.</p>
+                      <div className="flex gap-2">
+                        <label>시작 (초)<input aria-label="가사 시작 초" type="number" min={0} step={0.1} value={lyrics.start} onChange={(e) => setLyrics({ ...lyrics, start: Number(e.target.value) })} className="mt-1 w-full rounded border border-dark-600 bg-dark-800 p-2" /></label>
+                        <label>끝 (초)<input aria-label="가사 끝 초" type="number" min={0} step={0.1} value={lyrics.end} onChange={(e) => setLyrics({ ...lyrics, end: Number(e.target.value) })} className="mt-1 w-full rounded border border-dark-600 bg-dark-800 p-2" /></label>
+                      </div>
+                      <textarea aria-label="참고 가사 원문" rows={5} maxLength={5000} value={lyrics.text} onChange={(e) => setLyrics({ ...lyrics, text: e.target.value })} className="w-full rounded border border-dark-600 bg-dark-800 p-2" />
+                      <p className="text-amber-400">일치가 부족하거나 구간 경계가 대사와 겹치면 보정을 중단합니다. 보정 전 원 추출본은 별도 자막으로 보존하며, 가창 시각은 재생하며 확인해 주세요.</p>
+                    </div>
+                  </details>}
                 </div>
               )}
               {mode === 'translate' && (
@@ -282,6 +324,7 @@ export default function SubtitleTaskDialog({
                   onChange={setTranslation}
                 />
               )}
+              {single ? <WorkReference key={firstPath} path={firstPath} /> : <p className="text-xs text-gray-400">영상마다 해당 작품 폴더에 저장된 용어 사전을 적용합니다.</p>}
               {mode === 'generate-translate' && (
                 <p className="text-xs text-amber-400">
                   추출한 결과를 그대로 번역합니다. 번역만 실패하면 추출을
@@ -354,6 +397,8 @@ export default function SubtitleTaskDialog({
                             효과와 일반 번역문으로 보존
                           </span>
                         )}
+                        {!!j.result?.raw_path && <span className="text-gray-400">가사 보정 전 원 추출본도 보존됨</span>}
+                        <ExtractionDiagnostics value={j.result?.diagnostics} />
                         {['failed', 'cancelled'].includes(j.status) && (
                           <button
                             aria-label={`${j.type === 'transcribe' ? '추출' : '번역'} 재시도`}

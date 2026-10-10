@@ -1,5 +1,4 @@
-# OpenVINO GenAI WhisperPipeline — Intel GPU accelerated speech-to-text
-# Lightweight Python server replacing whisper.cpp (SYCL/OpenVINO/CUDA)
+# Intel GPU에서 Whisper/Qwen 인식, CPU에서 Qwen 단어 시각 정렬
 
 FROM ubuntu:24.04
 
@@ -10,9 +9,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/
-RUN pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt
+RUN pip3 install --break-system-packages --no-cache-dir torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu \
+    && pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt
 
-COPY server.py inference_runtime.py subtitle_processing.py /app/
+COPY server.py inference_runtime.py subtitle_processing.py qwen_pipeline.py speech_observer.py benchmark.py /app/
 WORKDIR /app
 
 ENV MODEL_ID=OpenVINO/whisper-large-v3-int8-ov

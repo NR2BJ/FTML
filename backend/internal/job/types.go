@@ -44,15 +44,25 @@ type Job struct {
 
 // TranscribeParams are parameters for a transcription job
 type TranscribeParams struct {
+	ObserveSpeech  bool             `json:"observe_speech,omitempty"`
+	Lyrics         *LyricsReference `json:"lyrics,omitempty"`
+	Hints          string           `json:"hints,omitempty"`
 	AudioTrack     int              `json:"audio_track,omitempty"`
-	Engine         string           `json:"engine"`                    // "whisper.cpp", "faster-whisper", "openai"
-	Model          string           `json:"model"`                     // "tiny", "base", "small", "medium", "large-v3"
+	Engine         string           `json:"engine"`                    // backend:<id>, openai
+	Model          string           `json:"model"`                     // 로컬 모델 저장소 ID
 	Language       string           `json:"language"`                  // "auto", "ko", "en", "ja", etc.
 	ChainTranslate *TranslateParams `json:"chain_translate,omitempty"` // auto-translate after transcribe completes
 }
 
+type LyricsReference struct {
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Text  string  `json:"text"`
+}
+
 // TranslateParams are parameters for a translation job
 type TranslateParams struct {
+	Reference    string `json:"reference,omitempty"`
 	SubtitleID   string `json:"subtitle_id"`   // source subtitle ID (e.g., "generated:whisper_ja.vtt")
 	TargetLang   string `json:"target_lang"`   // "ko", "en", "ja", etc.
 	Engine       string `json:"engine"`        // "gemini", "openai", "deepl"
@@ -62,9 +72,12 @@ type TranslateParams struct {
 
 // TranscribeResult is the output of a successful transcription
 type TranscribeResult struct {
-	OutputPath string  `json:"output_path"` // relative path to generated VTT
-	Language   string  `json:"language"`    // detected or specified language
-	Duration   float64 `json:"duration"`    // processing time in seconds
+	Diagnostics map[string]any `json:"diagnostics,omitempty"`
+	RawPath     string         `json:"raw_path,omitempty"`
+	Model       string         `json:"model,omitempty"`
+	OutputPath  string         `json:"output_path"` // relative path to generated VTT
+	Language    string         `json:"language"`    // detected or specified language
+	Duration    float64        `json:"duration"`    // processing time in seconds
 }
 
 // TranslateResult is the output of a successful translation

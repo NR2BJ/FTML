@@ -230,6 +230,13 @@ func (h *SubtitleHandler) subtitleEntries(path, fullPath string, includeEmbedded
 				detail := strings.TrimPrefix(baseName, "whisper_")
 				lang = strings.SplitN(detail, "_", 2)[0]
 				label = fmt.Sprintf("생성 (%s)", detail)
+			} else if strings.HasPrefix(baseName, "qwen3_") {
+				detail := strings.TrimPrefix(baseName, "qwen3_")
+				lang = strings.SplitN(detail, "_", 2)[0]
+				label = fmt.Sprintf("Qwen3 추출 (%s)", detail)
+				if strings.HasSuffix(detail, "_lyrics") {
+					label = fmt.Sprintf("Qwen3 가사 보정 (%s)", lang)
+				}
 			} else if strings.HasPrefix(baseName, "translate_") {
 				parts := strings.SplitN(strings.TrimPrefix(baseName, "translate_"), "_", 2)
 				if len(parts) == 2 {

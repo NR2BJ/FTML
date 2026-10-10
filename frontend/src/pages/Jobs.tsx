@@ -32,6 +32,7 @@ import {
 import { downloadSubtitle } from '@/utils/downloadSubtitle'
 import { taskStatusLabels, isJobTerminal } from '@/utils/subtitleTasks'
 import SubtitleTaskDialog from '@/components/Subtitles/SubtitleTaskDialog'
+import ExtractionDiagnostics from '@/components/Subtitles/ExtractionDiagnostics'
 
 type Task = { path: string; mode: SubtitleTaskMode; subtitleId?: string }
 const when = (value?: string) =>
@@ -270,6 +271,7 @@ function VideoDetails({
               {j.error && (
                 <p className="mt-1 break-words text-red-400">{j.error}</p>
               )}
+              <ExtractionDiagnostics value={j.result?.diagnostics} />
               <details className="mt-2 text-gray-500">
                 <summary className="cursor-pointer">
                   작업 번호와 저장된 설정

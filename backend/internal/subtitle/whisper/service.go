@@ -85,16 +85,12 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		return fmt.Errorf("resolve engine: %w", err)
 	}
 
-	// For openvino-genai: ensure whisper server has the correct model loaded.
-	// After server restart, it falls back to its default MODEL_ID env var
-	// instead of the DB-configured model.
-	if ovc, ok := engine.(*OpenVINOGenAIClient); ok {
-		activeModel := s.database.GetSetting("whisper_model_id", "")
-		if activeModel != "" {
-			if err := ovc.EnsureModel(ctx, activeModel); err != nil {
-				return fmt.Errorf("ensure model: %w", err)
-			}
-		}
+	// 과거 작업에 모델이 없으면 현재 설정을 사용한다. 교체와 추론은 한 요청이다.
+	if _, ok := engine.(*OpenVINOGenAIClient); ok && params.Model == "" {
+		params.Model = s.database.GetSetting("whisper_model_id", "OpenVINO/whisper-large-v3-int8-ov")
+	}
+	if _, ok := engine.(*OpenVINOGenAIClient); !ok && strings.HasPrefix(params.Model, "Qwen/") {
+		return fmt.Errorf("Qwen은 로컬 OpenVINO 연결에서만 사용할 수 있습니다")
 	}
 
 	// Resolve full path
@@ -110,10 +106,13 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		params.Engine, j.FilePath, params.Language)
 
 	result, err := engine.Transcribe(ctx, TranscribeRequest{
-		AudioTrack: params.AudioTrack,
-		FilePath:   fullPath,
-		Language:   params.Language,
-		Model:      params.Model,
+		AudioTrack:    params.AudioTrack,
+		FilePath:      fullPath,
+		Language:      params.Language,
+		Model:         params.Model,
+		Prompt:        params.Hints,
+		Lyrics:        params.Lyrics,
+		ObserveSpeech: params.ObserveSpeech,
 	}, updateProgress)
 	if err != nil {
 		return fmt.Errorf("transcribe: %w", err)
@@ -137,7 +136,23 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 	if params.AudioTrack > 0 {
 		filename = fmt.Sprintf("whisper_%s_track%d.vtt", lang, params.AudioTrack+1)
 	}
+	if strings.HasPrefix(params.Model, "Qwen/") {
+		size := "1_7b"
+		if strings.Contains(params.Model, "0.6B") {
+			size = "0_6b"
+		}
+		filename = fmt.Sprintf("qwen3_%s_%s_track%d.vtt", lang, size, params.AudioTrack+1)
+	}
 	outFile := filepath.Join(outDir, filename)
+	rawPath := ""
+	if result.RawVTT != "" {
+		if err := storage.WriteVersionedFile(ctx, outFile, strings.NewReader(result.RawVTT)); err != nil {
+			return fmt.Errorf("원 추출본 저장: %w", err)
+		}
+		rawPath = "generated:" + filename
+		filename = strings.TrimSuffix(filename, ".vtt") + "_lyrics.vtt"
+		outFile = filepath.Join(outDir, filename)
+	}
 
 	if err := storage.WriteVersionedFile(ctx, outFile, strings.NewReader(result.VTT)); err != nil {
 		return fmt.Errorf("save subtitle: %w", err)
@@ -147,8 +162,11 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 
 	// Store result in job
 	resultJSON, _ := json.Marshal(job.TranscribeResult{
-		OutputPath: "generated:" + filename,
-		Language:   lang,
+		OutputPath:  "generated:" + filename,
+		Language:    lang,
+		Model:       params.Model,
+		RawPath:     rawPath,
+		Diagnostics: result.Diagnostics,
 	})
 	j.Result = resultJSON
 

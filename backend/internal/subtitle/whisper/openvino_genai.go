@@ -25,73 +25,13 @@ func NewOpenVINOGenAIClient(baseURL string) *OpenVINOGenAIClient {
 	return &OpenVINOGenAIClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{
-			Timeout: 30 * time.Minute, // transcription can be very long
+			Timeout: 2 * time.Hour, // Qwen 최초 변환과 긴 영상도 작업 취소로 중단할 수 있다.
 		},
 	}
 }
 
 func (c *OpenVINOGenAIClient) Name() string {
 	return "openvino-genai"
-}
-
-// EnsureModel checks if the whisper server has the expected model loaded,
-// and loads it if not. This handles server restarts where the server falls
-// back to its default MODEL_ID env var instead of the DB-configured model.
-func (c *OpenVINOGenAIClient) EnsureModel(ctx context.Context, expectedModelID string) error {
-	if expectedModelID == "" {
-		return nil
-	}
-
-	// Check current model via /v1/model/info
-	client := &http.Client{Timeout: 5 * time.Second}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/model/info", nil)
-	if err != nil {
-		return err
-	}
-	resp, err := client.Do(request)
-	if err != nil {
-		log.Printf("[openvino-genai] cannot check model info: %v", err)
-		return fmt.Errorf("check whisper model: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var info struct {
-		Model  string `json:"model"`
-		Status string `json:"status"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return fmt.Errorf("parse whisper model info: %w", err)
-	}
-
-	if info.Model == expectedModelID {
-		return nil // already correct
-	}
-
-	log.Printf("[openvino-genai] model mismatch: server has %q, expected %q — loading correct model", info.Model, expectedModelID)
-	loadURL := c.baseURL + "/v1/model/load"
-	body, err := json.Marshal(map[string]string{"model_id": expectedModelID})
-	if err != nil {
-		return err
-	}
-	loadClient := &http.Client{Timeout: 10 * time.Minute}
-	loadRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, loadURL, strings.NewReader(string(body)))
-	if err != nil {
-		return err
-	}
-	loadRequest.Header.Set("Content-Type", "application/json")
-	loadResp, err := loadClient.Do(loadRequest)
-	if err != nil {
-		return fmt.Errorf("failed to load model %s: %w", expectedModelID, err)
-	}
-	defer loadResp.Body.Close()
-
-	if loadResp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(loadResp.Body)
-		return fmt.Errorf("failed to load model %s: status %d: %s", expectedModelID, loadResp.StatusCode, string(respBody))
-	}
-
-	log.Printf("[openvino-genai] model synced to %s", expectedModelID)
-	return nil
 }
 
 // Transcribe sends an audio file to the OpenVINO GenAI server and returns VTT
@@ -107,7 +47,7 @@ func (c *OpenVINOGenAIClient) Transcribe(ctx context.Context, req TranscribeRequ
 	updateProgress(0.1)
 
 	// Step 2: Send to OpenVINO GenAI server with retries
-	result, err := c.sendWithRetry(ctx, audioPath, req.Language, updateProgress)
+	result, err := c.sendWithRetry(ctx, audioPath, req.Language, updateProgress, req)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +55,7 @@ func (c *OpenVINOGenAIClient) Transcribe(ctx context.Context, req TranscribeRequ
 	return result, nil
 }
 
-func (c *OpenVINOGenAIClient) sendWithRetry(ctx context.Context, audioPath, language string, updateProgress func(float64)) (*TranscribeResult, error) {
+func (c *OpenVINOGenAIClient) sendWithRetry(ctx context.Context, audioPath, language string, updateProgress func(float64), options ...TranscribeRequest) (*TranscribeResult, error) {
 	const maxRetries = 3
 	var lastErr error
 
@@ -130,7 +70,7 @@ func (c *OpenVINOGenAIClient) sendWithRetry(ctx context.Context, audioPath, lang
 			}
 		}
 
-		result, err := c.doSend(ctx, audioPath, language, updateProgress)
+		result, err := c.doSend(ctx, audioPath, language, updateProgress, options...)
 		if err == nil {
 			return result, nil
 		}
@@ -155,7 +95,7 @@ func (c *OpenVINOGenAIClient) sendWithRetry(ctx context.Context, audioPath, lang
 	return nil, fmt.Errorf("openvino-genai server failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
-func (c *OpenVINOGenAIClient) doSend(ctx context.Context, audioPath, language string, updateProgress func(float64)) (*TranscribeResult, error) {
+func (c *OpenVINOGenAIClient) doSend(ctx context.Context, audioPath, language string, updateProgress func(float64), options ...TranscribeRequest) (*TranscribeResult, error) {
 	audioFile, err := os.Open(audioPath)
 	if err != nil {
 		return nil, fmt.Errorf("open audio: %w", err)
@@ -180,7 +120,7 @@ func (c *OpenVINOGenAIClient) doSend(ctx context.Context, audioPath, language st
 			return
 		}
 
-		if err := writer.WriteField("response_format", "vtt"); err != nil {
+		if err := writer.WriteField("response_format", "ftml_json"); err != nil {
 			pipeWriter.CloseWithError(fmt.Errorf("write response format: %w", err))
 			return
 		}
@@ -188,6 +128,27 @@ func (c *OpenVINOGenAIClient) doSend(ctx context.Context, audioPath, language st
 			if err := writer.WriteField("language", language); err != nil {
 				pipeWriter.CloseWithError(fmt.Errorf("write language: %w", err))
 				return
+			}
+		}
+		if len(options) > 0 {
+			if options[0].ObserveSpeech {
+				if err := writer.WriteField("observe_speech", "true"); err != nil {
+					pipeWriter.CloseWithError(err)
+					return
+				}
+			}
+			for key, value := range map[string]string{"model": options[0].Model, "prompt": options[0].Prompt} {
+				if err := writer.WriteField(key, value); err != nil {
+					pipeWriter.CloseWithError(err)
+					return
+				}
+			}
+			if options[0].Lyrics != nil {
+				data, _ := json.Marshal(options[0].Lyrics)
+				if err := writer.WriteField("reference_lyrics", string(data)); err != nil {
+					pipeWriter.CloseWithError(err)
+					return
+				}
 			}
 		}
 	}()
@@ -226,15 +187,34 @@ func (c *OpenVINOGenAIClient) doSend(ctx context.Context, audioPath, language st
 	}
 
 	vtt := string(body)
+	rawVTT := ""
+	var diagnostics map[string]any
+	if strings.HasPrefix(strings.TrimSpace(vtt), "{") {
+		var result struct {
+			VTT         string         `json:"vtt"`
+			RawVTT      string         `json:"raw_vtt"`
+			Diagnostics map[string]any `json:"diagnostics"`
+		}
+		if json.Unmarshal(body, &result) != nil {
+			return nil, fmt.Errorf("추출 응답을 읽지 못했습니다")
+		}
+		vtt, rawVTT = result.VTT, result.RawVTT
+		diagnostics = result.Diagnostics
+	}
 
 	if !strings.HasPrefix(strings.TrimSpace(vtt), "WEBVTT") || !strings.Contains(vtt, "-->") {
 		return nil, fmt.Errorf("whisper returned no valid timed subtitles")
+	}
+	if rawVTT != "" && (!strings.HasPrefix(strings.TrimSpace(rawVTT), "WEBVTT") || !strings.Contains(rawVTT, "-->")) {
+		return nil, fmt.Errorf("보정 전 자막의 시간 정보를 확인하지 못했습니다")
 	}
 
 	updateProgress(0.95)
 
 	return &TranscribeResult{
-		VTT:      vtt,
-		Language: language,
+		VTT:         vtt,
+		RawVTT:      rawVTT,
+		Diagnostics: diagnostics,
+		Language:    language,
 	}, nil
 }
