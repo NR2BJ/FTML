@@ -14,7 +14,7 @@ import time
 from types import SimpleNamespace
 
 from inference_runtime import StorageFullError
-from qwen_alignment import normalize_aligned_words
+from qwen_alignment import normalize_aligned_words, refine_aligned_sentences
 
 
 MODELS = {"Qwen/Qwen3-ASR-1.7B"}
@@ -166,11 +166,22 @@ class QwenPipeline:
         if detected.lower() not in supported:
             raise ValueError("Qwen 시간 정렬 언어를 확인하지 못했습니다. 음성 언어를 직접 선택해 주세요")
         self.detected_language = detected
-        return self._align(audio, text, detected)
+        return self._align(audio, text, detected, getattr(config, "cancel", None))
 
-    def _align(self, audio, text, detected):
-        aligned = self.aligner.align(audio=(audio, 16000), text=text, language=detected)[0]
-        words = [{"word": item.text, "start_ts": item.start_time, "end_ts": item.end_time} for item in aligned]
+    def _align(self, audio, text, detected, cancel=None):
+        def align(source, start, end):
+            if cancel is not None and cancel.is_set():
+                raise InterruptedError("Transcription cancelled")
+            aligned = self.aligner.align(audio=(audio[int(start*16000):int(end*16000)], 16000), text=source, language=detected)[0]
+            return [{"word": item.text, "start_ts": item.start_time, "end_ts": item.end_time} for item in aligned]
+        words = align(text, 0, len(audio)/16000)
+        budget = getattr(self, "realignment_budget", 2)
+        words, attempts, refined = refine_aligned_sentences(words, text, len(audio)/16000, align, cancel, max_attempts=budget)
+        self.realignment_budget = budget-attempts
+        self.realignment_attempts = getattr(self, "realignment_attempts", 0) + attempts
+        self.realigned_sentences = getattr(self, "realigned_sentences", 0) + refined
+        if attempts:
+            log.info("Qwen 원문 유지 재정렬: %d회 시도, %d개 문장 채택", attempts, refined)
         words, collapsed = normalize_aligned_words(words, text, len(audio)/16000)
         self.collapsed_words = getattr(self, "collapsed_words", 0) + collapsed
         segment = {"text": text, "start_ts": 0, "end_ts": len(audio)/16000}

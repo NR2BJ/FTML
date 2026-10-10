@@ -32,14 +32,19 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
         for a, b, start, end in entries:
             if a == b or not math.isfinite(start) or not math.isfinite(end) or end <= start:
                 continue
-            if start < segment["start_ts"]-0.1 or end > segment["end_ts"]+0.1:
+            # 문장 시각과 단어 시각은 별도 추정치다. 경계를 조금 넘는 첫
+            # 단어를 버리면 긴 선행 무음의 보정 대상에서도 빠져 버린다.
+            if end <= segment["start_ts"] or start >= segment["end_ts"]:
                 continue
             for block in blocks:
                 if block.b <= a and b <= block.b+block.size:
                     left, right = block.a+a-block.b-cursor, block.a+b-block.b-cursor
                     if 0 <= left < right <= len(letters):
                         if not anchors or (left >= anchors[-1][1] and start >= anchors[-1][3]):
-                            anchors.append((left, right, max(start, segment["start_ts"]), min(end, segment["end_ts"])))
+                            bounded_start = max(offset, start, segment["start_ts"])
+                            bounded_end = min(end, segment["end_ts"])
+                            if bounded_end > bounded_start:
+                                anchors.append((left, right, bounded_start, bounded_end))
                     break
         if not anchors:
             timed.append(dict(segment))

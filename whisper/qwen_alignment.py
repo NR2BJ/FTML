@@ -63,7 +63,7 @@ def restore_original_words(words, text):
     return result
 
 
-def normalize_aligned_words(words, text, duration):
+def validated_original_words(words, text, duration):
     if not words:
         raise QwenAlignmentError("empty")
     words = [dict(word) for word in words]
@@ -83,7 +83,86 @@ def normalize_aligned_words(words, text, duration):
         raise QwenAlignmentError("overlap")
     if not any(word["end_ts"] > word["start_ts"] for word in words):
         raise QwenAlignmentError("all_collapsed")
-    words = restore_original_words(words, text)
+    return restore_original_words(words, text)
+
+
+def alignment_issue_count(words):
+    compact_letters = lambda word: sum(unicodedata.east_asian_width(c) in ("W", "F")
+                                      for c in canonical_text(word["word"]))
+    return sum(word["end_ts"] == word["start_ts"] or
+               (compact_letters(word) >= 4 and word["end_ts"]-word["start_ts"] < 0.24)
+               for word in words)
+
+
+def refine_aligned_sentences(words, text, duration, align, cancel=None, max_attempts=2):
+    """불확실한 문장만 같은 원문으로 재정렬한다. 정상 이웃 시각은 보호한다."""
+    words = validated_original_words(words, text, duration)
+    ranges, begin = [], 0
+    for index, word in enumerate(words):
+        if word["word"].rstrip(' \t\n\"\'」』）)]').endswith(("。", "！", "？", ".", "!", "?")) or index == len(words)-1:
+            ranges.append((begin, index+1))
+            begin = index+1
+    candidates = sorted(ranges, key=lambda span: -alignment_issue_count(words[span[0]:span[1]]))
+    replacements, attempts = {}, 0
+    for begin, end in candidates:
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError("Transcription cancelled")
+        original = words[begin:end]
+        issues = alignment_issue_count(original)
+        if not issues or attempts >= max_attempts:
+            break
+        left_limit = (words[begin-1]["end_ts"]+original[0]["start_ts"])/2 if begin else 0
+        right_limit = (original[-1]["end_ts"]+words[end]["start_ts"])/2 if end < len(words) else duration
+        start = max(left_limit, original[0]["start_ts"]-0.4)
+        finish = min(right_limit, original[-1]["end_ts"]+0.4)
+        if not 0.4 <= finish-start <= 12:
+            continue
+        source = "".join(w["word"] for w in original)
+        attempts += 1
+        try:
+            revised = validated_original_words(align(source, start, finish), source, finish-start)
+        except InterruptedError:
+            raise
+        except Exception:
+            # 재정렬은 품질 보완이다. 실패해도 기존에 유효했던 작업을 버리지 않는다.
+            if cancel is not None and cancel.is_set():
+                raise InterruptedError("Transcription cancelled")
+            continue
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError("Transcription cancelled")
+        if alignment_issue_count(revised) or "".join(w["word"] for w in revised) != source:
+            continue
+        revised = [dict(w, start_ts=w["start_ts"]+start, end_ts=w["end_ts"]+start) for w in revised]
+        anchors, position = [], 0
+        for word in revised:
+            length = len(canonical_text(word["word"]))
+            anchors.append((position, position+length, word))
+            position += length
+        position, stable = 0, True
+        for word in original:
+            right = position+len(canonical_text(word["word"]))
+            matched = [w for left, end_char, w in anchors if left < right and end_char > position]
+            if not alignment_issue_count([word]) and word["end_ts"]-word["start_ts"] >= 0.12:
+                if (not matched or abs(matched[0]["start_ts"]-word["start_ts"]) > 0.6
+                        or abs(matched[-1]["end_ts"]-word["end_ts"]) > 0.6):
+                    stable = False
+                    break
+            position = right
+        if stable:
+            replacements[begin] = (end, revised)
+    result, index = [], 0
+    while index < len(words):
+        if index in replacements:
+            index, revised = replacements[index]
+            result.extend(revised)
+        else:
+            result.append(words[index])
+            index += 1
+    return result, attempts, len(replacements)
+
+
+def normalize_aligned_words(words, text, duration):
+    words = validated_original_words(words, text, duration)
     sentence_end = lambda value: value.rstrip(' \t\n\"\'」』）)]').endswith(("。", "！", "？", ".", "!", "?"))
     result, collapsed, index = [], sum(word["start_ts"] == word["end_ts"] for word in words), 0
     while index < len(words):

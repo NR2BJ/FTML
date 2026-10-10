@@ -101,7 +101,7 @@ class ServerTests(unittest.TestCase):
         model = self.model([dict(text="hello", start_ts=0, end_ts=10)])
         model.generate = lambda *args: SimpleNamespace(chunks=[dict(text="hello", start_ts=0, end_ts=10)],
                                                       words=[dict(word="hello", start_ts=0, end_ts=10)])
-        for enabled, failed, expected in [(False, False, 0), (True, False, 7.65), (True, True, 0)]:
+        for enabled, failed, expected in [(False, False, 0), (True, False, 7.92), (True, True, 0)]:
             observer = SimpleNamespace(adjust_timing=enabled, failed=failed, observe=lambda *args: None,
                                        merged_spans=lambda: [(8, 10)])
             with patch.object(server, "pipeline", model), patch.object(server, "GAP_MAX_RETRY_S", 0):
@@ -109,6 +109,40 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(text, "hello")
             self.assertAlmostEqual(cues[0]["start_ts"], expected)
             self.assertFalse(any(k.startswith("_") for k in cues[0]))
+
+    def test_qwen_refinement_counters_reset_for_each_upload(self):
+        mid = "Qwen/Qwen3-ASR-1.7B"
+        model = self.model([])
+        def generate(*args):
+            model.realignment_attempts += 2
+            model.realigned_sentences += 1
+            return SimpleNamespace(chunks=[dict(text="reply", start_ts=1, end_ts=2)])
+        model.generate = generate
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", mid):
+            for _ in range(2):
+                response = self.client.post("/v1/audio/transcriptions", data={"model": mid, "response_format": "ftml_json"},
+                                            files={"file": ("audio.wav", self.wav(3))})
+                self.assertEqual(response.status_code, 200)
+                data = response.json()["diagnostics"]
+                self.assertEqual(data["timing_realignment_attempts"], 2)
+                self.assertEqual(data["timing_realigned_sentences"], 1)
+                self.assertEqual(data["timing_policy_version"], 2)
+
+    def test_split_windows_share_original_refinement_budget(self):
+        model = self.model([])
+        seen = []
+        def generate(audio, config):
+            seen.append(model.realignment_budget)
+            if len(seen) == 1:
+                model.realignment_budget -= 1
+                raise QwenAlignmentError("boundary")
+            if len(seen) == 2:
+                model.realignment_budget -= 1
+            return SimpleNamespace(chunks=[dict(text="reply", start_ts=2, end_ts=3)])
+        model.generate = generate
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"):
+            server._generate_timed_chunks(np.ones(30*16000), SimpleNamespace(), 0, 30)
+        self.assertEqual(seen, [2, 1, 0])
 
     def test_short_hold_is_qwen_only_and_does_not_override_digital_silence(self):
         model = self.model([SimpleNamespace(text="reply", start_ts=1, end_ts=1.08)])

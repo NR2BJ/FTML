@@ -158,6 +158,26 @@ class QwenPipelineTests(unittest.TestCase):
         pipe.aligner.align.return_value = [[]]
         with self.assertRaises(ValueError): pipe.generate(audio,SimpleNamespace(language="ja"))
 
+    def test_suspect_timing_realigns_same_text_without_transcribing_again(self):
+        pipe, audio = self.make_pipeline()
+        pipe.asr.generate.return_value = SimpleNamespace(texts=["Alpha beta gamma.Next."], languages=["English"])
+        def items(values):
+            return [[SimpleNamespace(text=text, start_time=start, end_time=end) for text, start, end in values]]
+        pipe.aligner.align.side_effect = [items([("Alpha", 1, 1.4), ("beta", 2.8, 2.8),
+                                                ("gamma", 2.8, 2.8), ("Next", 2.8, 3.2)]),
+                                          items([("Alpha", .4, .8), ("beta", .95, 1.3), ("gamma", 1.4, 1.8)])]
+        result = pipe.generate(audio, SimpleNamespace(language="en"))
+        pipe.asr.generate.assert_called_once()
+        self.assertEqual(pipe.aligner.align.call_count, 2)
+        second = pipe.aligner.align.call_args_list[1].kwargs
+        self.assertEqual(second["text"], "Alpha beta gamma.")
+        self.assertEqual(second["language"], "English")
+        self.assertLess(len(second["audio"][0]), len(audio))
+        self.assertEqual(pipe.realignment_attempts, 1)
+        self.assertEqual(pipe.realigned_sentences, 1)
+        self.assertEqual(pipe.collapsed_words, 0)
+        self.assertEqual("".join(w["word"] for w in result.words), "Alpha beta gamma.Next.")
+
     def test_symbols_only_do_not_reach_aligner(self):
         pipe,audio = self.make_pipeline()
         pipe.asr.generate.return_value.texts = [",,,,!!!!!"]

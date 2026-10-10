@@ -1,7 +1,8 @@
 import copy
+import threading
 import unittest
 
-from qwen_alignment import QwenAlignmentError, normalize_aligned_words
+from qwen_alignment import QwenAlignmentError, normalize_aligned_words, refine_aligned_sentences, alignment_issue_count
 from subtitle_processing import timed_words_to_chunks
 
 
@@ -10,6 +11,72 @@ def word(text, start, end):
 
 
 class QwenAlignmentTests(unittest.TestCase):
+    def test_quick_english_words_are_not_treated_as_collapsed_cjk_phrases(self):
+        self.assertEqual(alignment_issue_count([word("hello", 0, .2)]), 0)
+        self.assertEqual(alignment_issue_count([word("あいうえ", 0, .16)]), 1)
+        self.assertEqual(alignment_issue_count([word("가나다라", 0, .16)]), 1)
+
+    def refinement_source(self):
+        words = [word("Before.", 0, .5), word("Alpha ", 1, 1.4), word("beta ", 2.8, 2.8),
+                 word("gamma.", 2.8, 2.8), word("Next.", 2.8, 3.2)]
+        return words, "Before.Alpha beta gamma.Next."
+
+    def test_collapsed_sentence_is_realigned_before_merging_with_next_speaker(self):
+        words, text = self.refinement_source()
+        original = copy.deepcopy(words)
+        calls = []
+        def align(source, start, end):
+            calls.append((source, start, end))
+            return [word("Alpha", .3, .7), word("beta", .8, 1.15), word("gamma", 1.2, 1.6)]
+        result, attempts, refined = refine_aligned_sentences(words, text, 4, align)
+        self.assertEqual((attempts, refined), (1, 1))
+        self.assertEqual(calls, [("Alpha beta gamma.", .75, 2.8)])
+        self.assertEqual(result[0], words[0])
+        self.assertEqual(result[-1], words[-1])
+        self.assertEqual("".join(w["word"] for w in result), text)
+        self.assertLess(result[-2]["end_ts"], result[-1]["start_ts"])
+        self.assertEqual(normalize_aligned_words(result, text, 4)[1], 0)
+        self.assertEqual(words, original)
+
+    def test_failed_changed_or_unstable_retry_keeps_original_words(self):
+        words, text = self.refinement_source()
+        for retry in [[], [word("wrong", .1, .5)],
+                      [word("Alpha beta gamma", 1, 1)],
+                      [word("Alpha", 1.4, 1.6), word("beta", 1.6, 1.8), word("gamma", 1.8, 2)],
+                      [word("Alpha beta gamma", 0, 20)]]:
+            with self.subTest(retry=retry):
+                result, attempts, refined = refine_aligned_sentences(words, text, 4, lambda *args: retry)
+                self.assertEqual(result, words)
+                self.assertEqual((attempts, refined), (1, 0))
+        def failed(*args):
+            raise RuntimeError("optional retry failed")
+        self.assertEqual(refine_aligned_sentences(words, text, 4, failed), (words, 1, 0))
+
+    def test_retries_are_bounded_and_normal_sentences_are_not_reprocessed(self):
+        words = [word("Normal.", 0, 1)]
+        for i in range(3):
+            words.extend([word("A", 2+i*2, 2.4+i*2), word("b.", 3+i*2, 3+i*2)])
+        text = "".join(w["word"] for w in words)
+        calls = []
+        def align(*args):
+            calls.append(args)
+            return []
+        result, attempts, refined = refine_aligned_sentences(words, text, 9, align)
+        self.assertEqual((attempts, refined), (2, 0))
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(source == "Ab." and end-start <= 12 for source, start, end in calls))
+        self.assertEqual(result, words)
+        self.assertEqual(refine_aligned_sentences(words[:1], "Normal.", 2, align)[1:], (0, 0))
+
+    def test_cancelled_refinement_is_not_swallowed_as_optional_failure(self):
+        words, text = self.refinement_source()
+        cancel = threading.Event()
+        def align(*args):
+            cancel.set()
+            return [word("Alpha beta gamma", .2, 1.2)]
+        with self.assertRaises(InterruptedError):
+            refine_aligned_sentences(words, text, 4, align, cancel)
+
     def test_nfkc_variants_keep_original_spelling_punctuation_and_silence(self):
         text = "「１５！」 ｶﾞｰﾙｽﾞ？"
         words = [word("1", 2, 2.2), word("5", 2.2, 3), word("ガールズ", 8, 9)]

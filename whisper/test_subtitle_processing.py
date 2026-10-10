@@ -8,6 +8,19 @@ def cue(text, start, end):
 
 
 class SubtitleProcessingTests(unittest.TestCase):
+    def test_first_word_crossing_segment_boundary_keeps_its_timing_evidence(self):
+        words = [dict(word="前。", start_ts=1, end_ts=2),
+                 dict(word="次", start_ts=2, end_ts=5),
+                 dict(word="です。", start_ts=5, end_ts=6)]
+        result = timed_words_to_chunks(words, [cue("前。", 1, 2.3), cue("次です。", 2.3, 6.2)], word_output=True)
+        self.assertEqual([c["text"] for c in result], ["前。", "次", "です。"])
+        self.assertEqual([(c["start_ts"], c["end_ts"]) for c in result], [(1, 2), (2.3, 5), (5, 6)])
+        self.assertTrue(all(c.get("_timed_word") for c in result))
+
+    def test_unrelated_word_times_outside_segment_still_fall_back(self):
+        self.assertEqual(timed_words_to_chunks([dict(word="hello", start_ts=20, end_ts=21)], [cue("hello", 1, 2)]),
+                         [cue("hello", 1, 2)])
+
     def test_word_seam_keeps_one_copy_of_short_words_and_whole_boundary_words(self):
         word = lambda text, start, end: dict(cue(text, start, end), _timed_word=True, _segment="qwen")
         existing = [word("あと", 25.28, 25.6), word("気", 25.6, 26.16), word("が", 26.16, 26.24),

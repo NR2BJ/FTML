@@ -199,6 +199,9 @@ def _generate_timed_chunks(audio, config, offset, total_duration, cancel=None, d
     check_cancelled(cancel)
     if not audio.size or not np.any(audio):
         return []
+    if depth == 0 and model_id_str in QWEN_MODELS:
+        # 정렬 실패로 창을 다시 나누어도 원래 입력 창의 보완 예산을 공유한다.
+        pipeline.realignment_budget = 2
     try:
         result = pipeline.generate(audio, config)
     except QwenAlignmentError as exc:
@@ -257,6 +260,8 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
     if model_id_str in QWEN_MODELS:
         pipeline.collapsed_words = 0
         pipeline.recovered_alignment_windows = 0
+        pipeline.realignment_attempts = 0
+        pipeline.realigned_sentences = 0
     config = pipeline.get_generation_config()
     config.return_timestamps = True
     if word_timestamps_active:
@@ -270,6 +275,7 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
         config.language = "" if model_id_str in QWEN_MODELS else None
     if model_id_str in QWEN_MODELS:
         config.context = prompt
+        config.cancel = cancel
     elif prompt and hasattr(config, "hotwords"):
         config.hotwords = prompt
     started = time.monotonic()
@@ -300,8 +306,10 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
         position = end - overlap_samples
     chunks = _recover_gaps(audio_getter, chunks, config, total_duration, sr, cancel)
     if model_id_str not in QWEN_MODELS and observer is not None and getattr(observer, "adjust_timing", False) and not getattr(observer, "failed", False):
-        from speech_observer import refine_whisper_onsets
-        chunks, observer.adjusted_onsets = refine_whisper_onsets(chunks, observer.merged_spans())
+        from speech_observer import refine_whisper_onsets, refine_whisper_prefixes
+        spans = observer.merged_spans()
+        chunks, observer.adjusted_prefixes = refine_whisper_prefixes(chunks, spans)
+        chunks, observer.adjusted_onsets = refine_whisper_onsets(chunks, spans)
     chunks = group_timed_words(chunks, total_duration, gap_threshold=0.65 if model_id_str in QWEN_MODELS else 0.3)
     chunks = [{key: value for key, value in cue.items() if not key.startswith("_")} for cue in chunks]
     if model_id_str in QWEN_MODELS:
@@ -371,10 +379,14 @@ def _run_upload(file_obj, language, cancel, model="", prompt="", observe_speech=
     diagnostics = observer.finish(chunks) if observer is not None and not getattr(observer, "failed", False) else {}
     if timing_boundaries:
         diagnostics["timing_adjusted_onsets"] = getattr(observer, "adjusted_onsets", 0)
+        diagnostics["timing_adjusted_prefixes"] = getattr(observer, "adjusted_prefixes", 0)
         diagnostics["speech_boundaries_available"] = observer is not None and not getattr(observer, "failed", False)
-    diagnostics.update({"model":model_id_str,"word_timestamps":word_timestamps_active,"gap_recovery":GAP_MAX_RETRY_S>0})
+    diagnostics.update({"model":model_id_str,"word_timestamps":word_timestamps_active,"gap_recovery":GAP_MAX_RETRY_S>0,
+                        "timing_policy_version": 2})
     if model_id_str in QWEN_MODELS:
         diagnostics["timing_review_words"] = getattr(pipeline, "collapsed_words", 0)
+        diagnostics["timing_realignment_attempts"] = getattr(pipeline, "realignment_attempts", 0)
+        diagnostics["timing_realigned_sentences"] = getattr(pipeline, "realigned_sentences", 0)
         diagnostics["timing_recovered_windows"] = getattr(pipeline, "recovered_alignment_windows", 0)
         pipeline.collapsed_words = 0
     log.info("추출 진단: %s", diagnostics)
