@@ -116,6 +116,8 @@ class ServerTests(unittest.TestCase):
         def generate(*args):
             model.realignment_attempts += 2
             model.realigned_sentences += 1
+            model.context_alignment_attempts += 2
+            model.context_repaired_sentences += 1
             return SimpleNamespace(chunks=[dict(text="reply", start_ts=1, end_ts=2)])
         model.generate = generate
         with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", mid):
@@ -126,23 +128,27 @@ class ServerTests(unittest.TestCase):
                 data = response.json()["diagnostics"]
                 self.assertEqual(data["timing_realignment_attempts"], 2)
                 self.assertEqual(data["timing_realigned_sentences"], 1)
-                self.assertEqual(data["timing_policy_version"], 2)
+                self.assertEqual(data["timing_context_attempts"], 2)
+                self.assertEqual(data["timing_context_repaired_sentences"], 1)
+                self.assertEqual(data["timing_policy_version"], 3)
 
     def test_split_windows_share_original_refinement_budget(self):
         model = self.model([])
         seen = []
         def generate(audio, config):
-            seen.append(model.realignment_budget)
+            seen.append((model.realignment_budget, model.context_alignment_budget))
             if len(seen) == 1:
                 model.realignment_budget -= 1
+                model.context_alignment_budget -= 1
                 raise QwenAlignmentError("boundary")
             if len(seen) == 2:
                 model.realignment_budget -= 1
+                model.context_alignment_budget -= 1
             return SimpleNamespace(chunks=[dict(text="reply", start_ts=2, end_ts=3)])
         model.generate = generate
         with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"):
             server._generate_timed_chunks(np.ones(30*16000), SimpleNamespace(), 0, 30)
-        self.assertEqual(seen, [2, 1, 0])
+        self.assertEqual(seen, [(2, 2), (1, 1), (0, 0)])
 
     def test_short_hold_is_qwen_only_and_does_not_override_digital_silence(self):
         model = self.model([SimpleNamespace(text="reply", start_ts=1, end_ts=1.08)])

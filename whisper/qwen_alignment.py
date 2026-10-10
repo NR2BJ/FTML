@@ -94,6 +94,24 @@ def alignment_issue_count(words):
                for word in words)
 
 
+def preserves_stable_words(original, revised, ignored=()):
+    anchors, position = [], 0
+    for word in revised:
+        length = len(canonical_text(word["word"]))
+        anchors.append((position, position+length, word))
+        position += length
+    position = 0
+    for index, word in enumerate(original):
+        right = position+len(canonical_text(word["word"]))
+        matched = [w for left, end_char, w in anchors if left < right and end_char > position]
+        if index not in ignored and not alignment_issue_count([word]) and word["end_ts"]-word["start_ts"] >= 0.12:
+            if (not matched or abs(matched[0]["start_ts"]-word["start_ts"]) > 0.6
+                    or abs(matched[-1]["end_ts"]-word["end_ts"]) > 0.6):
+                return False
+        position = right
+    return True
+
+
 def refine_aligned_sentences(words, text, duration, align, cancel=None, max_attempts=2):
     """불확실한 문장만 같은 원문으로 재정렬한다. 정상 이웃 시각은 보호한다."""
     words = validated_original_words(words, text, duration)
@@ -133,22 +151,7 @@ def refine_aligned_sentences(words, text, duration, align, cancel=None, max_atte
         if alignment_issue_count(revised) or "".join(w["word"] for w in revised) != source:
             continue
         revised = [dict(w, start_ts=w["start_ts"]+start, end_ts=w["end_ts"]+start) for w in revised]
-        anchors, position = [], 0
-        for word in revised:
-            length = len(canonical_text(word["word"]))
-            anchors.append((position, position+length, word))
-            position += length
-        position, stable = 0, True
-        for word in original:
-            right = position+len(canonical_text(word["word"]))
-            matched = [w for left, end_char, w in anchors if left < right and end_char > position]
-            if not alignment_issue_count([word]) and word["end_ts"]-word["start_ts"] >= 0.12:
-                if (not matched or abs(matched[0]["start_ts"]-word["start_ts"]) > 0.6
-                        or abs(matched[-1]["end_ts"]-word["end_ts"]) > 0.6):
-                    stable = False
-                    break
-            position = right
-        if stable:
+        if preserves_stable_words(original, revised):
             replacements[begin] = (end, revised)
     result, index = [], 0
     while index < len(words):

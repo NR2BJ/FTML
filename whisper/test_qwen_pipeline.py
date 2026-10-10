@@ -128,6 +128,44 @@ class QwenExportTests(unittest.TestCase):
 
 
 class QwenPipelineTests(unittest.TestCase):
+    def test_context_repair_uses_private_processor_and_never_retranscribes(self):
+        import numpy as np
+        original = [("前です。", 0, 1), ("開発", 2, 2.4), ("第一", 2.4, 2.8), ("係", 2.8, 3.2),
+                    ("山", 3.5, 3.5), ("田", 3.7, 3.7), ("太郎", 6.2, 6.36),
+                    ("です。", 6.36, 6.36), ("次。", 6.36, 7.2)]
+        fixed = [("開発", 2, 2.4), ("第一", 2.4, 2.8), ("係", 2.8, 3.2),
+                 ("山田", 3.3, 3.8), ("太郎", 3.8, 4.2), ("です。", 4.2, 4.5)]
+        text = "".join(w[0] for w in original)
+        for language, failure in [("Japanese", False), ("Japanese", True), ("Korean", False)]:
+            calls = []
+            processor = SimpleNamespace(tokenize_japanese=lambda source: ["default"])
+            class Aligner:
+                aligner_processor = processor
+                def align(self, *, audio, text, language):
+                    tokens = self.aligner_processor.tokenize_japanese(text)
+                    calls.append(tokens)
+                    if tokens != ["default"] and failure:
+                        raise RuntimeError("optional alignment failure")
+                    values = original if text.startswith("前") else original[1:-1] if tokens == ["default"] else fixed
+                    start = float(audio[0][0])
+                    return [[SimpleNamespace(text=t, start_time=a-start, end_time=b-start) for t, a, b in values]]
+            with self.subTest(language=language, failure=failure):
+                pipe = QwenPipeline.__new__(QwenPipeline)
+                pipe.aligner, pipe.asr = Aligner(), Mock()
+                pipe.asr.generate.return_value = SimpleNamespace(texts=[text], languages=[language])
+                result = pipe.generate(np.arange(8*16000)/16000, SimpleNamespace(language=language))
+                self.assertEqual("".join(w["word"] for w in result.words), text)
+                self.assertIs(pipe.aligner.aligner_processor, processor)
+                self.assertEqual(processor.tokenize_japanese("after"), ["default"])
+                pipe.asr.generate.assert_called_once()
+                repaired = language == "Japanese" and not failure
+                self.assertEqual(pipe.context_repaired_sentences, int(repaired))
+                self.assertEqual(pipe.context_alignment_attempts, 2 if repaired else 1 if failure else 0)
+                if repaired:
+                    self.assertIn("山田太郎です。", [w["word"] for w in result.words])
+                    self.assertEqual(calls[2:], [["開発", "第一", "係", "山田", "太郎", "です"]]*2)
+                    self.assertEqual(pipe.context_alignment_budget, 0)
+
     def make_pipeline(self):
         import numpy as np
         pipe = QwenPipeline.__new__(QwenPipeline)

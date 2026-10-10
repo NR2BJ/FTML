@@ -11,10 +11,12 @@ import subprocess
 import shutil
 import tempfile
 import time
+from copy import copy
 from types import SimpleNamespace
 
 from inference_runtime import StorageFullError
-from qwen_alignment import normalize_aligned_words, refine_aligned_sentences
+from qwen_alignment import canonical_text, normalize_aligned_words, refine_aligned_sentences
+from qwen_context_alignment import repair_stranded_tails
 
 
 MODELS = {"Qwen/Qwen3-ASR-1.7B"}
@@ -169,19 +171,39 @@ class QwenPipeline:
         return self._align(audio, text, detected, getattr(config, "cancel", None))
 
     def _align(self, audio, text, detected, cancel=None):
-        def align(source, start, end):
+        def align(source, start, end, tokens=None):
             if cancel is not None and cancel.is_set():
                 raise InterruptedError("Transcription cancelled")
-            aligned = self.aligner.align(audio=(audio[int(start*16000):int(end*16000)], 16000), text=source, language=detected)[0]
+            aligner = self.aligner
+            if tokens is not None:
+                if detected.lower() != "japanese" or canonical_text("".join(tokens)) != canonical_text(source):
+                    raise ValueError("정렬 단어 묶음이 원문과 다릅니다")
+                # 가중치는 공유하고 호출별 분절기만 복사한다. 실패/취소 때도
+                # 원래 정렬기나 다음 작업의 단어 분절 방식을 바꾸지 않는다.
+                aligner = copy(self.aligner)
+                aligner.aligner_processor = copy(self.aligner.aligner_processor)
+                aligner.aligner_processor.tokenize_japanese = lambda value: list(tokens)
+            aligned = aligner.align(audio=(audio[int(start*16000):int(end*16000)], 16000), text=source, language=detected)[0]
             return [{"word": item.text, "start_ts": item.start_time, "end_ts": item.end_time} for item in aligned]
         words = align(text, 0, len(audio)/16000)
         budget = getattr(self, "realignment_budget", 2)
         words, attempts, refined = refine_aligned_sentences(words, text, len(audio)/16000, align, cancel, max_attempts=budget)
         self.realignment_budget = budget-attempts
-        self.realignment_attempts = getattr(self, "realignment_attempts", 0) + attempts
-        self.realigned_sentences = getattr(self, "realigned_sentences", 0) + refined
         if attempts:
             log.info("Qwen 원문 유지 재정렬: %d회 시도, %d개 문장 채택", attempts, refined)
+        context_attempts, context_refined = 0, 0
+        if detected.lower() == "japanese":
+            context_budget = getattr(self, "context_alignment_budget", 2)
+            words, context_attempts, context_refined = repair_stranded_tails(
+                words, text, len(audio)/16000, align, cancel, max_attempts=context_budget,
+            )
+            self.context_alignment_budget = context_budget-context_attempts
+        self.context_alignment_attempts = getattr(self, "context_alignment_attempts", 0)+context_attempts
+        self.context_repaired_sentences = getattr(self, "context_repaired_sentences", 0)+context_refined
+        self.realignment_attempts = getattr(self, "realignment_attempts", 0)+attempts+context_attempts
+        self.realigned_sentences = getattr(self, "realigned_sentences", 0)+refined+context_refined
+        if context_attempts:
+            log.info("Qwen 입력 범위 대조: %d회 시도, %d개 문장 끝 묶음 채택", context_attempts, context_refined)
         words, collapsed = normalize_aligned_words(words, text, len(audio)/16000)
         self.collapsed_words = getattr(self, "collapsed_words", 0) + collapsed
         segment = {"text": text, "start_ts": 0, "end_ts": len(audio)/16000}

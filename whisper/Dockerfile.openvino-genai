@@ -12,7 +12,7 @@ COPY requirements.txt /app/
 RUN pip3 install --break-system-packages --no-cache-dir torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu \
     && pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt
 
-COPY server.py inference_runtime.py subtitle_processing.py qwen_alignment.py qwen_pipeline.py speech_observer.py benchmark.py /app/
+COPY server.py inference_runtime.py subtitle_processing.py qwen_alignment.py qwen_context_alignment.py qwen_pipeline.py speech_observer.py benchmark.py /app/
 WORKDIR /app
 
 ENV DEVICE=GPU

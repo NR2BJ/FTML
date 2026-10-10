@@ -23,6 +23,9 @@ test('정렬 복구 안내는 복구한 작업에만 표시하고 기존 진단�
     assert.match(render({ timing_realignment_attempts: 3, timing_realigned_sentences: 2 }), /3회 시간 정렬하여 2개 문장/)
     assert.match(render({ timing_realignment_attempts: 1 }), /0개 문장에 반영/)
     assert.doesNotMatch(render({ timing_realignment_attempts: 0 }), /원문 그대로/)
+    assert.match(render({ timing_context_repaired_sentences: 2 }), /2개 문장은 서로 다른 음성 범위/)
+    assert.match(render({ timing_context_repaired_sentences: 2 }), /이름 인식 오류까지 고친 것은 아닙니다/)
+    assert.doesNotMatch(render({ timing_context_repaired_sentences: 0 }), /한 표시 단위/)
     assert.match(render({ speech_boundaries_available: false }), /원래 시각을 유지/)
     assert.doesNotMatch(render({ speech_boundaries_available: true }), /원래 시각을 유지/)
   } finally {

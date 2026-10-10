@@ -202,6 +202,7 @@ def _generate_timed_chunks(audio, config, offset, total_duration, cancel=None, d
     if depth == 0 and model_id_str in QWEN_MODELS:
         # 정렬 실패로 창을 다시 나누어도 원래 입력 창의 보완 예산을 공유한다.
         pipeline.realignment_budget = 2
+        pipeline.context_alignment_budget = 2
     try:
         result = pipeline.generate(audio, config)
     except QwenAlignmentError as exc:
@@ -262,6 +263,8 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
         pipeline.recovered_alignment_windows = 0
         pipeline.realignment_attempts = 0
         pipeline.realigned_sentences = 0
+        pipeline.context_alignment_attempts = 0
+        pipeline.context_repaired_sentences = 0
     config = pipeline.get_generation_config()
     config.return_timestamps = True
     if word_timestamps_active:
@@ -382,11 +385,13 @@ def _run_upload(file_obj, language, cancel, model="", prompt="", observe_speech=
         diagnostics["timing_adjusted_prefixes"] = getattr(observer, "adjusted_prefixes", 0)
         diagnostics["speech_boundaries_available"] = observer is not None and not getattr(observer, "failed", False)
     diagnostics.update({"model":model_id_str,"word_timestamps":word_timestamps_active,"gap_recovery":GAP_MAX_RETRY_S>0,
-                        "timing_policy_version": 2})
+                        "timing_policy_version": 3 if model_id_str in QWEN_MODELS else 2})
     if model_id_str in QWEN_MODELS:
         diagnostics["timing_review_words"] = getattr(pipeline, "collapsed_words", 0)
         diagnostics["timing_realignment_attempts"] = getattr(pipeline, "realignment_attempts", 0)
         diagnostics["timing_realigned_sentences"] = getattr(pipeline, "realigned_sentences", 0)
+        diagnostics["timing_context_attempts"] = getattr(pipeline, "context_alignment_attempts", 0)
+        diagnostics["timing_context_repaired_sentences"] = getattr(pipeline, "context_repaired_sentences", 0)
         diagnostics["timing_recovered_windows"] = getattr(pipeline, "recovered_alignment_windows", 0)
         pipeline.collapsed_words = 0
     log.info("추출 진단: %s", diagnostics)
