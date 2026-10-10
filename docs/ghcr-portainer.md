@@ -40,7 +40,9 @@ GitHub 공개 저장소와 GHCR 공개 여부는 별개다. 최초 게시 후 Gi
 | `WHISPER_SPEECH_BOUNDARIES` | `true` 기본값. Whisper 긴 선행 무음 보정, 문제 시 `false` |
 | `WHISPER_GAP_RETRY_SECONDS` | `0` 권장. 기존 값이 있으면 확인 |
 
-`ftml_data`, `whisper_models`, `homeserver-net`은 기존 외부 이름 그대로다. 이미 UID/GID 1000으로 이전했다면 이번에 다시 전체 파일의 소유권을 바꿀 필요가 없다. 다른 이름을 쓰던 설치는 YAML의 외부 이름을 실제 값과 맞춘다.
+`ftml_data`, `whisper_models`는 기존 외부 볼륨 이름 그대로다. 이미 UID/GID 1000으로 이전했다면 이번에 다시 전체 파일의 소유권을 바꿀 필요가 없다. 다른 볼륨 이름을 쓰던 설치는 YAML의 외부 이름을 실제 값과 맞춘다.
+
+네트워크는 외부 `homeserver-net` 대신 Compose의 스택별 기본 네트워크를 사용한다. 스택 이름이 `ftml`이면 보통 `ftml_default`이며, 세 서비스는 `backend:8080`, `whisper:8178` 같은 서비스 이름으로 서로 접근한다. Portainer Editor에서 각 서비스의 `networks`와 마지막 외부 `networks` 선언을 제거한 뒤 재배포해야 적용된다. 외부 역방향 프록시가 `frontend:80` 같은 컨테이너 이름으로 접속하고 있었다면 연결이 끊길 수 있으므로, 게시한 호스트 포트(기본 7979)로 접근하도록 별도로 확인한다. 기존 공유 네트워크 자체는 삭제하지 않는다.
 
 ## 다음 업데이트와 복구
 

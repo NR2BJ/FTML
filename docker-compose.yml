@@ -6,8 +6,6 @@ services:
       - "${FTML_PORT:-7979}:80"
     depends_on:
       - backend
-    networks:
-      - homeserver-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80"]
@@ -48,8 +46,6 @@ services:
     group_add:
       - "${RENDER_GID:?호스트 GPU render 장치의 GID를 지정하세요}"
       - "${VIDEO_GID:?호스트 GPU card 장치의 GID를 지정하세요}"
-    networks:
-      - homeserver-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
@@ -86,8 +82,6 @@ services:
     group_add:
       - "${RENDER_GID:?호스트 GPU render 장치의 GID를 지정하세요}"
       - "${VIDEO_GID:?호스트 GPU card 장치의 GID를 지정하세요}"
-    networks:
-      - homeserver-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8178/health')"]
@@ -99,8 +93,4 @@ volumes:
   ftml_data:
     external: true
   whisper_models:
-    external: true
-
-networks:
-  homeserver-net:
     external: true
