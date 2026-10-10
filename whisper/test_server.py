@@ -22,6 +22,49 @@ except ImportError:
 
 @unittest.skipIf(server is None, "Install Whisper web/audio dependencies to run service tests")
 class ServerTests(unittest.TestCase):
+    def test_whisper_language_contract_with_real_config_and_no_model(self):
+        try:
+            from openvino_genai import WhisperGenerationConfig
+        except ImportError:
+            self.skipTest("OpenVINO 설정 객체 검사를 위한 라이브러리 필요")
+        # 실제 설정 검증기만 사용한다. 모델 준비/다운로드/추론은 하지 않는다.
+        config = WhisperGenerationConfig()
+        config.set_eos_token_id(50257)
+        config.lang_to_id = {"<|ja|>": 50266, "<|ko|>": 50264, "<|en|>": 50259}
+        seen = []
+        def generate(audio, received):
+            received.validate()
+            seen.append(received.language)
+            return SimpleNamespace(chunks=[dict(text="hello", start_ts=0, end_ts=1)])
+        model = SimpleNamespace(get_generation_config=lambda: config, generate=generate)
+        cases = [(None, None), ("auto", None), ("ja", "<|ja|>"),
+                 ("ko", "<|ko|>"), ("en", "<|en|>"), ("auto", None), ("", None)]
+        with patch.object(server, "pipeline", model), patch.object(server, "load_model_by_id", side_effect=AssertionError("시험 중 모델 로드 금지")):
+            for language, expected in cases:
+                with self.subTest(language=language):
+                    data = {} if language is None else {"language": language}
+                    response = self.client.post("/v1/audio/transcriptions", data=data,
+                                                files={"file": ("audio.wav", self.wav(1))})
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(seen[-1], expected)
+        self.assertEqual(len(seen), len(cases))
+
+    def test_qwen_keeps_empty_auto_language_and_explicit_language_tokens(self):
+        seen = []
+        model = self.model([])
+        def generate(audio, config):
+            seen.append(config.language)
+            self.assertIsInstance(config.language, str)
+            return SimpleNamespace(chunks=[dict(text="hello", start_ts=0, end_ts=1)])
+        model.generate = generate
+        mid = "Qwen/Qwen3-ASR-1.7B"
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", mid):
+            for language in ["", "auto", "ja", "ko", "en", "auto"]:
+                response = self.client.post("/v1/audio/transcriptions", data={"model": mid, "language": language},
+                                            files={"file": ("audio.wav", self.wav(1))})
+                self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(seen, ["", "", "<|ja|>", "<|ko|>", "<|en|>", ""])
+
     def test_benchmark_uses_current_result_contract_without_loading_model(self):
         import benchmark
         import tempfile

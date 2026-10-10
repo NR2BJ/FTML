@@ -145,6 +145,14 @@ class QwenPipelineTests(unittest.TestCase):
         self.assertEqual(pipe.aligner.align.call_args.kwargs["language"],"Japanese")
         self.assertEqual(result.words[0]["start_ts"],2)
 
+    def test_auto_language_is_omitted_and_detected_language_reaches_aligner(self):
+        for language in ["", "auto"]:
+            with self.subTest(language=language):
+                pipe, audio = self.make_pipeline()
+                pipe.generate(audio, SimpleNamespace(language=language))
+                self.assertNotIn("language", pipe.asr.generate.call_args.kwargs)
+                self.assertEqual(pipe.aligner.align.call_args.kwargs["language"], "Japanese")
+
     def test_untimed_result_does_not_become_full_window_caption(self):
         pipe,audio = self.make_pipeline()
         pipe.aligner.align.return_value = [[]]

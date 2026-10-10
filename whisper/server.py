@@ -262,7 +262,12 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
     if word_timestamps_active:
         config.word_timestamps = True
     config.task = "transcribe"
-    config.language = f"<|{language}|>" if language and language != "auto" else ""
+    if language and language != "auto":
+        config.language = f"<|{language}|>"
+    else:
+        # Whisper의 자동 감지는 None이다. 빈 문자열은 존재하지 않는 언어로 검증된다.
+        # Qwen 연결부는 빈 문자열일 때 언어 옵션을 생략하므로 기존 규칙을 유지한다.
+        config.language = "" if model_id_str in QWEN_MODELS else None
     if model_id_str in QWEN_MODELS:
         config.context = prompt
     elif prompt and hasattr(config, "hotwords"):
