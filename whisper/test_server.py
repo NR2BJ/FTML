@@ -10,6 +10,7 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 from inference_runtime import STORAGE_FULL_MESSAGE, StorageFullError
+from qwen_alignment import QwenAlignmentError
 
 try:
     import numpy as np
@@ -21,6 +22,116 @@ except ImportError:
 
 @unittest.skipIf(server is None, "Install Whisper web/audio dependencies to run service tests")
 class ServerTests(unittest.TestCase):
+    def test_alignment_retry_is_local_and_keeps_absolute_timing(self):
+        calls = []
+        model = self.model([])
+        def generate(audio, config):
+            calls.append(len(audio)/16000)
+            if len(calls) == 1:
+                raise QwenAlignmentError("all_collapsed")
+            return SimpleNamespace(words=[{"word": "a" if len(calls) == 2 else "b", "start_ts": 2, "end_ts": 3}],
+                                   chunks=[{"text": "a" if len(calls) == 2 else "b", "start_ts": 0, "end_ts": len(audio)/16000}])
+        model.generate = generate
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"):
+            cues = server._generate_timed_chunks(np.ones(30*16000), SimpleNamespace(), 1400, 1460)
+        self.assertEqual(calls, [30, 16, 16])
+        self.assertEqual([(c["start_ts"], c["end_ts"]) for c in cues], [(1402, 1403), (1416, 1417)])
+        self.assertEqual(model.recovered_alignment_windows, 1)
+
+    def test_successful_alignment_has_no_extra_inference(self):
+        from unittest.mock import Mock
+        model = self.model([])
+        model.generate = Mock(return_value=SimpleNamespace(chunks=[{"text":"a", "start_ts":1, "end_ts":2}]))
+        with patch.object(server, "pipeline", model):
+            server._generate_timed_chunks(np.ones(30*16000), SimpleNamespace(), 0, 30)
+        model.generate.assert_called_once()
+
+    def test_late_window_recovery_preserves_previous_cues_and_continues(self):
+        calls = []
+        model = self.model([])
+        model.chunk_seconds = 30
+        def generate(audio, config):
+            calls.append(len(audio)/16000)
+            if len(calls) == 2:
+                raise QwenAlignmentError("all_collapsed")
+            text = {1:"a", 3:"b", 4:"c", 5:"d"}[len(calls)]
+            return SimpleNamespace(words=[{"word":text, "start_ts":2, "end_ts":3}],
+                                   chunks=[{"text":text, "start_ts":0, "end_ts":len(audio)/16000}])
+        model.generate = generate
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"), patch.object(server, "CHUNK_OVERLAP_S", 5), patch.object(server, "GAP_MAX_RETRY_S", 0):
+            cues, _, _, _ = server.run_inference(np.ones(60*16000), model="Qwen/Qwen3-ASR-1.7B")
+        self.assertEqual(calls, [30, 30, 16, 16, 10])
+        self.assertEqual([(c["text"], c["start_ts"], c["end_ts"]) for c in cues],
+                         [("a", 2, 3), ("b", 27, 28), ("c", 41, 42), ("d", 52, 53)])
+
+    def test_alignment_retry_limit_keeps_failure_explicit(self):
+        from unittest.mock import Mock
+        model = self.model([])
+        model.generate = Mock(side_effect=QwenAlignmentError("out_of_range"))
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"):
+            with self.assertRaises(QwenAlignmentError) as caught:
+                server._generate_timed_chunks(np.ones(30*16000), SimpleNamespace(), 1400, 1460)
+        self.assertEqual(model.generate.call_count, 3)
+        self.assertEqual(caught.exception.window, (1400, 1409))
+        self.assertEqual(caught.exception.reason, "out_of_range")
+
+    def test_alignment_retry_never_turns_empty_results_into_success(self):
+        from unittest.mock import Mock
+        model = self.model([])
+        model.generate = Mock(side_effect=[QwenAlignmentError("all_collapsed"), SimpleNamespace(chunks=[]), SimpleNamespace(chunks=[])])
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"):
+            with self.assertRaises(QwenAlignmentError) as caught:
+                server._generate_timed_chunks(np.ones(30*16000), SimpleNamespace(), 1400, 1460)
+        self.assertEqual(caught.exception.reason, "empty_retry")
+
+    def test_alignment_retry_honors_cancel_before_second_inference(self):
+        cancel, calls = threading.Event(), []
+        model = self.model([])
+        def generate(*args):
+            calls.append(True)
+            cancel.set()
+            raise QwenAlignmentError("empty")
+        model.generate = generate
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"):
+            with self.assertRaises(InterruptedError):
+                server._generate_timed_chunks(np.ones(30*16000), SimpleNamespace(), 0, 30, cancel)
+        self.assertEqual(len(calls), 1)
+
+    def test_unrelated_inference_errors_are_not_retried(self):
+        from unittest.mock import Mock
+        model = self.model([])
+        model.generate = Mock(side_effect=RuntimeError("GPU failure"))
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"):
+            with self.assertRaises(RuntimeError):
+                server._generate_timed_chunks(np.ones(30*16000), SimpleNamespace(), 0, 30)
+        model.generate.assert_called_once()
+
+    def test_http_alignment_failure_exposes_window_and_reason(self):
+        from unittest.mock import Mock
+        model = self.model([])
+        model.generate = Mock(side_effect=QwenAlignmentError("all_collapsed"))
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"):
+            response = self.client.post("/v1/audio/transcriptions", files={"file": ("audio.wav", self.wav(2))},
+                                        data={"model":"Qwen/Qwen3-ASR-1.7B"})
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("00:00.000~00:02.000", response.json()["detail"])
+        self.assertIn("모든 단어", response.json()["detail"])
+
+    def test_recovery_diagnostics_do_not_leak_into_next_job(self):
+        from unittest.mock import Mock
+        model = self.model([])
+        success = SimpleNamespace(chunks=[{"text":"a", "start_ts":2, "end_ts":3}])
+        model.generate = Mock(side_effect=[QwenAlignmentError("empty"), success, success, success])
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"):
+            first = self.client.post("/v1/audio/transcriptions", files={"file": ("audio.wav", self.wav(30))},
+                                     data={"model":"Qwen/Qwen3-ASR-1.7B", "response_format":"ftml_json"})
+            second = self.client.post("/v1/audio/transcriptions", files={"file": ("audio.wav", self.wav(30))},
+                                      data={"model":"Qwen/Qwen3-ASR-1.7B", "response_format":"ftml_json"})
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["diagnostics"]["timing_recovered_windows"], 1)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["diagnostics"]["timing_recovered_windows"], 0)
+
     def test_word_pipeline_failure_keeps_segment_fallback_explicit(self):
         attempts = []
         def construct(*args, **kwargs):

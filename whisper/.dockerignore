@@ -3,6 +3,7 @@
 !server.py
 !inference_runtime.py
 !subtitle_processing.py
+!qwen_alignment.py
 !qwen_pipeline.py
 !speech_observer.py
 !benchmark.py

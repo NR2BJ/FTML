@@ -3,7 +3,6 @@
 import hashlib
 import json
 import logging
-import math
 import os
 from pathlib import Path
 import selectors
@@ -16,6 +15,7 @@ from types import SimpleNamespace
 from difflib import SequenceMatcher
 
 from inference_runtime import StorageFullError
+from qwen_alignment import normalize_aligned_words
 
 
 MODELS = {"Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ASR-0.6B"}
@@ -190,43 +190,3 @@ class QwenPipeline:
         if not heard or SequenceMatcher(None, expected, heard, autojunk=False).ratio() < 0.72:
             raise ValueError("참고 가사와 실제 인식 내용이 충분히 일치하지 않습니다. TV판 구간과 가사를 확인해 주세요")
         return self._align(audio, text, LANGUAGES.get(language, language))
-
-
-def normalize_aligned_words(words, text, duration):
-    canonical = lambda value: "".join(c.lower() for c in value if c.isalnum())
-    message = "Qwen 단어 시각 정렬이 불확실합니다. 기존 자막은 유지되며 Whisper로 비교할 수 있습니다"
-    if not words or canonical("".join(w["word"] for w in words)) != canonical(text):
-        raise ValueError(message)
-    for word in words:
-        start, end = word["start_ts"], word["end_ts"]
-        if not math.isfinite(start) or not math.isfinite(end) or not 0 <= start <= end <= duration+0.1 or start >= duration:
-            raise ValueError(message)
-        word["end_ts"] = min(end, duration)
-    if not any(w["end_ts"] > w["start_ts"] for w in words):
-        raise ValueError(message)
-    result, collapsed, index = [], sum(w["start_ts"] == w["end_ts"] for w in words), 0
-    while index < len(words):
-        word = dict(words[index])
-        if word["end_ts"] == word["start_ts"]:
-            # 공식 정렬기의 반복 시각은 인접 단어에만 흡수한다. 먼 무음을 메우지 않는다.
-            following = words[index+1] if index+1 < len(words) else None
-            if following and word["start_ts"] <= following["start_ts"] <= word["end_ts"]+0.5:
-                words[index+1] = {**following, "word": word["word"]+following["word"], "start_ts":word["start_ts"]}
-            elif result and result[-1]["end_ts"] <= word["start_ts"] <= result[-1]["end_ts"]+0.5:
-                result[-1]["word"] += word["word"]
-                result[-1]["end_ts"] = word["start_ts"]
-            else:
-                # 고정한 공식 모델의 시각 해상도는 80ms다. 고립된 단어는 한 칸만
-                # 추정하고 진단에 남긴다. 다음 대사까지 수초간 늘려 표시하지 않는다.
-                word["end_ts"] = min(word["start_ts"]+0.08, duration)
-                if following:
-                    word["end_ts"] = min(word["end_ts"], following["start_ts"])
-                if word["end_ts"] <= word["start_ts"] or (result and word["start_ts"] < result[-1]["end_ts"]):
-                    raise ValueError(message)
-                result.append(word)
-        elif result and word["start_ts"] < result[-1]["end_ts"]:
-            raise ValueError(message)
-        else:
-            result.append(word)
-        index += 1
-    return result, collapsed

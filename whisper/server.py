@@ -34,6 +34,7 @@ from pydantic import BaseModel
 from inference_runtime import ModelGate, STORAGE_FULL_MESSAGE, is_storage_full
 from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks, timed_words_to_chunks, stitch_chunks
 from qwen_pipeline import MODELS as QWEN_MODELS
+from qwen_alignment import QwenAlignmentError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -195,6 +196,36 @@ def check_cancelled(cancel):
         raise InterruptedError("Transcription cancelled")
 
 
+def _generate_timed_chunks(audio, config, offset, total_duration, cancel=None, depth=0):
+    check_cancelled(cancel)
+    if not audio.size or not np.any(audio):
+        return []
+    try:
+        result = pipeline.generate(audio, config)
+    except QwenAlignmentError as exc:
+        window = (offset, offset + len(audio)/16000)
+        log.warning("Qwen 정렬 검사 실패: %.3f~%.3fs, 이유=%s, 재처리 깊이=%d",
+                    *window, exc.reason, depth)
+        # 정상 구간은 다시 인식하지 않는다. 실패한 30초 창만 최대 두 번
+        # 나누고, 단어를 자르지 않도록 경계 앞뒤 1초를 겹쳐 읽는다.
+        if model_id_str not in QWEN_MODELS or depth >= 2 or len(audio) <= 8*16000:
+            raise QwenAlignmentError(exc.reason, window) from exc
+        check_cancelled(cancel)
+        midpoint = len(audio)//2
+        left_end, right_start = midpoint + 16000, midpoint - 16000
+        before = _generate_timed_chunks(audio[:left_end], config, offset, total_duration, cancel, depth+1)
+        after = _generate_timed_chunks(audio[right_start:], config, offset + right_start/16000, total_duration, cancel, depth+1)
+        recovered = stitch_chunks(before, after, offset + midpoint/16000)
+        if not recovered:
+            raise QwenAlignmentError("empty_retry", window) from exc
+        if depth == 0:
+            pipeline.recovered_alignment_windows = getattr(pipeline, "recovered_alignment_windows", 0) + 1
+            log.info("Qwen 정렬 구간 재처리 완료: %.3f~%.3fs, %d개 자막", *window, len(recovered))
+        return recovered
+    check_cancelled(cancel)
+    return timed_words_to_chunks(getattr(result, "words", None), getattr(result, "chunks", []) or [], offset, total_duration)
+
+
 def _recover_gaps(audio_getter, chunks, config, total_duration, sr=16000, cancel=None):
     if GAP_THRESHOLD_S <= 0 or GAP_MAX_RETRY_S <= 0:
         return chunks
@@ -210,9 +241,7 @@ def _recover_gaps(audio_getter, chunks, config, total_duration, sr=16000, cancel
             budget -= window_end-start
             # Only skip digital silence, not quiet speech; this is not VAD.
             if audio.size and np.any(audio):
-                result = pipeline.generate(audio, config)
-                check_cancelled(cancel)
-                recovered = timed_words_to_chunks(getattr(result, "words", None), getattr(result, "chunks", []) or [], begin_sample/sr, total_duration)
+                recovered = _generate_timed_chunks(audio, config, begin_sample/sr, total_duration, cancel)
                 recovered = [cue for cue in recovered if cue["start_ts"] >= start-1 and cue["end_ts"] <= window_end+1]
                 chunks = merge_chunks(chunks, recovered, recovery=True)
             start = window_end
@@ -225,6 +254,9 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
         load_model_by_id(model, is_swap=True, cancel=cancel)
         check_cancelled(cancel)
     ensure_model_loaded()
+    if model_id_str in QWEN_MODELS:
+        pipeline.collapsed_words = 0
+        pipeline.recovered_alignment_windows = 0
     config = pipeline.get_generation_config()
     config.return_timestamps = True
     if word_timestamps_active:
@@ -247,9 +279,7 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
         if not audio.size or not np.any(audio):
             position = end
             continue
-        result = pipeline.generate(audio, config)
-        check_cancelled(cancel)
-        incoming = timed_words_to_chunks(getattr(result, "words", None), getattr(result, "chunks", []) or [], position/sr, total_duration)
+        incoming = _generate_timed_chunks(audio, config, position/sr, total_duration, cancel)
         if observer is not None:
             observer.observe(audio, incoming, position/sr)
         seam = (position+max(position, last_window_end))/2/sr
@@ -353,6 +383,7 @@ def _run_upload(file_obj, language, cancel, model="", prompt="", lyrics=None, ob
     diagnostics.update({"model":model_id_str,"word_timestamps":word_timestamps_active,"gap_recovery":GAP_MAX_RETRY_S>0})
     if model_id_str in QWEN_MODELS:
         diagnostics["timing_review_words"] = getattr(pipeline, "collapsed_words", 0)
+        diagnostics["timing_recovered_windows"] = getattr(pipeline, "recovered_alignment_windows", 0)
         pipeline.collapsed_words = 0
     if lyrics_error:
         diagnostics["lyrics_error"] = lyrics_error
@@ -404,6 +435,7 @@ async def transcribe_openai(
     except InterruptedError as exc:
         raise HTTPException(499, str(exc)) from exc
     except ValueError as exc:
+        log.warning("자막 추출 검증 실패: %s", exc)
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
         log.exception("Inference failed")
