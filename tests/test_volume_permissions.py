@@ -156,6 +156,13 @@ class RuntimeImageTests(unittest.TestCase):
     def test_image_includes_context_alignment_module(self):
         content = (ROOT / "whisper/Dockerfile.openvino-genai").read_text()
         self.assertIn("qwen_context_alignment.py", content)
+        allowed = (ROOT / "whisper/.dockerignore").read_text().splitlines()
+        for line in content.splitlines():
+            if line.startswith("COPY "):
+                for filename in line.split()[1:-1]:
+                    if filename.endswith(".py"):
+                        self.assertTrue((ROOT / "whisper" / filename).is_file(), filename)
+                        self.assertIn("!"+filename, allowed, filename)
 
     def test_media_mount_is_fixed_read_only_and_data_volume_is_preserved(self):
         content = (ROOT / "docker-compose.yml").read_text()
