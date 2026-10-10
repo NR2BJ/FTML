@@ -22,6 +22,8 @@ import {
 } from '@/utils/subtitleTasks'
 import { useSubtitleTasks } from './useSubtitleTasks'
 import WorkReference from './WorkReference'
+import SubtitleLibrary from './SubtitleLibrary'
+import { useAuthStore } from '@/stores/authStore'
 import ExtractionDiagnostics from './ExtractionDiagnostics'
 import TranslationOptions, {
   defaultTranslationOptions,
@@ -43,14 +45,16 @@ export default function SubtitleTaskDialog({
   audioTrack = 0,
   onClose,
 }: Props) {
+  const role = useAuthStore(s => s.user?.role)
+  const canEdit = role === 'admin' || role === 'user'
+  const [tab, setTab] = useState<SubtitleTaskMode | 'manage' | 'progress'>(canEdit ? initialMode : 'manage')
   const [mode, setMode] = useState(initialMode)
+  const globalCompleted = useJobStore(s => s.jobs.filter(j => paths.includes(j.file_path) && j.status === 'completed').map(j => j.id).sort().join(','))
   const [engine, setEngine] = useState('')
   const [engines, setEngines] = useState<AvailableEngine[]>([])
   const [language, setLanguage] = useState('auto')
   const [model, setModel] = useState('OpenVINO/whisper-large-v3-int8-ov')
-  const [lyricsEnabled, setLyricsEnabled] = useState(false)
   const [observeSpeech, setObserveSpeech] = useState(false)
-  const [lyrics, setLyrics] = useState({ start: 0, end: 0, text: '' })
   const [translation, setTranslation] = useState(defaultTranslationOptions)
   const [source, setSource] = useState(subtitleId)
   const [subtitles, setSubtitles] = useState<SubtitleEntry[]>([])
@@ -63,6 +67,7 @@ export default function SubtitleTaskDialog({
   const roots =
     items?.flatMap((item) => (item.job_id ? [item.job_id] : [])) || []
   const { jobs, error: pollError, refresh } = useSubtitleTasks(roots)
+  const completedVersion = `${globalCompleted};${jobs.filter(j => j.status === 'completed').map(j => j.id).sort().join(',')}`
   const firstPath = paths[0]
   const single = paths.length === 1
   const localASR = engines.find((e) => e.value === engine)?.type === 'openvino-genai'
@@ -70,7 +75,7 @@ export default function SubtitleTaskDialog({
     roots.length > 0 && roots.every((id) => workflowFinished(id, jobs))
 
   useEffect(() => {
-    if (mode === 'translate') return
+    if (!canEdit || mode === 'translate') return
     let cancelled = false
     listAvailableEngines()
       .then(({ data }) => {
@@ -84,24 +89,27 @@ export default function SubtitleTaskDialog({
     return () => {
       cancelled = true
     }
-  }, [mode])
+  }, [mode, canEdit])
   useEffect(() => {
     if (mode !== 'translate' || !single) return
     const controller = new AbortController()
     setSourceError('')
     listSubtitles(firstPath, controller.signal)
       .then(({ data }) => {
-        if (!controller.signal.aborted) setSubtitles(data || [])
+        if (!controller.signal.aborted) {
+          setSubtitles(data || [])
+          setSource(current => data?.some(sub => sub.id === current) ? current : '')
+        }
       })
       .catch(() => {
         if (!controller.signal.aborted)
           setSourceError('원본 자막 목록을 읽지 못했습니다.')
       })
     return () => controller.abort()
-  }, [mode, single, firstPath])
+  }, [mode, single, firstPath, completedVersion, tab])
 
   const start = async () => {
-    if (submission.current) return
+    if (submission.current || !canEdit) return
     submission.current = true
     setSubmitting(true)
     setError('')
@@ -117,7 +125,6 @@ export default function SubtitleTaskDialog({
           model: localASR ? model : '',
           audio_track: single ? audioTrack : 0,
           observe_speech: localASR && observeSpeech,
-          lyrics: localASR && single && lyricsEnabled && model.startsWith('Qwen/') ? lyrics : undefined,
         },
         translate:
           mode === 'generate'
@@ -131,6 +138,7 @@ export default function SubtitleTaskDialog({
               },
       })
       setItems(data.items)
+      setTab('progress')
       void useJobStore.getState().fetchActiveJobs()
     } catch (error) {
       setError((error as { response?: { data?: { error?: string } } }).response?.data?.error || '작업을 시작하지 못했습니다. 연결 상태와 설정을 확인해 주세요.')
@@ -190,26 +198,20 @@ export default function SubtitleTaskDialog({
           </button>
         </header>
         <div className="space-y-4 overflow-y-auto p-4">
-          {!items ? (
+          <div className="flex flex-wrap gap-1 rounded-lg bg-dark-800 p-1" aria-label="작업 종류">
+            {canEdit && (Object.keys(taskModeLabels) as SubtitleTaskMode[]).map(value =>
+              <button key={value} disabled={submitting} aria-pressed={tab === value}
+                onClick={() => { setMode(value); setTab(value) }}
+                className={`flex-1 rounded px-2 py-2 text-sm ${tab === value ? 'bg-primary-600 text-white' : 'text-gray-400'}`}>
+                {taskModeLabels[value]}
+              </button>
+            )}
+            {items && <button aria-pressed={tab === 'progress'} onClick={() => setTab('progress')} className="rounded px-2 py-2 text-sm text-primary-400">진행 상황</button>}
+            <button aria-pressed={tab === 'manage'} disabled={submitting} onClick={() => setTab('manage')}
+              className={`flex-1 rounded px-2 py-2 text-sm ${tab === 'manage' ? 'bg-primary-600 text-white' : 'text-gray-400'}`}>자막 삭제</button>
+          </div>
+          {tab === 'manage' ? <SubtitleLibrary paths={paths} version={completedVersion} /> : tab !== 'progress' ? (
             <>
-              <div
-                className="flex gap-1 rounded-lg bg-dark-800 p-1"
-                aria-label="작업 종류"
-              >
-                {(Object.keys(taskModeLabels) as SubtitleTaskMode[]).map(
-                  (value) => (
-                    <button
-                      key={value}
-                      disabled={submitting}
-                      aria-pressed={mode === value}
-                      onClick={() => setMode(value)}
-                      className={`flex-1 rounded px-2 py-2 text-sm ${mode === value ? 'bg-primary-600 text-white' : 'text-gray-400'}`}
-                    >
-                      {taskModeLabels[value]}
-                    </button>
-                  )
-                )}
-              </div>
               {mode !== 'translate' && (
                 <div className="space-y-3">
                   <label className="block text-xs text-gray-400">
@@ -238,7 +240,6 @@ export default function SubtitleTaskDialog({
                       className="mt-1 w-full rounded border border-dark-600 bg-dark-800 p-2 text-white">
                       <option value="OpenVINO/whisper-large-v3-int8-ov">Whisper large-v3 INT8</option>
                       <option value="Qwen/Qwen3-ASR-1.7B">Qwen3-ASR 1.7B INT8 (비교용)</option>
-                      <option value="Qwen/Qwen3-ASR-0.6B">Qwen3-ASR 0.6B INT8 (가벼운 비교용)</option>
                     </select>
                   </label>
                   {localASR && model.startsWith('Qwen/') && <p className="text-xs text-amber-400">
@@ -265,21 +266,9 @@ export default function SubtitleTaskDialog({
                   <p className="text-xs text-gray-500">
                     음성 트랙 {single ? audioTrack + 1 : 1}에서 추출합니다.
                     기본 모델은 Whisper large-v3 INT8입니다.
+                    Whisper는 긴 선행 무음이 첫 단어에 붙은 경우만 말소리 경계와 대조합니다. 원음을 잘라 인식하거나 대사를 삭제하지 않습니다.
                   </p>
                   {localASR && <label className="flex items-center gap-2 text-xs text-gray-400"><input type="checkbox" checked={observeSpeech} onChange={(e) => setObserveSpeech(e.target.checked)} />Silero 말소리 검출 비교: 기록만 남기고 오디오·자막을 자르지 않음</label>}
-                  {localASR && single && model.startsWith('Qwen/') && <details className="rounded border border-dark-600 p-3 text-xs text-gray-300">
-                    <summary className="cursor-pointer">확보한 가사로 특정 구간 보정 (선택)</summary>
-                    <div className="mt-3 space-y-2">
-                      <label className="flex items-center gap-2"><input type="checkbox" checked={lyricsEnabled} onChange={(e) => setLyricsEnabled(e.target.checked)} />가사 참고 사용</label>
-                      <p>직접 확보한 원어 가사와 영상의 노래 구간을 지정하세요. 음성 언어도 직접 선택해야 합니다. 최대 180초, TV판 기준입니다.</p>
-                      <div className="flex gap-2">
-                        <label>시작 (초)<input aria-label="가사 시작 초" type="number" min={0} step={0.1} value={lyrics.start} onChange={(e) => setLyrics({ ...lyrics, start: Number(e.target.value) })} className="mt-1 w-full rounded border border-dark-600 bg-dark-800 p-2" /></label>
-                        <label>끝 (초)<input aria-label="가사 끝 초" type="number" min={0} step={0.1} value={lyrics.end} onChange={(e) => setLyrics({ ...lyrics, end: Number(e.target.value) })} className="mt-1 w-full rounded border border-dark-600 bg-dark-800 p-2" /></label>
-                      </div>
-                      <textarea aria-label="참고 가사 원문" rows={5} maxLength={5000} value={lyrics.text} onChange={(e) => setLyrics({ ...lyrics, text: e.target.value })} className="w-full rounded border border-dark-600 bg-dark-800 p-2" />
-                      <p className="text-amber-400">일치가 부족하거나 구간 경계가 대사와 겹치면 보정을 중단합니다. 보정 전 원 추출본은 별도 자막으로 보존하며, 가창 시각은 재생하며 확인해 주세요.</p>
-                    </div>
-                  </details>}
                 </div>
               )}
               {mode === 'translate' && (
@@ -346,7 +335,7 @@ export default function SubtitleTaskDialog({
                 · {roots.filter((id) => workflowFinished(id, jobs)).length}/
                 {roots.length}개 영상
               </p>
-              {items.map((item) => (
+              {items?.map((item) => (
                 <div
                   key={item.path}
                   className="rounded-lg border border-dark-700 bg-dark-800 p-3"
@@ -447,7 +436,7 @@ export default function SubtitleTaskDialog({
           >
             닫기
           </button>
-          {!items && (
+          {canEdit && tab !== 'manage' && tab !== 'progress' && (
             <button
               disabled={
                 submitting ||

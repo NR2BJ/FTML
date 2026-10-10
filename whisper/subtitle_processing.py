@@ -4,11 +4,11 @@ import math
 from difflib import SequenceMatcher
 
 
-def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, engine="whisper"):
+def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, engine="whisper", word_output=False):
     """유효한 단어 시각은 보존하고 불일치한 원문 부분만 이웃 시각으로 제한한다."""
     fallback = normalize_chunks(segments, offset, total_duration)
     if not words:
-        return fallback
+        return [dict(cue, _segment=(offset, index)) for index, cue in enumerate(fallback)] if word_output else fallback
     source = "".join(c["text"] for c in fallback)
     canonical = lambda text: "".join(c for c in text if c.isalnum())
     word_text, entries = "", []
@@ -58,7 +58,8 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
                 elif gap and timed and position > 0:
                     timed[-1]["text"] += gap
                 prefix = gap if position == 0 and not canonical(gap) else ""
-                timed.append({"text": prefix + text[char_start:char_end], "start_ts": start, "end_ts": end})
+                timed.append({"text": prefix + text[char_start:char_end], "start_ts": start, "end_ts": end,
+                              **({"_timed_word": True} if word_output else {})})
                 position, previous_end = char_end, end
             tail = text[position:]
             if anchors and canonical(tail):
@@ -70,9 +71,12 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
                 del timed[first_item:]
                 timed.append(dict(segment))
         cursor += len(letters)
-        # 모델이 나눈 발언 경계는 후처리에서 다시 합치지 않는다.
-        result.extend(group_timed_words(timed[first_item:], total_duration,
-                                        gap_threshold=0.65 if engine == "qwen" else 0.3))
+        # 창을 합칠 때까지 단어와 모델 발언 경계를 보존한다.
+        if word_output:
+            result.extend(dict(word, _segment="qwen" if engine == "qwen" else (offset, cursor)) for word in timed[first_item:])
+        else:
+            result.extend(group_timed_words(timed[first_item:], total_duration,
+                                            gap_threshold=0.65 if engine == "qwen" else 0.3))
     return normalize_chunks(result, total_duration=total_duration)
 
 
@@ -85,7 +89,8 @@ def group_timed_words(timed, total_duration=None, *, gap_threshold=0.3):
                                      or word["text"].startswith(" ")))
         length = len(current["text"] + word["text"]) if current else 0
         duration = word["end_ts"] - current["start_ts"] if current else 0
-        if current and (word["start_ts"] < current["end_ts"]
+        if current and (word.get("_segment") != current.get("_segment")
+                        or word["start_ts"] < current["end_ts"]
                         or gap >= gap_threshold
                         or (gap >= 0.3 and current["end_ts"]-current["start_ts"] >= 0.4
                             and current["text"].rstrip().endswith(("、", ",", ";", "；", ":", "：")))
@@ -142,7 +147,9 @@ def normalize_chunks(chunks, offset=0, total_duration=None):
     result = []
     for chunk in chunks:
         get = chunk.get if isinstance(chunk, dict) else lambda key, default=None: getattr(chunk, key, default)
-        text = str(get("text", "") or "").strip()
+        text = str(get("text", "") or "")
+        if get("_segment") is None:
+            text = text.strip()
         try:
             start = float(get("start_ts")) + offset
             end = float(get("end_ts")) + offset
@@ -155,7 +162,12 @@ def normalize_chunks(chunks, offset=0, total_duration=None):
             end = min(end, total_duration)
         if end <= start or is_hallucination(text, end-start):
             continue
-        result.append({"text": text, "start_ts": start, "end_ts": end})
+        cue = {"text": text, "start_ts": start, "end_ts": end}
+        if get("_segment") is not None:
+            cue["_segment"] = get("_segment")
+        if get("_timed_word"):
+            cue["_timed_word"] = True
+        result.append(cue)
     return sorted(result, key=lambda cue: (cue["start_ts"], cue["end_ts"]))
 
 
@@ -187,12 +199,30 @@ def stitch_chunks(existing, incoming, seam):
         return incoming
     if not incoming:
         return existing
-    overlaps = lambda cue, others: any(min(cue["end_ts"], c["end_ts"])-max(cue["start_ts"], c["start_ts"]) > 0.05 for c in others)
-    before = [c for c in existing if (c["start_ts"]+c["end_ts"])/2 < seam]
-    after = [c for c in incoming if (c["start_ts"]+c["end_ts"])/2 >= seam]
+    def overlaps(cue, others):
+        return any(min(cue["end_ts"], c["end_ts"])-max(cue["start_ts"], c["start_ts"])
+                   > (0.001 if cue.get("_timed_word") and c.get("_timed_word") else 0.05) for c in others)
+
+    # 두 창이 같은 시각의 같은 단어를 인식했다면 그 단어 뒤에서 연결한다.
+    # 고정 시각으로 문장/단어를 자르면 앞 문장 전체가 다음 자막에 반복될 수 있다.
+    key = lambda c: "".join(char for char in c["text"] if char.isalnum())
+    anchors = [(abs((a["end_ts"]+b["end_ts"])/2-seam), i, j)
+               for i, a in enumerate(existing) if a.get("_timed_word") and abs(a["end_ts"]-seam) <= 2.5
+               for j, b in enumerate(incoming) if b.get("_timed_word") and abs(b["end_ts"]-seam) <= 2.5
+               and key(a) == key(b) and key(a) and overlaps(a, [b])]
+    if anchors:
+        _, left, right = min(anchors)
+        before, after = existing[:left+1], incoming[right+1:]
+        missing_before, missing_after = incoming[:right+1], existing[left+1:]
+    else:
+        before = [c for c in existing if (c["start_ts"]+c["end_ts"])/2 < seam]
+        after = [c for c in incoming if (c["start_ts"]+c["end_ts"])/2 >= seam]
+        missing_before = [c for c in incoming if (c["start_ts"]+c["end_ts"])/2 < seam]
+        missing_after = [c for c in existing if (c["start_ts"]+c["end_ts"])/2 >= seam]
     # 한쪽 인식이 놓친 대사는 소유권 경계만으로 버리지 않는다.
-    before += [c for c in incoming if (c["start_ts"]+c["end_ts"])/2 < seam and not overlaps(c, before)]
-    after += [c for c in existing if (c["start_ts"]+c["end_ts"])/2 >= seam and not overlaps(c, after)]
+    selected = before + after
+    before = before + [c for c in missing_before if not overlaps(c, selected)]
+    after = after + [c for c in missing_after if not overlaps(c, before + after)]
     # 경계에 걸친 이전 문장이 있으면 새 창의 중복 부분은 이전 문장을 우선한다.
     boundary = max((c["end_ts"] for c in before), default=seam)
     result = list(before)

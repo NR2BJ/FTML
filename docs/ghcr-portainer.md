@@ -37,12 +37,16 @@ GitHub 공개 저장소와 GHCR 공개 여부는 별개다. 최초 게시 후 Gi
 | `JWT_SECRET` | 기존 값 유지. 비어 있으면 재시작 후 재로그인 필요 |
 | `RENDER_GID` | 사용자 서버에서 확인한 `992` |
 | `VIDEO_GID` | 사용자 서버에서 확인한 `44` |
-| `MEDIA_READ_ONLY` | 관리자 업로드·이동·삭제 사용 시 `false` |
+| `WHISPER_SPEECH_BOUNDARIES` | `true` 기본값. Whisper 긴 선행 무음 보정, 문제 시 `false` |
 | `WHISPER_GAP_RETRY_SECONDS` | `0` 권장. 기존 값이 있으면 확인 |
 
 `ftml_data`, `whisper_models`, `homeserver-net`은 기존 외부 이름 그대로다. 이미 UID/GID 1000으로 이전했다면 이번에 다시 전체 파일의 소유권을 바꿀 필요가 없다. 다른 이름을 쓰던 설치는 YAML의 외부 이름을 실제 값과 맞춘다.
 
 ## 다음 업데이트와 복구
+
+이번 읽기 전용 변경은 **Portainer Editor의 backend → volumes → /media 항목에 `read_only: true`를 직접 설정**한다. 짧은 표기라면 `/실제/영상/폴더:/media:ro`다. 예전 `MEDIA_READ_ONLY` 참조는 제거한다. 코드에서 미디어 쓰기 API도 제거했으며, 기존 미디어와 과거 `.trash`는 삭제하지 않는다.
+
+Whisper의 `environment` 목록에 `WHISPER_SPEECH_BOUNDARIES=${WHISPER_SPEECH_BOUNDARIES:-true}`를 추가하면 Portainer 환경 변수로 보정을 끌 수 있다. 미지정 시에도 서버 기본값은 켜짐이다. 자막과 시청 이력은 기존 볼륨을 유지한다.
 
 앞으로는 저장소에서 서버 경로를 수정하지 않는다. 이미지 게시가 끝나면 Portainer에서 `FTML_TAG`만 변경하고 수동 업데이트한다. 스택 YAML·환경 변수는 Portainer에 남는다.
 
@@ -64,9 +68,9 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 ## 음성 인식 설정
 
-설정 → 로컬 음성 인식에서 서버 주소 `http://whisper:8178`를 확인한다. 지원되는 기존 연결은 그대로 유지하고, 없으면 기본 로컬 연결을 자동 등록한다. 클라우드 음성 인식 요청은 지원하지 않는다. Gemini 키는 번역과 작품 참고 조회용으로 계속 사용한다.
+설정 → 로컬 음성 인식에서 서버 주소 `http://whisper:8178`를 확인한다. 지원되는 기존 연결은 그대로 유지하고, 없으면 기본 로컬 연결을 자동 등록한다. 클라우드 음성 인식 요청은 지원하지 않는다. Gemini 키는 번역용으로 계속 사용한다. 불안정한 작품 자동 검색은 제거했고 저장된 용어 사전은 보존한다.
 
-Whisper는 `OpenVINO/whisper-large-v3-int8-ov`로 고정한다. Qwen은 **영상 → 자막 작업 → 추출 모델**에서 1.7B 또는 0.6B를 선택한다. 기본 모델 다운로드도 첫 작업까지 미루므로 이미지 실행 검사의 성공은 GPU 추론 성공을 뜻하지 않는다. 첫 Qwen 비교는 단일 영상에서 실시하고 영상 변환과 동시에 실행하지 않는 편이 좋다.
+Whisper는 `OpenVINO/whisper-large-v3-int8-ov`로 고정한다. Qwen은 **영상 → 자막 작업 → 추출 모델**에서 1.7B를 선택한다. ASR 0.6B 선택은 제거했지만 별도의 시각 정렬 모델 ForcedAligner 0.6B는 계속 필요하다. 기본 모델 다운로드도 첫 작업까지 미루므로 이미지 실행 검사의 성공은 GPU 추론 성공을 뜻하지 않는다. 첫 Qwen 비교는 단일 영상에서 실시하고 영상 변환과 동시에 실행하지 않는 편이 좋다.
 
 FP16은 같은 Whisper의 더 높은 정밀도 가중치이지 차세대 모델이 아니다. 공식 FP16 배포 크기는 약 3.1GB지만 이것이 전체 실행 VRAM은 아니다. A380 6GB에서의 여유는 추론 임시 메모리·단어 시각·동시 영상 변환에 따라 달라진다. 무조건 못 들어간다거나 인식이 확실히 좋아진다고 단정하지 않고, 이번에는 INT8을 유지한다.
 

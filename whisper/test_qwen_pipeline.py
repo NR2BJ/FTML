@@ -101,7 +101,7 @@ class QwenExportTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.mode = mode
                 with self.assertRaises(RuntimeError) as caught:
-                    prepare_model("Qwen/Qwen3-ASR-0.6B")
+                    prepare_model("Qwen/Qwen3-ASR-1.7B")
                 self.assertNotIsInstance(caught.exception, StorageFullError)
                 self.assertEqual(list(self.root.iterdir()), [])
                 self.assert_workspace_removed()
@@ -150,21 +150,6 @@ class QwenPipelineTests(unittest.TestCase):
         pipe.aligner.align.return_value = [[]]
         with self.assertRaises(ValueError): pipe.generate(audio,SimpleNamespace(language="ja"))
 
-    def test_unrelated_lyrics_are_rejected(self):
-        pipe,audio = self.make_pipeline()
-        with self.assertRaises(ValueError): pipe.align_reference(audio,"全然違う歌詞です","ja")
-
-    def test_reference_is_aligned_only_after_transcription_match(self):
-        pipe,audio = self.make_pipeline()
-        pipe.align_reference(audio,"こんにちは！","ja")
-        self.assertEqual(pipe.aligner.align.call_count,2)
-
-    def test_reference_reuses_extracted_words_without_long_gpu_inference(self):
-        pipe,audio = self.make_pipeline()
-        pipe.align_reference(audio,"こんにちは！","ja","こんにちは。")
-        pipe.asr.generate.assert_not_called()
-        self.assertEqual(pipe.aligner.align.call_count,1)
-
     def test_symbols_only_do_not_reach_aligner(self):
         pipe,audio = self.make_pipeline()
         pipe.asr.generate.return_value.texts = [",,,,!!!!!"]
@@ -184,6 +169,28 @@ class QwenPipelineTests(unittest.TestCase):
         result,count = normalize_aligned_words(words,"ab",6)
         self.assertEqual(count,1)
         self.assertEqual(result[1],{"word":"b","start_ts":5,"end_ts":5.08})
+
+    def test_collapsed_sentence_is_not_attached_to_next_sentence_when_separable(self):
+        words = [{"word":"はい","start_ts":1,"end_ts":1},{"word":"次","start_ts":1.3,"end_ts":2}]
+        result,count = normalize_aligned_words(words, "「はい。」次。", 3)
+        self.assertEqual([w["word"] for w in result], ["「はい。」", "次。"])
+        self.assertEqual(result[0]["end_ts"], 1.08)
+        self.assertEqual(count, 1)
+
+    def test_exact_boundary_uses_free_time_without_moving_valid_neighbor(self):
+        words = [{"word":"はい","start_ts":1,"end_ts":1},{"word":"次","start_ts":1,"end_ts":2}]
+        result,_ = normalize_aligned_words(words, "はい。次。", 3)
+        self.assertAlmostEqual(result[0]["start_ts"], 0.92)
+        self.assertEqual(result[0]["end_ts"], 1)
+        self.assertEqual(result[1], {"word":"次。","start_ts":1,"end_ts":2})
+
+    def test_no_room_at_sentence_boundary_does_not_add_alignment_failure(self):
+        words = [{"word":"前","start_ts":0,"end_ts":1},{"word":"はい","start_ts":1,"end_ts":1},
+                 {"word":"次","start_ts":1,"end_ts":2}]
+        result,count = normalize_aligned_words(words, "前。はい。次。", 3)
+        self.assertEqual("".join(w["word"] for w in result), "前。はい。次。")
+        self.assertEqual(count, 1)
+        self.assertTrue(all(w["end_ts"] > w["start_ts"] for w in result))
 
     def test_missing_text_and_invalid_timestamps_fail_explicitly(self):
         for words,text in [([{"word":"a","start_ts":1,"end_ts":2}], "ab"),

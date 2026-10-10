@@ -85,12 +85,19 @@ try {
   await page.getByText('작업 진행 중 · 1/2개 영상',{exact:true}).waitFor()
   assert.deepEqual(retries,['child-a'])
   assert.equal(submissions.length,1,'번역만 재시도할 때 추출 요청은 다시 보내지 않는다')
+  await page.getByRole('button',{name:'자막 삭제',exact:true}).click()
+  await page.getByLabel('관리할 영상',{exact:true}).selectOption('season/a.mkv')
+  await page.getByTitle(result.label,{exact:true}).waitFor()
+  subtitleEntries=[result,{...result,id:'generated:finished.vtt',label:'진행 중 탭에서 완료된 결과'}]
   jobs=jobs.map(j=>j.id==='child-retry'?{...j,status:'completed',progress:1,result:{output_path:result.id,plain_effect_fallbacks:2}}:j)
+  await page.getByTitle('진행 중 탭에서 완료된 결과',{exact:true}).waitFor({timeout:8000})
+  await page.getByRole('button',{name:'진행 상황',exact:true}).click()
   await page.getByText('작업 종료 · 2/2개 영상',{exact:true}).waitFor({timeout:8000})
   await page.getByText('복잡한 효과 2개는 원문 효과와 일반 번역문으로 보존',{exact:true}).waitFor()
   assert.equal(jobs.find(j=>j.id==='child-a').status,'failed')
   console.log('일괄 제외 영상 매핑, 추출 후 번역 완료 판정, 번역 단계만 재시도, 저장 지침 전달 통과')
 
+  subtitleEntries=[result]
   await page.getByRole('button',{name:'자막 작업 닫기',exact:true}).click()
   await page.evaluate(()=>window.showHistory())
   await page.getByRole('button',{name:/a.mkv.*진행/}).waitFor()
@@ -107,6 +114,7 @@ try {
   assert.equal(await download.failure(),null)
   await page.getByRole('button',{name:'이 자막 번역',exact:true}).click()
   await page.getByRole('dialog',{name:'자막 작업',exact:true}).waitFor()
+  await page.waitForFunction(id=>document.querySelector('select[aria-label="번역할 자막"]')?.value===id,result.id)
   assert.equal(await page.getByLabel('번역할 자막',{exact:true}).inputValue(),result.id)
   subtitleEntries=[result,{...result,id:'generated:new.vtt',label:'방금 완료한 결과'}]
   await page.getByRole('button',{name:'자막 작업 닫기',exact:true}).click()

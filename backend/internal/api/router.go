@@ -37,7 +37,7 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 
 	// Handlers
 	authHandler := handlers.NewAuthHandler(database, jwtService)
-	filesHandler := handlers.NewFilesHandler(cfg.MediaPath, cfg.DataPath, database)
+	filesHandler := handlers.NewFilesHandler(cfg.MediaPath, cfg.DataPath)
 	streamHandler := handlers.NewStreamHandler(cfg.MediaPath, hlsManager)
 	userHandler := handlers.NewUserHandler(database)
 	subtitleHandler := handlers.NewSubtitleHandler(cfg.MediaPath, cfg.SubtitlePath, jobQueue, database)
@@ -171,7 +171,6 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				// Subtitle delete — admin only
 				r.Delete("/subtitle/delete/*", subtitleHandler.DeleteSubtitle)
 				r.Put("/subtitle/reference/*", subtitleHandler.Reference)
-				r.Post("/subtitle/reference-search/*", subtitleHandler.SearchReference)
 
 				// Settings
 				r.Get("/settings", settingsHandler.GetSettings)
@@ -218,18 +217,6 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				r.Post("/admin/delete-requests/{id}/approve", adminHandler.ApproveDeleteRequest)
 				r.Post("/admin/delete-requests/{id}/reject", adminHandler.RejectDeleteRequest)
 				r.Delete("/admin/delete-requests/{id}", adminHandler.DeleteDeleteRequest)
-
-				// Admin — File Management (upload uses its own body limit)
-				r.Post("/files/upload/*", filesHandler.Upload)
-				r.Delete("/files/delete/*", filesHandler.Delete)
-				r.Put("/files/move", filesHandler.Move)
-				r.Post("/files/mkdir/*", filesHandler.CreateFolder)
-
-				// Admin — Trash Management
-				r.Get("/files/trash", filesHandler.ListTrash)
-				r.Post("/files/trash/restore", filesHandler.RestoreTrash)
-				r.Delete("/files/trash/empty", filesHandler.EmptyTrash)
-				r.Delete("/files/trash/{name}", filesHandler.PermanentDelete)
 
 				// Admin — Active Sessions
 				r.Get("/admin/sessions", adminHandler.ListSessions)

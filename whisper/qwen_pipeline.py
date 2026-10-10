@@ -12,16 +12,14 @@ import shutil
 import tempfile
 import time
 from types import SimpleNamespace
-from difflib import SequenceMatcher
 
 from inference_runtime import StorageFullError
 from qwen_alignment import normalize_aligned_words
 
 
-MODELS = {"Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ASR-0.6B"}
+MODELS = {"Qwen/Qwen3-ASR-1.7B"}
 MODEL_REVISIONS = {
     "Qwen/Qwen3-ASR-1.7B": "7278e1e70fe206f11671096ffdd38061171dd6e5",
-    "Qwen/Qwen3-ASR-0.6B": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
 }
 ALIGNER = "Qwen/Qwen3-ForcedAligner-0.6B"
 ALIGNER_REVISION = "c7cbfc2048c462b0d63a45797104fc9db3ad62b7"
@@ -177,16 +175,3 @@ class QwenPipeline:
         self.collapsed_words = getattr(self, "collapsed_words", 0) + collapsed
         segment = {"text": text, "start_ts": 0, "end_ts": len(audio)/16000}
         return SimpleNamespace(chunks=[segment], words=words)
-
-    def align_reference(self, audio, text, language, original=None):
-        if original is None:
-            if len(audio) > self.chunk_seconds*16000:
-                raise ValueError("긴 가사 구간은 먼저 추출한 원문과 함께 정렬해야 합니다")
-            recognized = self.generate(audio, SimpleNamespace(language=language, context=""))
-            original = "".join(c["text"] for c in recognized.chunks)
-        canonical = lambda value: "".join(c.lower() for c in value if c.isalnum())
-        expected, heard = canonical(text), canonical(original)
-        # 전체판/다른 회차/모델이 듣지 못한 가사를 억지로 음성에 끼워 맞추지 않는다.
-        if not heard or SequenceMatcher(None, expected, heard, autojunk=False).ratio() < 0.72:
-            raise ValueError("참고 가사와 실제 인식 내용이 충분히 일치하지 않습니다. TV판 구간과 가사를 확인해 주세요")
-        return self._align(audio, text, LANGUAGES.get(language, language))

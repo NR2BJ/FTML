@@ -14,7 +14,6 @@ const Registrations = lazy(() => import('@/pages/admin/Registrations'))
 const Sessions = lazy(() => import('@/pages/admin/Sessions'))
 const Dashboard = lazy(() => import('@/pages/admin/Dashboard'))
 const RateLimits = lazy(() => import('@/pages/admin/RateLimits'))
-const Trash = lazy(() => import('@/pages/admin/Trash'))
 const DeleteRequests = lazy(() => import('@/pages/admin/DeleteRequests'))
 const Jobs = lazy(() => import('@/pages/Jobs'))
 const Layout = lazy(() => import('@/components/layout/Layout'))
@@ -92,7 +91,6 @@ export default function App() {
           <Route path="admin/dashboard" element={<AdminRoute>{renderLazy(<Dashboard />)}</AdminRoute>} />
           <Route path="admin/ratelimits" element={<AdminRoute>{renderLazy(<RateLimits />)}</AdminRoute>} />
           <Route path="admin/delete-requests" element={<AdminRoute>{renderLazy(<DeleteRequests />)}</AdminRoute>} />
-          <Route path="admin/trash" element={<AdminRoute>{renderLazy(<Trash />)}</AdminRoute>} />
         </Route>
       </Routes>
     </BrowserRouter>

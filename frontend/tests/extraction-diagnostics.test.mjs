@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { createServer } from 'vite'
 
 test('정렬 복구 안내는 복구한 작업에만 표시하고 기존 진단도 보존한다', async () => {
-  const server = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } })
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } })
   try {
     const { default: Diagnostics } = await server.ssrLoadModule('/src/components/Subtitles/ExtractionDiagnostics.tsx')
     const render = value => renderToStaticMarkup(createElement(Diagnostics, { value }))
@@ -16,6 +16,10 @@ test('정렬 복구 안내는 복구한 작업에만 표시하고 기존 진단�
     assert.match(html, /단어 3개/)
     assert.match(html, /Silero 비교/)
     assert.match(html, /동기화를 재생하며 확인/)
+    assert.match(render({ timing_adjusted_onsets: 2 }), /단어 2개의 시작 시각/)
+    assert.doesNotMatch(render({ timing_adjusted_onsets: 0 }), /시작 시각/)
+    assert.match(render({ speech_boundaries_available: false }), /원래 시각을 유지/)
+    assert.doesNotMatch(render({ speech_boundaries_available: true }), /원래 시각을 유지/)
   } finally {
     await server.close()
   }

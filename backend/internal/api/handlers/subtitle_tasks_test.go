@@ -73,6 +73,19 @@ func TestSubtitleSubmissionPathsShareValidationAndMapping(t *testing.T) {
 			t.Fatal(endpoint, w.Code)
 		}
 	}
+	for _, params := range []string{
+		`{"model":"Qwen/Qwen3-ASR-0.6B","language":"ja"}`,
+		`{"model":"Qwen/Qwen3-ASR-1.7B","language":"ja","lyrics":{"start":1,"end":2,"text":"song"}}`,
+	} {
+		for endpoint, body := range map[string]string{
+			"/generate/a.mkv": params,
+			"/tasks":          `{"paths":["a.mkv"],"mode":"generate","generate":` + params + `}`,
+		} {
+			if response := post(endpoint, body); response.Code != 400 {
+				t.Fatal("제거한 추출 설정이 허용됨", endpoint, response.Code, response.Body.String())
+			}
+		}
+	}
 	w = post("/translate-batch", `{"paths":["a.mkv","b.mkv","b.mkv","c.mkv"],"target_lang":"ko","engine":"gemini"}`)
 	if w.Code != 201 {
 		t.Fatal(w.Code, w.Body.String())

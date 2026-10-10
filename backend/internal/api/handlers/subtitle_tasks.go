@@ -3,12 +3,10 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/video-stream/backend/internal/job"
 	"github.com/video-stream/backend/internal/storage"
@@ -53,12 +51,10 @@ func validateSubtitleTask(req *SubtitleTaskRequest) error {
 		return fmt.Errorf("잘못된 작업 종류")
 	}
 	if req.Mode != "translate" {
-		if l := req.Generate.Lyrics; l != nil {
-			if len(req.Paths) != 1 || !strings.HasPrefix(req.Generate.Model, "Qwen/") || req.Generate.Language == "" || req.Generate.Language == "auto" || math.IsNaN(l.Start) || math.IsNaN(l.End) || l.Start < 0 || l.End <= l.Start || l.End-l.Start > 180 || strings.TrimSpace(l.Text) == "" || utf8.RuneCountInString(l.Text) > 5000 {
-				return fmt.Errorf("가사 참고는 Qwen·음성 언어를 지정한 단일 영상, 최대 180초 구간에만 적용할 수 있습니다")
-			}
+		if req.Generate.Lyrics != nil {
+			return fmt.Errorf("가사 수동 보정은 지원하지 않습니다. 가사 없이 새 작업을 등록해 주세요")
 		}
-		if req.Generate.Model != "" && req.Generate.Model != "Qwen/Qwen3-ASR-1.7B" && req.Generate.Model != "Qwen/Qwen3-ASR-0.6B" && req.Generate.Model != defaultModelID {
+		if req.Generate.Model != "" && req.Generate.Model != "Qwen/Qwen3-ASR-1.7B" && req.Generate.Model != defaultModelID {
 			return fmt.Errorf("지원하지 않는 비교 모델입니다")
 		}
 		if req.Generate.AudioTrack < 0 {

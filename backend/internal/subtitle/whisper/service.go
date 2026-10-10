@@ -64,6 +64,9 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		return fmt.Errorf("unmarshal params: %w", err)
 	}
 
+	if params.Lyrics != nil {
+		return fmt.Errorf("가사 수동 보정 작업은 지원하지 않습니다. 새 추출 작업을 등록해 주세요")
+	}
 	engine, err := s.resolveEngine(params.Engine)
 	if err != nil {
 		return fmt.Errorf("resolve engine: %w", err)
@@ -95,7 +98,6 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		Language:      params.Language,
 		Model:         params.Model,
 		Prompt:        params.Hints,
-		Lyrics:        params.Lyrics,
 		ObserveSpeech: params.ObserveSpeech,
 	}, updateProgress)
 	if err != nil {
@@ -121,22 +123,9 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		filename = fmt.Sprintf("whisper_%s_track%d.vtt", lang, params.AudioTrack+1)
 	}
 	if strings.HasPrefix(params.Model, "Qwen/") {
-		size := "1_7b"
-		if strings.Contains(params.Model, "0.6B") {
-			size = "0_6b"
-		}
-		filename = fmt.Sprintf("qwen3_%s_%s_track%d.vtt", lang, size, params.AudioTrack+1)
+		filename = fmt.Sprintf("qwen3_%s_1_7b_track%d.vtt", lang, params.AudioTrack+1)
 	}
 	outFile := filepath.Join(outDir, filename)
-	rawPath := ""
-	if result.RawVTT != "" {
-		if err := storage.WriteVersionedFile(ctx, outFile, strings.NewReader(result.RawVTT)); err != nil {
-			return fmt.Errorf("원 추출본 저장: %w", err)
-		}
-		rawPath = "generated:" + filename
-		filename = strings.TrimSuffix(filename, ".vtt") + "_lyrics.vtt"
-		outFile = filepath.Join(outDir, filename)
-	}
 
 	if err := storage.WriteVersionedFile(ctx, outFile, strings.NewReader(result.VTT)); err != nil {
 		return fmt.Errorf("save subtitle: %w", err)
@@ -149,7 +138,6 @@ func (s *Service) HandleJob(ctx context.Context, j *job.Job, updateProgress func
 		OutputPath:  "generated:" + filename,
 		Language:    lang,
 		Model:       params.Model,
-		RawPath:     rawPath,
 		Diagnostics: result.Diagnostics,
 	})
 	j.Result = resultJSON

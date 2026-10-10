@@ -96,7 +96,7 @@ POST /api/subtitle/translate/{path}
 - **썸네일** — FFmpeg으로 자동 생성
 - **검색** — 파일명 텍스트 검색
 - **코덱/해상도 뱃지** — 4K/1080p/720p, HEVC/AV1/VP9, HDR 자동 표시
-- **파일 관리** (Admin) — 업로드, 삭제, 이동, 폴더 생성
+- **읽기 전용 탐색** — 미디어 쓰기 API/화면 제거. 파일 관리는 외부 도구, 자막은 통합 패널에서 처리
 - **휴지통** — 삭제 시 휴지통 이동 → 복원/영구삭제
 
 ### 3. 비디오 플레이어
@@ -158,7 +158,7 @@ POST /api/subtitle/translate/{path}
 - **회원가입 승인** — 승인/거절 + 대기 수 뱃지
 - **자막 삭제 승인** — 사용자 요청 승인/거절
 - **세션 모니터링** — 활성 HLS 세션 목록 (입력, 화질, 코덱, 마지막 하트비트)
-- **파일 로그** — 업로드/삭제/이동 이력 (사용자, 시간, 경로)
+- **파일 로그** — 과거 업로드/삭제/이동 이력 조회만 유지 (새 미디어 쓰기 기능은 제거)
 - **대시보드** — 업타임, 총 사용자, 스토리지, 활성 작업, 최근 로그
 - **설정 GUI** — API 키 (Gemini/OpenAI/DeepL), Gemini 모델 선택
 - **Whisper 관리** — 모델 다운로드/활성화, 백엔드 추가/삭제/헬스체크
@@ -325,13 +325,10 @@ GET  /api/admin/delete-requests[/count]
 POST /api/admin/delete-requests/{id}/approve|reject
 DELETE /api/admin/delete-requests/{id}
 
-# 파일 관리
-POST /api/files/upload/*, DELETE /api/files/delete/*
-PUT /api/files/move, POST /api/files/mkdir/*
+# 미디어 쓰기 API는 제거됨 (업로드/이동/삭제/폴더 생성)
 
 # 휴지통
-GET /api/files/trash, POST /api/files/trash/restore
-DELETE /api/files/trash/empty|{name}
+# 미디어 휴지통 API는 제거됨. 기존 자료는 자동 삭제하지 않음
 
 # 모니터링
 GET  /api/admin/sessions|dashboard|file-logs
@@ -381,13 +378,13 @@ FTML/
 │       │   ├── Player/      # Player, Controls, QualitySelector, AudioSelector,
 │       │   │                # SubtitleDisplay/Selector/Generate/Translate/Settings,
 │       │   │                # PlaybackStats, NextEpisodeOverlay, ChapterList
-│       │   ├── Browse/      # BatchSubtitleDialog, ContextMenu, DetailsView, SubtitleManagerDialog
+│       │   ├── Browse/      # BatchSubtitleDialog, ContextMenu, DetailsView
 │       │   ├── layout/      # Header, Sidebar, Layout, JobIndicator
 │       │   └── WhisperModelManager, WhisperBackendManager, Toast
 │       └── pages/
 │           ├── Login, Browse, Watch, WatchHistory, Account, Jobs, Settings
 │           └── admin/       # Dashboard, UserManagement, Registrations, DeleteRequests,
-│                            # Sessions, Trash, RateLimits
+│                            # Sessions, RateLimits
 │
 └── whisper/
     ├── Dockerfile.openvino-genai

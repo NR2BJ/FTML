@@ -7,7 +7,7 @@ import { useThemeStore } from '@/stores/themeStore'
 import {
   Film, Search, LogOut, User, Settings, Clock, UserCog, Users, UserPlus,
   Shield, ChevronDown, Monitor, BarChart3, ShieldAlert, Menu,
-  Folder, FileVideo, Trash2, Sun, Moon, Laptop, FileX, Briefcase
+  Folder, FileVideo, Sun, Moon, Laptop, FileX, Briefcase
 } from 'lucide-react'
 import { searchFiles, type FileEntry } from '@/api/files'
 import { getPendingRegistrationCount, getPendingDeleteRequestCount } from '@/api/admin'
@@ -336,13 +336,6 @@ export default function Header() {
                   >
                     <BarChart3 className="w-4 h-4" />
                     Dashboard
-                  </button>
-                  <button
-                    onClick={() => navigate('/admin/trash')}
-                    className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 flex items-center gap-2"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Trash
                   </button>
                   <button
                     onClick={() => navigate('/admin/ratelimits')}

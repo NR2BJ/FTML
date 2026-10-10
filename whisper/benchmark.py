@@ -13,7 +13,7 @@ from subtitle_processing import chunks_to_vtt
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("audio", help="16kHz PCM16 WAV")
-    parser.add_argument("--model", default="Qwen/Qwen3-ASR-1.7B")
+    parser.add_argument("--model", default="Qwen/Qwen3-ASR-1.7B", choices=[server.DEFAULT_MODEL_ID, *server.QWEN_MODELS])
     parser.add_argument("--language", default="ja")
     parser.add_argument("--output", required=True)
     parser.add_argument("--observe-speech", action="store_true")
@@ -22,7 +22,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     with open(args.audio, "rb") as audio:
-        cues, text, elapsed, duration, _, diagnostics = server._run_upload(
+        cues, text, elapsed, duration, diagnostics = server._run_upload(
             audio, args.language, threading.Event(), args.model, observe_speech=args.observe_speech)
     report = {"duration": duration, "processing_seconds_including_load": elapsed,
               "total_seconds":time.monotonic()-started, "cue_count": len(cues),

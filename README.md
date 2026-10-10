@@ -8,9 +8,9 @@
 - 브라우저 코덱 지원에 따른 원본 재생, 오디오 변환, 하드웨어 HLS 변환
 - 다중 음성 트랙·자막 선택·배속·A-B 반복·재생 정보·PiP
 - ASS 효과 표시와 일반 자막 전환, SRT/VTT/ASS 내려받기
-- 로컬 Whisper large-v3 INT8 추출, Qwen3-ASR 1.7B/0.6B 비교 추출
+- 로컬 Whisper large-v3 INT8 추출, Qwen3-ASR 1.7B 비교 추출
 - Gemini 번역·작품 용어 참고·영상별 작업 이력·일괄 작업
-- 관리자 파일 업로드·이동·휴지통·복원, 사용자별 접근·자막 작업 권한
+- 읽기 전용 미디어 탐색기, 통합 자막 패널, 사용자별 접근·자막 작업 권한
 
 Whisper의 원음을 VAD로 잘라 내지 않는다. Silero는 선택적인 말소리 비교 진단만 수행한다. Qwen은 비교 기능이며 A380의 정확도·메모리·속도는 실제 영상으로 확인해야 한다. 번역은 Gemini만 사용하고 클라우드 음성 인식 키는 필요 없다.
 
@@ -28,7 +28,7 @@ ghcr.io/nr2bj/ftml-whisper:<전체 커밋 SHA>
 
 처음 설치하는 경우 Docker Compose, 영상 폴더, `/dev/dri` 장치와 외부 볼륨 `ftml_data`, `whisper_models`, 네트워크 `homeserver-net`이 필요하다. 백엔드·음성 인식은 UID/GID `1000:1000`으로 실행한다. [볼륨 권한 안내](docs/container-permissions.md)에 따라 처음 한 번 권한을 준비한다. 기존 볼륨을 삭제하거나 다시 초기화하지 않는다.
 
-`.env.example`에는 비밀 값이 없다. 관리자 암호는 직접 지정하고 JWT 키는 기존 값을 유지한다. 모델은 `whisper_models`, DB·생성/번역 자막·썸네일·변환 캐시는 `ftml_data`에 저장한다. 미디어 마운트는 관리자 파일 관리를 위해 기본 읽기/쓰기이며 필요하면 `MEDIA_READ_ONLY=true`로 제한한다.
+`.env.example`에는 비밀 값이 없다. 관리자 암호는 직접 지정하고 JWT 키는 기존 값을 유지한다. 모델은 `whisper_models`, DB·생성/번역 자막·썸네일·변환 캐시는 `ftml_data`에 저장한다. 미디어 마운트는 읽기 전용이다. 영상 업로드·이동·삭제는 copyparty 등 별도 도구에서 처리하며 앱의 자막 추출·번역·삭제는 계속 가능하다.
 
 직접 소스 빌드가 필요한 개발 환경은 `docker-compose.build.yml`을 추가한다. 기본 배포는 Linux amd64 + Intel GPU용이다. `docker-compose.nvidia.yml`은 기존 영상 변환용 보조 설정일 뿐 Qwen/Whisper CUDA 구성을 제공하지 않는다.
 

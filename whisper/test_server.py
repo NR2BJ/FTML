@@ -22,6 +22,51 @@ except ImportError:
 
 @unittest.skipIf(server is None, "Install Whisper web/audio dependencies to run service tests")
 class ServerTests(unittest.TestCase):
+    def test_benchmark_uses_current_result_contract_without_loading_model(self):
+        import benchmark
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            audio = Path(directory) / "fixture.wav"
+            audio.write_bytes(self.wav(1))
+            output = Path(directory) / "result"
+            result = ([dict(text="hello", start_ts=0, end_ts=1)], "hello", 0.1, 1, {"model":server.DEFAULT_MODEL_ID})
+            with patch.object(server, "_run_upload", return_value=result) as run, patch.object(sys, "argv", ["benchmark", str(audio), "--output", str(output)]), patch("builtins.print"):
+                benchmark.main()
+            run.assert_called_once()
+            self.assertIn("hello", (output / "subtitles.vtt").read_text())
+            self.assertEqual(json.loads((output / "report.json").read_text())["cue_count"], 1)
+
+    def test_retry_preserves_word_ownership_in_both_halves(self):
+        from unittest.mock import Mock
+        model = self.model([])
+        output = SimpleNamespace(words=[dict(word="hello", start_ts=1, end_ts=2)],
+                                 chunks=[dict(text="hello", start_ts=0, end_ts=3)])
+        model.generate = Mock(side_effect=[QwenAlignmentError("all_collapsed"), output, output])
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", "Qwen/Qwen3-ASR-1.7B"):
+            cues = server._generate_timed_chunks(np.ones(30*16000), SimpleNamespace(), 100, 130, word_output=True)
+        self.assertEqual([c["start_ts"] for c in cues], [101, 115])
+        self.assertTrue(all(c.get("_timed_word") and c.get("_segment") == "qwen" for c in cues))
+
+    def test_model_timestamps_cannot_exceed_input_window(self):
+        model = self.model([dict(text="inside", start_ts=1, end_ts=50), dict(text="outside", start_ts=31, end_ts=50)])
+        with patch.object(server, "pipeline", model):
+            cues = server._generate_timed_chunks(np.ones(30*16000), SimpleNamespace(), 100, 500)
+        self.assertEqual(cues, [dict(text="inside", start_ts=101, end_ts=130)])
+
+    def test_speech_boundary_adjustment_is_opt_in_and_failure_preserves_text(self):
+        model = self.model([dict(text="hello", start_ts=0, end_ts=10)])
+        model.generate = lambda *args: SimpleNamespace(chunks=[dict(text="hello", start_ts=0, end_ts=10)],
+                                                      words=[dict(word="hello", start_ts=0, end_ts=10)])
+        for enabled, failed, expected in [(False, False, 0), (True, False, 7.65), (True, True, 0)]:
+            observer = SimpleNamespace(adjust_timing=enabled, failed=failed, observe=lambda *args: None,
+                                       merged_spans=lambda: [(8, 10)])
+            with patch.object(server, "pipeline", model), patch.object(server, "GAP_MAX_RETRY_S", 0):
+                cues, text, _, _ = server.run_inference(np.ones(10*16000), observer=observer)
+            self.assertEqual(text, "hello")
+            self.assertAlmostEqual(cues[0]["start_ts"], expected)
+            self.assertFalse(any(k.startswith("_") for k in cues[0]))
+
     def test_short_hold_is_qwen_only_and_does_not_override_digital_silence(self):
         model = self.model([SimpleNamespace(text="reply", start_ts=1, end_ts=1.08)])
         for engine, expected in [(server.DEFAULT_MODEL_ID, 1.08), ("Qwen/Qwen3-ASR-1.7B", 1.63)]:
@@ -190,6 +235,9 @@ class ServerTests(unittest.TestCase):
         self.assertEqual([c["start_ts"] for c in chunks], [2, 27])
 
     def setUp(self):
+        boundaries = patch.dict(server.os.environ, {"WHISPER_SPEECH_BOUNDARIES": "false"})
+        boundaries.start()
+        self.addCleanup(boundaries.stop)
         server.gate.idle_timeout = 0
         model_patch = patch.object(server, "model_id_str", server.DEFAULT_MODEL_ID)
         model_patch.start()
@@ -288,35 +336,16 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(len(sizes), 2)
         self.assertLessEqual(max(sizes), 34*16000)
 
-    def test_lyrics_result_keeps_original_and_reports_rejection_without_losing_extraction(self):
-        model = self.model([SimpleNamespace(text="original", start_ts=0.1, end_ts=0.5)])
-        model.align_reference = lambda *_: SimpleNamespace(
-            chunks=[{"text":"corrected", "start_ts":0, "end_ts":1}],
-            words=[{"word":"corrected", "start_ts":0.2, "end_ts":0.7}])
-        data = {"model":"Qwen/Qwen3-ASR-1.7B","language":"ja","response_format":"ftml_json",
-                "reference_lyrics":json.dumps({"start":0,"end":1,"text":"corrected"})}
-        with patch.object(server,"pipeline",model), patch.object(server,"model_id_str",data["model"]):
-            response = self.client.post("/v1/audio/transcriptions",data=data,files={"file":("a.wav",self.wav(2))})
-            self.assertEqual(response.status_code,200,response.text)
-            self.assertIn("original",response.json()["raw_vtt"])
-            self.assertIn("corrected",response.json()["vtt"])
-            data["reference_lyrics"] = json.dumps({"start":0.3,"end":1,"text":"corrected"})
-            response = self.client.post("/v1/audio/transcriptions",data=data,files={"file":("a.wav",self.wav(2))})
-            self.assertEqual(response.status_code,200,response.text)
-            self.assertIn("original",response.json()["vtt"])
-            self.assertEqual(response.json()["raw_vtt"], "")
-            self.assertIn("lyrics_error",response.json()["diagnostics"])
-
     def test_invalid_lyrics_never_reaches_model(self):
         with patch.object(server,"_run_upload") as run:
-            for lyrics in [[],{"start":0,"end":181,"text":"song"},{"start":0,"end":1,"text":""}]:
+            for lyrics in [{"start":0,"end":1,"text":"song"},[],{"start":0,"end":181,"text":"song"},{"start":0,"end":1,"text":""}]:
                 response = self.client.post("/v1/audio/transcriptions",data={"reference_lyrics":json.dumps(lyrics)},files={"file":("a.wav",self.wav(2))})
                 self.assertEqual(response.status_code,400,response.text)
             run.assert_not_called()
 
     def test_only_fixed_whisper_and_qwen_models_are_accepted(self):
         with patch.object(server, "_run_upload") as run, patch.object(server, "load_model_by_id") as load:
-            for mid in ["OpenVINO/whisper-tiny-int8-ov", "OpenVINO/whisper-large-v3-fp16-ov", "whisper-1"]:
+            for mid in ["Qwen/Qwen3-ASR-0.6B", "OpenVINO/whisper-tiny-int8-ov", "OpenVINO/whisper-large-v3-fp16-ov", "whisper-1"]:
                 response = self.client.post("/v1/audio/transcriptions", data={"model":mid}, files={"file":("a.wav",self.wav(1))})
                 self.assertEqual(response.status_code, 400)
                 response = self.client.post("/v1/model/load", json={"model_id":mid})

@@ -9,14 +9,14 @@ const entries = [
 const html = `<!doctype html><html><body><div id="root"></div><script type="module">
 import React,{useState}from'react';import{createRoot}from'react-dom/client';import'/src/index.css';
 import Selector from'/src/components/Player/SubtitleSelector.tsx';
-import Manager from'/src/components/Browse/SubtitleManagerDialog.tsx';
+import Library from'/src/components/Subtitles/SubtitleLibrary.tsx';
 import{usePlayerStore}from'/src/stores/playerStore.ts';import{useAuthStore}from'/src/stores/authStore.ts';
 window.player=usePlayerStore;useAuthStore.setState({user:{role:'admin'}});
 usePlayerStore.setState({currentFile:'episode.mkv',subtitles:${JSON.stringify(entries)}});
 function App(){const[manager,setManager]=useState(false);return React.createElement('div',{style:{position:'relative',width:900,height:720}},
 React.createElement('button',{id:'manager',onClick:()=>setManager(true)},'자막 관리'),
 React.createElement('div',{className:'player-container',style:{position:'absolute',right:10,bottom:10}},React.createElement(Selector)),
-manager&&React.createElement(Manager,{file:{path:'episode.mkv',name:'episode.mkv'},onClose:()=>setManager(false),onTranslate:()=>{}}));}
+manager&&React.createElement(Library,{paths:['episode.mkv'],version:''}));}
 createRoot(document.getElementById('root')).render(React.createElement(App));
 </script></body></html>`
 const server = await createServer({ server:{host:'127.0.0.1',port:0,hmr:false},plugins:[{name:'subtitle-names',configureServer(s){

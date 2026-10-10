@@ -84,20 +84,28 @@ def normalize_aligned_words(words, text, duration):
     if not any(word["end_ts"] > word["start_ts"] for word in words):
         raise QwenAlignmentError("all_collapsed")
     words = restore_original_words(words, text)
+    sentence_end = lambda value: value.rstrip(' \t\n\"\'」』）)]').endswith(("。", "！", "？", ".", "!", "?"))
     result, collapsed, index = [], sum(word["start_ts"] == word["end_ts"] for word in words), 0
     while index < len(words):
         word = dict(words[index])
         if word["start_ts"] == word["end_ts"]:
             following = words[index+1] if index+1 < len(words) else None
-            if following and word["start_ts"] <= following["start_ts"] <= word["end_ts"] + 0.5:
+            room_before = word["start_ts"] - (result[-1]["end_ts"] if result else 0)
+            room_after = (following["start_ts"] if following else duration) - word["start_ts"]
+            # 시각이 완전히 겹쳐 분리할 여유가 없으면 기존 병합을 유지한다.
+            # 문장 부호만으로 새 정렬 실패나 인접 발언 시각의 이동을 만들지 않는다.
+            separable = room_before >= 0.02 or room_after >= 0.02
+            if following and (not sentence_end(word["word"]) or not separable) and word["start_ts"] <= following["start_ts"] <= word["end_ts"] + 0.5:
                 words[index+1] = {**following, "word": word["word"] + following["word"], "start_ts": word["start_ts"]}
-            elif result and result[-1]["end_ts"] <= word["start_ts"] <= result[-1]["end_ts"] + 0.5:
+            elif result and (not sentence_end(result[-1]["word"]) or not separable) and result[-1]["end_ts"] <= word["start_ts"] <= result[-1]["end_ts"] + 0.5:
                 result[-1]["word"] += word["word"]
                 result[-1]["end_ts"] = word["start_ts"]
             else:
                 word["end_ts"] = min(word["start_ts"] + 0.08, duration)
                 if following:
                     word["end_ts"] = min(word["end_ts"], following["start_ts"])
+                if following and word["end_ts"] <= word["start_ts"] and room_before >= 0.02:
+                    word["start_ts"] -= min(0.08, room_before)
                 if word["end_ts"] <= word["start_ts"]:
                     raise QwenAlignmentError("boundary")
                 result.append(word)

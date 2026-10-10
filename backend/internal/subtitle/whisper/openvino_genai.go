@@ -143,13 +143,6 @@ func (c *OpenVINOGenAIClient) doSend(ctx context.Context, audioPath, language st
 					return
 				}
 			}
-			if options[0].Lyrics != nil {
-				data, _ := json.Marshal(options[0].Lyrics)
-				if err := writer.WriteField("reference_lyrics", string(data)); err != nil {
-					pipeWriter.CloseWithError(err)
-					return
-				}
-			}
 		}
 	}()
 
@@ -187,33 +180,27 @@ func (c *OpenVINOGenAIClient) doSend(ctx context.Context, audioPath, language st
 	}
 
 	vtt := string(body)
-	rawVTT := ""
 	var diagnostics map[string]any
 	if strings.HasPrefix(strings.TrimSpace(vtt), "{") {
 		var result struct {
 			VTT         string         `json:"vtt"`
-			RawVTT      string         `json:"raw_vtt"`
 			Diagnostics map[string]any `json:"diagnostics"`
 		}
 		if json.Unmarshal(body, &result) != nil {
 			return nil, fmt.Errorf("추출 응답을 읽지 못했습니다")
 		}
-		vtt, rawVTT = result.VTT, result.RawVTT
+		vtt = result.VTT
 		diagnostics = result.Diagnostics
 	}
 
 	if !strings.HasPrefix(strings.TrimSpace(vtt), "WEBVTT") || !strings.Contains(vtt, "-->") {
 		return nil, fmt.Errorf("whisper returned no valid timed subtitles")
 	}
-	if rawVTT != "" && (!strings.HasPrefix(strings.TrimSpace(rawVTT), "WEBVTT") || !strings.Contains(rawVTT, "-->")) {
-		return nil, fmt.Errorf("보정 전 자막의 시간 정보를 확인하지 못했습니다")
-	}
 
 	updateProgress(0.95)
 
 	return &TranscribeResult{
 		VTT:         vtt,
-		RawVTT:      rawVTT,
 		Diagnostics: diagnostics,
 		Language:    language,
 	}, nil

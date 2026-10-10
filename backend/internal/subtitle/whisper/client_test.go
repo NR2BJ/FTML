@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/video-stream/backend/internal/job"
 )
 
 func TestRetryableStatusesSurviveErrorWrapping(t *testing.T) {
@@ -78,7 +76,6 @@ func TestLocalASRHonorsCancelledContext(t *testing.T) {
 
 func TestLocalASRRequestCarriesAtomicModelAndReferences(t *testing.T) {
 	vtt := "WEBVTT\n\n00:01.000 --> 00:02.000\noriginal\n"
-	invalidRaw := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(1024); err != nil {
 			t.Error(err)
@@ -90,29 +87,18 @@ func TestLocalASRRequestCarriesAtomicModelAndReferences(t *testing.T) {
 				t.Errorf("%s: %q", key, r.FormValue(key))
 			}
 		}
-		var lyrics job.LyricsReference
-		if json.Unmarshal([]byte(r.FormValue("reference_lyrics")), &lyrics) != nil || lyrics.End != 10 || lyrics.Text != "歌" {
-			t.Error("가사 전달 실패")
-		}
-		raw := vtt
-		if invalidRaw {
-			raw = "not subtitles"
-		}
-		json.NewEncoder(w).Encode(map[string]any{"vtt": vtt, "raw_vtt": raw, "diagnostics": map[string]any{"timing_review_words": 2}})
+		json.NewEncoder(w).Encode(map[string]any{"vtt": vtt, "diagnostics": map[string]any{"timing_review_words": 2}})
 	}))
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "audio.wav")
 	if err := os.WriteFile(path, []byte("test"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	options := TranscribeRequest{Model: "Qwen/Qwen3-ASR-1.7B", Prompt: "名前", ObserveSpeech: true, Lyrics: &job.LyricsReference{Start: 0, End: 10, Text: "歌"}}
+	options := TranscribeRequest{Model: "Qwen/Qwen3-ASR-1.7B", Prompt: "名前", ObserveSpeech: true}
 	client := NewOpenVINOGenAIClient(server.URL)
 	result, err := client.doSend(context.Background(), path, "ja", func(float64) {}, options)
-	if err != nil || result.RawVTT != vtt || result.Diagnostics["timing_review_words"] != float64(2) {
+	if err != nil || result.VTT != vtt || result.Diagnostics["timing_review_words"] != float64(2) {
 		t.Fatal(result, err)
 	}
-	invalidRaw = true
-	if _, err = client.doSend(context.Background(), path, "ja", func(float64) {}, options); err == nil {
-		t.Fatal("잘못된 원 추출본 저장 허용")
-	}
+
 }

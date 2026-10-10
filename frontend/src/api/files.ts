@@ -71,27 +71,6 @@ export interface BatchInfoResult {
 export const batchFileInfo = (paths: string[]) =>
   client.post<BatchInfoResult[]>('/files/batch-info', { paths })
 
-// File management (Admin only)
-export const uploadFile = (path: string, file: File, onProgress?: (pct: number) => void) => {
-  const formData = new FormData()
-  formData.append('file', file)
-  return client.post(`/files/upload/${encodeMediaPath(path)}`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    onUploadProgress: onProgress
-      ? (e) => onProgress(Math.round((e.loaded * 100) / (e.total || 1)))
-      : undefined,
-  })
-}
-
-export const deleteFile = (path: string) =>
-  client.delete(`/files/delete/${encodeMediaPath(path)}`)
-
-export const moveFile = (source: string, destination: string) =>
-  client.put('/files/move', { source, destination })
-
-export const createFolder = (path: string) =>
-  client.post(`/files/mkdir/${encodeMediaPath(path)}`)
-
 export interface SiblingsResponse {
   current: string
   dir: string
@@ -100,25 +79,3 @@ export interface SiblingsResponse {
 
 export const getSiblings = (path: string) =>
   client.get<SiblingsResponse>(`/files/siblings/${encodeMediaPath(path)}`)
-
-// Trash management (Admin only)
-export interface TrashEntry {
-  name: string
-  original_path: string
-  deleted_at: string
-  deleted_by: string
-  is_dir: boolean
-  size: number
-}
-
-export const listTrash = () =>
-  client.get<TrashEntry[]>('/files/trash')
-
-export const restoreTrash = (name: string) =>
-  client.post('/files/trash/restore', { name })
-
-export const permanentDeleteTrash = (name: string) =>
-  client.delete(`/files/trash/${encodeURIComponent(name)}`)
-
-export const emptyTrash = () =>
-  client.delete('/files/trash/empty')

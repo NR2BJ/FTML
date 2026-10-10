@@ -8,6 +8,29 @@ def cue(text, start, end):
 
 
 class SubtitleProcessingTests(unittest.TestCase):
+    def test_word_seam_keeps_one_copy_of_short_words_and_whole_boundary_words(self):
+        word = lambda text, start, end: dict(cue(text, start, end), _timed_word=True, _segment="qwen")
+        existing = [word("あと", 25.28, 25.6), word("気", 25.6, 26.16), word("が", 26.16, 26.24),
+                    word("利い", 26.24, 27.52), word("て清素", 27.52, 27.68), word("で", 27.68, 27.84),
+                    word("活発", 27.84, 28.48), word("で。", 28.48, 29.04)]
+        incoming = [word("あと", 25, 25.56), word("気", 25.96, 26.2), word("が", 26.2, 26.28),
+                    word("効いて", 26.44, 26.6), word("清掃", 27.24, 27.64), word("で", 27.64, 27.8),
+                    word("活発", 27.8, 28.44), word("で。", 28.68, 29), word("次。", 30, 31)]
+        result = group_timed_words(stitch_chunks(existing, incoming, 27.5), gap_threshold=0.65)
+        self.assertEqual([c["text"] for c in result], ["あと気が利いて清素で活発で。", "次。"])
+
+    def test_word_stitch_keeps_same_pass_overlapping_speakers_and_repeated_answers(self):
+        original = [dict(cue(text, start, end), _timed_word=True, _segment="qwen") for text, start, end in
+                    [("はい", 1, 1.1), ("はい", 1.04, 1.14), ("別人", 1.06, 1.5), ("はい", 3, 3.1)]]
+        self.assertEqual(stitch_chunks(original, [cue("次", 5, 6)], 4), original+[cue("次", 5, 6)])
+
+    def test_deferred_grouping_preserves_english_spaces_and_untimed_utterances(self):
+        segments = [cue("hello there", 1, 3), cue("next sentence", 3, 4)]
+        words = [dict(word="hello", start_ts=1, end_ts=2), dict(word=" there", start_ts=2, end_ts=3)]
+        for source in [words, []]:
+            result = group_timed_words(timed_words_to_chunks(source, segments, word_output=True))
+            self.assertEqual([c["text"] for c in result], ["hello there", "next sentence"])
+
     def test_native_utterances_remain_separate_without_punctuation(self):
         segments = [cue("三時です", 0, 1), cue("はい", 1, 1.2), cue("入口はどこ", 1.2, 2.5)]
         words = [{"word": c["text"], "start_ts": c["start_ts"], "end_ts": c["end_ts"]} for c in segments]

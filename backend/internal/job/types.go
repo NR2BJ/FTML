@@ -45,7 +45,7 @@ type Job struct {
 // TranscribeParams are parameters for a transcription job
 type TranscribeParams struct {
 	ObserveSpeech  bool             `json:"observe_speech,omitempty"`
-	Lyrics         *LyricsReference `json:"lyrics,omitempty"`
+	Lyrics         *LyricsReference `json:"lyrics,omitempty"` // 과거 작업 감지/거절용. 새 가사 보정은 지원하지 않는다.
 	Hints          string           `json:"hints,omitempty"`
 	AudioTrack     int              `json:"audio_track,omitempty"`
 	Engine         string           `json:"engine"`                    // backend:<id>

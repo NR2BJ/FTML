@@ -13,19 +13,17 @@
 | HLS 조각, 목록, FFmpeg 로그 | `/data/hls/<작업 ID>/` | 없음 |
 | 계정/설정/API 키/작업/시청 이력 | `/data/videostream.db` 및 SQLite WAL 파일 | 없음 |
 | 자막 인식용 임시 음성/업로드 임시 자료 | 컨테이너 `/tmp` | 없음 |
-| 관리자 업로드/폴더 생성/이름 변경/이동 | `/media`와 대상 폴더의 임시 업로드 파일 | 있음 |
-| 관리자 삭제/복원/휴지통 비우기 | `/media/.trash`, 휴지통 설명 JSON, 원래 경로 | 있음 |
 | Whisper 모델 다운로드 | `whisper_models` 볼륨의 `/models/hub` 등 | 없음 |
 | Whisper/Intel/Numba의 사용자 캐시 | `/home/ftml/.cache` | 없음, 컨테이너 교체 시 사라질 수 있음 |
 
-NFO를 생성하거나 원본 영상에 자막을 삽입하는 로직은 없다. 원본 폴더에 자막/썸네일/변환 캐시를 자동 저장하지도 않는다. 그러나 **관리자 파일 관리가 실제로 쓰므로 백엔드의 `/media`를 기본 읽기 전용으로 바꾸면 기존 기능이 깨진다.** Whisper는 백엔드가 추출한 음성을 HTTP로 받아 처리하므로 미디어 마운트를 제거했다.
+NFO를 생성하거나 원본 영상에 자막을 삽입하는 로직은 없다. 원본 폴더에 자막/썸네일/변환 캐시를 자동 저장하지도 않는다. **미디어 업로드·이동·삭제·폴더 생성·휴지통 API와 화면을 제거했으므로 백엔드의 `/media`는 읽기 전용이다.** 파일 관리는 copyparty 등 별도 도구로 한다. 과거 `.trash`와 기존 미디어는 자동 정리하지 않는다. Whisper는 백엔드가 추출한 음성을 HTTP로 받아 처리하므로 미디어 마운트를 제거했다.
 
 관련 코드: `backend/internal/api/handlers/files.go`, `subtitle.go`, `internal/subtitle/{whisper,translate}/service.go`, `internal/ffmpeg/{hls,thumbnail}.go`, `whisper/server.py`.
 
 ## 적용한 실행 권한
 
 - 백엔드와 Whisper는 Dockerfile 및 Compose 모두 `1000:1000`으로 실행한다. 환경 변수 `PUID`만 선언하고 아무 일도 하지 않는 방식이 아니다.
-- FFmpeg 자식 프로세스도 같은 UID/GID로 실행한다. 기본적인 로컬 Linux 파일시스템에서 새 파일 소유자는 UID 1000이다. GID는 기본 1000이지만 상위 폴더에 setgid가 있으면 그 폴더의 그룹을 상속한다. 기존 파일을 이동/복원할 때에는 원래 소유권이 유지된다.
+- FFmpeg 자식 프로세스도 같은 UID/GID로 실행한다. 기본적인 로컬 Linux 파일시스템에서 새 파일 소유자는 UID 1000이다. GID는 기본 1000이지만 상위 폴더에 setgid가 있으면 그 폴더의 그룹을 상속한다. 기존 파일의 소유권을 자동 변경하지 않는다.
 - `id`가 표시하는 사용자/그룹 이름은 이미지 안의 계정 목록에 따라 호스트와 다를 수 있다. 이름이 아니라 숫자 UID/GID 1000을 확인한다.
 - 기존 볼륨/미디어 파일의 소유권은 `USER`나 `user:` 설정만으로 바뀌지 않는다. 실행할 때 전체 미디어를 자동으로 `chown`하거나 `chmod 777` 하지 않는다.
 - Whisper 모델 볼륨 이름과 내부 자료는 유지하고 마운트 위치만 `/root/.cache/huggingface`에서 `/models`로 바꾼다. `HF_HOME=/models`, `HF_HUB_CACHE=/models/hub`를 명시해 기존 모델을 재사용한다. HOME/Numba 캐시도 쓰기 가능한 위치를 사용한다.
@@ -36,7 +34,9 @@ Docker rootless 또는 `userns-remap`, NFS/SMB, NAS ACL 환경은 숫자 1000이
 
 ## 재배포 전 준비
 
-이번 변경은 **먼저 기존 볼륨을 준비하고 배포해야 한다.** 바로 재배포하면 root 소유 SQLite/모델 캐시에 쓰지 못해 서버가 시작하지 않을 수 있다. Portainer 자동 갱신이나 다른 관리 도구도 작업 중에는 중단한다.
+**이미 UID/GID 1000으로 이전한 서버는 권한 이전을 반복하지 않는다.** 현재 배포는 [GHCR·Portainer 안내](ghcr-portainer.md)를 따른다. 이번에는 세 이미지를 갱신하고 편집기의 미디어 마운트를 읽기 전용으로 변경한다.
+
+아래 소유권 이전 절차는 과거 root 실행 버전에서 아직 이전하지 않은 설치에만 해당한다. root 소유 SQLite/모델 캐시를 쓰는 상태라면 전용 볼륨 준비가 필요하다.
 
 Debian 호스트에서 실행한다. Docker 권한이 없다면 Docker 명령에 `sudo`를 사용한다. 아래 `MEDIA_PATH`는 실제 영상 폴더로 바꾼다.
 
@@ -50,12 +50,11 @@ Portainer 스택 환경 변수 또는 `.env`에 다음을 설정한다. `RENDER_
 
 ```env
 MEDIA_PATH=/실제/영상/폴더
-MEDIA_READ_ONLY=false
 RENDER_GID=실제_render_그룹번호
 VIDEO_GID=실제_card_그룹번호
 ```
 
-영상 폴더와 하위 파일에 UID 1000의 읽기 권한, 폴더 통과 권한이 필요하다. 관리자 쓰기에는 대상 폴더의 쓰기/통과 권한도 필요하다. 기존 root 소유 `.trash`나 앱에서 업로드한 폴더는 따로 확인한다. `chown -R`로 미디어 전체의 소유권을 덮어쓰지 말고, 필요한 경로만 호스트 정책에 맞춰 소유권 또는 ACL을 조정한다. setgid/기본 ACL도 함께 확인한다.
+영상 폴더와 하위 파일에 UID 1000의 읽기 권한, 폴더 통과 권한이 필요하다. 앱에는 미디어 쓰기 권한이 필요하지 않다. `chown -R`로 미디어 전체의 소유권을 덮어쓰지 말고, 필요한 경로만 호스트 정책에 맞춰 소유권 또는 ACL을 조정한다. setgid/기본 ACL도 함께 확인한다.
 
 ## 기존 전용 볼륨 이전
 
@@ -75,7 +74,7 @@ sh scripts/prepare-volume-permissions.sh --apply
 
 기존 외부 볼륨 이름이 다르면 `FTML_DATA_VOLUME=실제이름 FTML_MODELS_VOLUME=실제이름`을 앞에 지정한다. 저장소 기본값은 `ftml_data`, `whisper_models`다. 다른 서비스와 공유하는 볼륨에는 실행하지 않는다.
 
-4. 스택 환경 변수에 GPU 그룹 번호를 설정하고 최신 Git 내용을 가져와 **백엔드와 Whisper 이미지를 재빌드하여** 재배포한다. 기존 이미지를 단순 재시작하거나 이미지만 다시 받는 작업은 소스 빌드를 대신하지 않는다. 이번에는 프론트엔드 코드 변경이 없다.
+4. 스택 환경 변수에 GPU 그룹 번호를 설정하고 [GHCR·Portainer 안내](ghcr-portainer.md)에 따라 게시가 완료된 세 이미지를 같은 SHA로 갱신한다. 미디어 마운트는 `read_only: true`로 둔다.
 5. 아래 배포 후 확인을 수행한다.
 
 ### 직접 Compose로 관리하는 경우
@@ -85,10 +84,10 @@ sh scripts/prepare-volume-permissions.sh --apply
 ```sh
 git pull --ff-only origin main
 docker compose config -q
-docker compose build backend whisper
+docker compose pull
 docker compose stop
 sh scripts/prepare-volume-permissions.sh --apply
-docker compose up -d --force-recreate
+docker compose up -d --no-build --force-recreate
 docker compose ps
 docker compose logs --tail=100 backend whisper
 ```
@@ -107,11 +106,11 @@ docker compose exec whisper sh -ec 'test -w /models; test -w "$HOME"; test -w "$
 docker compose exec backend vainfo --display drm --device /dev/dri/renderD128
 ```
 
-UID/GID가 1000인지, 실제 GPU 그룹이 보조 그룹에 있는지 확인한다. GPU 장치 경로가 다르면 `vainfo`의 경로를 바꾼다. 이어서 실제 영상 재생/GPU 변환, 자막 생성/번역을 확인한다. 쓰기 허용 상태에서는 관리자 계정으로 작은 시험 파일을 올려 UID/GID를 확인하고 이동 → 휴지통 → 복원까지 시험한다. Whisper 로그에 모델 쓰기 거부나 `/root` 접근 오류가 없어야 한다. UID 1000 표시는 앱 로그인 계정과 무관하며 관리자/일반 사용자 모두 서버의 파일 접근은 같은 OS 계정으로 수행한다.
+UID/GID가 1000인지, 실제 GPU 그룹이 보조 그룹에 있는지 확인한다. GPU 장치 경로가 다르면 `vainfo`의 경로를 바꾼다. 이어서 실제 영상 재생/GPU 변환, 자막 생성/번역을 확인한다. 미디어 마운트의 읽기 전용 여부는 `docker inspect 실제백엔드이름 --format '{{json .Mounts}}'`에서 `Destination: /media`의 `RW: false`로 확인한다. 실제 미디어 파일을 만들어 검사하지 않는다. Whisper 로그에 모델 쓰기 거부나 `/root` 접근 오류가 없어야 한다. UID 1000 표시는 앱 로그인 계정과 무관하며 관리자/일반 사용자 모두 서버의 파일 접근은 같은 OS 계정으로 수행한다.
 
-## 읽기 전용을 원할 때
+## 읽기 전용 미디어
 
-`MEDIA_READ_ONLY=true`로 설정하고 백엔드를 재생성하면 `/media`에 `:ro`와 같은 읽기 전용 마운트가 적용된다. 재생/탐색/검색/자막 생성·번역은 별도 `/data`를 사용하므로 유지된다. 다만 관리자 업로드/폴더 생성/이동/삭제/복원은 사용할 수 없으며 현재 화면의 관리 버튼을 자동으로 숨기지는 않는다. 이번 기본값은 요청한 관리자 파일 관리를 유지하기 위해 `false`다.
+현재 Compose는 `/media`에 `read_only: true`를 고정한다. 자막·캐시는 쓰기 가능한 별도 `/data`에 저장하므로 추출·번역·자막 삭제는 유지된다. Git에서 분리한 Portainer 스택은 이 변경이 자동 적용되지 않으므로 Editor에서 직접 수정한다.
 
 `bind.create_host_path: false`로 존재하지 않는 영상 경로를 Docker가 root 소유의 빈 폴더로 자동 생성하지 못하게 했다. 경로가 잘못되었거나 저장 장치가 준비되지 않았다면 호스트에서 먼저 확인한다. 이미 존재하는 빈 마운트 지점까지 탐지하는 기능은 아니므로 NAS/외장 장치의 실제 마운트 여부도 확인해야 한다.
 

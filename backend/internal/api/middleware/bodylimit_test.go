@@ -16,7 +16,7 @@ func TestBodyLimitsDistinguishUploadsFromJSON(t *testing.T) {
 		want int
 	}{
 		{"/api/settings", 2 << 20, 413},
-		{"/api/files/upload/movies", 2 << 20, 204},
+		{"/api/files/upload/movies", 2 << 20, 413},
 		{"/api/subtitle/upload/video.mkv", 2 << 20, 204},
 		{"/api/subtitle/upload/video.mkv", 11 << 20, 413},
 	} {

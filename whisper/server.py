@@ -21,7 +21,6 @@ import os
 import logging
 import time
 import wave
-import json
 from contextlib import asynccontextmanager
 
 import threading
@@ -32,7 +31,7 @@ from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel
 from inference_runtime import ModelGate, STORAGE_FULL_MESSAGE, is_storage_full
-from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks, timed_words_to_chunks, stitch_chunks, stabilize_short_cues
+from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, timed_words_to_chunks, stitch_chunks, stabilize_short_cues, group_timed_words
 from qwen_pipeline import MODELS as QWEN_MODELS
 from qwen_alignment import QwenAlignmentError
 
@@ -196,7 +195,7 @@ def check_cancelled(cancel):
         raise InterruptedError("Transcription cancelled")
 
 
-def _generate_timed_chunks(audio, config, offset, total_duration, cancel=None, depth=0):
+def _generate_timed_chunks(audio, config, offset, total_duration, cancel=None, depth=0, word_output=False):
     check_cancelled(cancel)
     if not audio.size or not np.any(audio):
         return []
@@ -213,8 +212,8 @@ def _generate_timed_chunks(audio, config, offset, total_duration, cancel=None, d
         check_cancelled(cancel)
         midpoint = len(audio)//2
         left_end, right_start = midpoint + 16000, midpoint - 16000
-        before = _generate_timed_chunks(audio[:left_end], config, offset, total_duration, cancel, depth+1)
-        after = _generate_timed_chunks(audio[right_start:], config, offset + right_start/16000, total_duration, cancel, depth+1)
+        before = _generate_timed_chunks(audio[:left_end], config, offset, total_duration, cancel, depth+1, word_output)
+        after = _generate_timed_chunks(audio[right_start:], config, offset + right_start/16000, total_duration, cancel, depth+1, word_output)
         recovered = stitch_chunks(before, after, offset + midpoint/16000)
         if not recovered:
             raise QwenAlignmentError("empty_retry", window) from exc
@@ -223,8 +222,8 @@ def _generate_timed_chunks(audio, config, offset, total_duration, cancel=None, d
             log.info("Qwen 정렬 구간 재처리 완료: %.3f~%.3fs, %d개 자막", *window, len(recovered))
         return recovered
     check_cancelled(cancel)
-    return timed_words_to_chunks(getattr(result, "words", None), getattr(result, "chunks", []) or [], offset, total_duration,
-                                 engine="qwen" if model_id_str in QWEN_MODELS else "whisper")
+    return timed_words_to_chunks(getattr(result, "words", None), getattr(result, "chunks", []) or [], offset, min(total_duration, offset + len(audio)/16000),
+                                 engine="qwen" if model_id_str in QWEN_MODELS else "whisper", word_output=word_output)
 
 
 def _recover_gaps(audio_getter, chunks, config, total_duration, sr=16000, cancel=None):
@@ -242,7 +241,7 @@ def _recover_gaps(audio_getter, chunks, config, total_duration, sr=16000, cancel
             budget -= window_end-start
             # Only skip digital silence, not quiet speech; this is not VAD.
             if audio.size and np.any(audio):
-                recovered = _generate_timed_chunks(audio, config, begin_sample/sr, total_duration, cancel)
+                recovered = _generate_timed_chunks(audio, config, begin_sample/sr, total_duration, cancel, word_output=True)
                 recovered = [cue for cue in recovered if cue["start_ts"] >= start-1 and cue["end_ts"] <= window_end+1]
                 chunks = merge_chunks(chunks, recovered, recovery=True)
             start = window_end
@@ -280,9 +279,13 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
         if not audio.size or not np.any(audio):
             position = end
             continue
-        incoming = _generate_timed_chunks(audio, config, position/sr, total_duration, cancel)
-        if observer is not None:
-            observer.observe(audio, incoming, position/sr)
+        incoming = _generate_timed_chunks(audio, config, position/sr, total_duration, cancel, word_output=True)
+        if observer is not None and not getattr(observer, "failed", False):
+            try:
+                observer.observe(audio, incoming, position/sr)
+            except Exception:
+                observer.failed = True
+                log.exception("말소리 검출 실패: 자막과 원음은 유지합니다")
         seam = (position+max(position, last_window_end))/2/sr
         chunks = stitch_chunks(chunks, incoming, seam) if position and chunks else incoming
         last_window_end = end
@@ -291,6 +294,11 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
             break
         position = end - overlap_samples
     chunks = _recover_gaps(audio_getter, chunks, config, total_duration, sr, cancel)
+    if model_id_str not in QWEN_MODELS and observer is not None and getattr(observer, "adjust_timing", False) and not getattr(observer, "failed", False):
+        from speech_observer import refine_whisper_onsets
+        chunks, observer.adjusted_onsets = refine_whisper_onsets(chunks, observer.merged_spans())
+    chunks = group_timed_words(chunks, total_duration, gap_threshold=0.65 if model_id_str in QWEN_MODELS else 0.3)
+    chunks = [{key: value for key, value in cue.items() if not key.startswith("_")} for cue in chunks]
     if model_id_str in QWEN_MODELS:
         chunks = stabilize_short_cues(chunks, total_duration)
     # 완전한 디지털 무음만 자른다. 배경음/작은 목소리를 VAD처럼 판정하지 않는다.
@@ -334,14 +342,19 @@ def run_inference_wav(file_obj, language="", cancel=None, model="", prompt="", o
 
 
 @gate.operation
-def _run_upload(file_obj, language, cancel, model="", prompt="", lyrics=None, observe_speech=False):
+def _run_upload(file_obj, language, cancel, model="", prompt="", observe_speech=False):
     started = time.monotonic()
     if pipeline is not None and hasattr(pipeline, "collapsed_words"):
         pipeline.collapsed_words = 0
     observer = None
-    if observe_speech:
-        from speech_observer import SpeechObserver
-        observer = SpeechObserver()
+    timing_boundaries = (model or DEFAULT_MODEL_ID) not in QWEN_MODELS and os.environ.get("WHISPER_SPEECH_BOUNDARIES", "true").lower() == "true"
+    if observe_speech or timing_boundaries:
+        try:
+            from speech_observer import SpeechObserver
+            observer = SpeechObserver()
+            observer.adjust_timing = timing_boundaries
+        except Exception:
+            log.exception("말소리 경계를 읽지 못해 원래 추출 시각을 유지합니다")
     try:
         result = run_inference_wav(file_obj, language, cancel, model, prompt, observer)
     except (wave.Error, EOFError):
@@ -350,48 +363,17 @@ def _run_upload(file_obj, language, cancel, model="", prompt="", lyrics=None, ob
         audio, _ = librosa.load(file_obj, sr=16000, mono=True)
         result = run_inference(audio.astype(np.float32), language, cancel, model, prompt, observer)
     chunks, text, elapsed, duration = result
-    raw_vtt = chunks_to_vtt(chunks)
-    lyrics_error = ""
-    if lyrics:
-        check_cancelled(cancel)
-        if model_id_str not in QWEN_MODELS or not language or language == "auto":
-            raise ValueError("가사 참고에는 Qwen 모델과 음성 언어 지정이 필요합니다")
-        try:
-            start, end = lyrics["start"], lyrics["end"]
-            if end > duration:
-                raise ValueError("가사 구간이 영상 길이를 넘습니다")
-            # 구간 경계에 대사가 걸리면 임의로 잘라서 덮지 않는다.
-            if any(c["start_ts"] < start < c["end_ts"] or c["start_ts"] < end < c["end_ts"] for c in chunks):
-                raise ValueError("가사 구간 경계가 기존 대사와 겹칩니다. 앞뒤 무음을 포함해 구간을 조정해 주세요")
-            file_obj.seek(0)
-            try:
-                with wave.open(file_obj, "rb") as wav:
-                    wav.setpos(round(start*16000))
-                    audio = wav_frames_to_audio(wav.readframes(round((end-start)*16000)), wav.getnchannels())
-            except (wave.Error, EOFError):
-                file_obj.seek(0)
-                audio, _ = librosa.load(file_obj, sr=16000, mono=True, offset=start, duration=end-start)
-            original = " ".join(c["text"] for c in chunks if start <= c["start_ts"] and c["end_ts"] <= end)
-            aligned = pipeline.align_reference(audio, lyrics["text"], language, original)
-            check_cancelled(cancel)
-            replacement = timed_words_to_chunks(aligned.words, aligned.chunks, start, duration, engine="qwen")
-            if not replacement:
-                raise ValueError("참고 가사의 시각을 확인하지 못했습니다")
-            chunks = normalize_chunks([c for c in chunks if c["end_ts"] <= start or c["start_ts"] >= end] + replacement)
-            text = " ".join(c["text"] for c in chunks)
-        except ValueError as exc:
-            # 선택 보정 실패로 이미 끝낸 추출까지 버리지 않는다.
-            lyrics_error, raw_vtt = str(exc), ""
-    diagnostics = observer.finish(chunks) if observer is not None else {}
+    diagnostics = observer.finish(chunks) if observer is not None and not getattr(observer, "failed", False) else {}
+    if timing_boundaries:
+        diagnostics["timing_adjusted_onsets"] = getattr(observer, "adjusted_onsets", 0)
+        diagnostics["speech_boundaries_available"] = observer is not None and not getattr(observer, "failed", False)
     diagnostics.update({"model":model_id_str,"word_timestamps":word_timestamps_active,"gap_recovery":GAP_MAX_RETRY_S>0})
     if model_id_str in QWEN_MODELS:
         diagnostics["timing_review_words"] = getattr(pipeline, "collapsed_words", 0)
         diagnostics["timing_recovered_windows"] = getattr(pipeline, "recovered_alignment_windows", 0)
         pipeline.collapsed_words = 0
-    if lyrics_error:
-        diagnostics["lyrics_error"] = lyrics_error
     log.info("추출 진단: %s", diagnostics)
-    return chunks, text, time.monotonic()-started, duration, raw_vtt, diagnostics
+    return chunks, text, time.monotonic()-started, duration, diagnostics
 
 
 @app.post("/v1/audio/transcriptions")
@@ -408,25 +390,17 @@ async def transcribe_openai(
     model = model or DEFAULT_MODEL_ID
     if model != DEFAULT_MODEL_ID and model not in QWEN_MODELS:
         raise HTTPException(400, "지원하지 않는 추출 모델입니다")
-    lyrics = None
     if reference_lyrics:
-        try:
-            lyrics = json.loads(reference_lyrics)
-            start, end = float(lyrics["start"]), float(lyrics["end"])
-            if not 0 <= start < end or not 0 < end-start <= 180 or not isinstance(lyrics["text"],str) or not 1 <= len(lyrics["text"].strip()) <= 5000:
-                raise ValueError()
-            lyrics = {"start":start,"end":end,"text":lyrics["text"]}
-        except (ValueError, TypeError, KeyError):
-            raise HTTPException(400,"가사 참고 구간은 최대 180초이며 가사 원문이 필요합니다")
+        raise HTTPException(400, "가사 수동 보정은 더 이상 지원하지 않습니다")
     cancel = threading.Event()
     await file.seek(0)
-    future = asyncio.get_running_loop().run_in_executor(None, _run_upload, file.file, language, cancel, model, prompt, lyrics, observe_speech)
+    future = asyncio.get_running_loop().run_in_executor(None, _run_upload, file.file, language, cancel, model, prompt, observe_speech)
     try:
         while not future.done():
             await asyncio.wait([future], timeout=0.25)
             if await request.is_disconnected():
                 cancel.set()
-        chunks, text, elapsed, duration, raw_vtt, diagnostics = await asyncio.shield(future)
+        chunks, text, elapsed, duration, diagnostics = await asyncio.shield(future)
     except asyncio.CancelledError:
         cancel.set()
         # Keep the upload alive until the GPU call/thread has released it.
@@ -453,7 +427,7 @@ async def transcribe_openai(
     if response_format == "vtt":
         return PlainTextResponse(chunks_to_vtt(chunks), media_type="text/vtt")
     if response_format == "ftml_json":
-        return JSONResponse({"vtt": chunks_to_vtt(chunks), "raw_vtt": raw_vtt if lyrics else "", "diagnostics":diagnostics})
+        return JSONResponse({"vtt": chunks_to_vtt(chunks), "diagnostics":diagnostics})
     if response_format == "verbose_json":
         return JSONResponse({"text": text, "language": language or "auto", "duration": duration, "segments": [
             {"id": index, "start": cue["start_ts"], "end": cue["end_ts"], "text": cue["text"]}

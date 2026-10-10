@@ -1,15 +1,13 @@
 import { encodeMediaPath } from '@/utils/mediaPath'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { getTree, getThumbnailUrl, batchFileInfo, type FileEntry, type MediaInfo, uploadFile, deleteFile, moveFile, createFolder } from '@/api/files'
-import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid, CheckSquare, Upload, FolderPlus, Home, ChevronRight, Loader2 } from 'lucide-react'
+import { getTree, getThumbnailUrl, batchFileInfo, type FileEntry, type MediaInfo } from '@/api/files'
+import { Folder, FileVideo, File, ArrowLeft, Play, List, LayoutGrid, CheckSquare, Subtitles, Home, ChevronRight, Loader2 } from 'lucide-react'
 import { isVideoFile, formatBytes } from '@/utils/format'
 import { useBrowseStore } from '@/stores/browseStore'
-import { useAuthStore } from '@/stores/authStore'
 import DetailsView from '@/components/Browse/DetailsView'
 import ContextMenu from '@/components/Browse/ContextMenu'
 import BatchSubtitleDialog from '@/components/Browse/BatchSubtitleDialog'
-import SubtitleManagerDialog from '@/components/Browse/SubtitleManagerDialog'
 
 // ── Badge helper ──
 
@@ -224,21 +222,6 @@ export default function Browse() {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: FileEntry[] } | null>(null)
   const [batchDialog, setBatchDialog] = useState<{ mode: BatchMode; files: FileEntry[]; subtitleId?: string } | null>(null)
-  const [subtitleManager, setSubtitleManager] = useState<FileEntry | null>(null)
-
-  // File management state
-  const { user } = useAuthStore()
-  const isAdmin = user?.role === 'admin'
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
-  const [isDragging, setIsDragging] = useState(false)
-  const dragCounter = useRef(0)
-  const [newFolderName, setNewFolderName] = useState<string | null>(null)
-  const [renameEntry, setRenameEntry] = useState<FileEntry | null>(null)
-  const [renameValue, setRenameValue] = useState('')
-  const [deleteConfirm, setDeleteConfirm] = useState<FileEntry[] | null>(null)
-  const [actionError, setActionError] = useState('')
-
   const { viewMode, iconSize, setViewMode, setIconSize } = useBrowseStore()
 
   // Media info for badges (icons view)
@@ -281,12 +264,6 @@ export default function Browse() {
     badgeFetchedRef.current = new Set()
   }, [path])
 
-  const refreshEntries = useCallback(() => {
-    getTree(path)
-      .then(({ data }) => setEntries(data.entries || []))
-      .catch(() => setEntries([]))
-  }, [path])
-
   useEffect(() => {
     setLoading(true)
     getTree(path)
@@ -299,117 +276,6 @@ export default function Browse() {
   useEffect(() => {
     setSelectedPaths(new Set())
   }, [path])
-
-  // File management handlers
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setActionError('')
-    setUploadProgress(0)
-    try {
-      await uploadFile(path, file, (pct) => setUploadProgress(pct))
-      refreshEntries()
-    } catch {
-      setActionError('Upload failed')
-    } finally {
-      setUploadProgress(null)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    }
-  }
-
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    dragCounter.current++
-    if (e.dataTransfer?.types?.includes('Files')) {
-      setIsDragging(true)
-    }
-  }, [])
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    dragCounter.current--
-    if (dragCounter.current === 0) {
-      setIsDragging(false)
-    }
-  }, [])
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-  }, [])
-
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDragging(false)
-    dragCounter.current = 0
-
-    if (!isAdmin) return
-
-    const files = Array.from(e.dataTransfer?.files || [])
-    if (files.length === 0) return
-
-    setActionError('')
-    for (const file of files) {
-      setUploadProgress(0)
-      try {
-        await uploadFile(path, file, (pct) => setUploadProgress(pct))
-      } catch {
-        setActionError(`Upload failed: ${file.name}`)
-        break
-      }
-    }
-    setUploadProgress(null)
-    refreshEntries()
-  }, [isAdmin, path, refreshEntries])
-
-  const handleCreateFolder = async () => {
-    if (!newFolderName?.trim()) { setNewFolderName(null); return }
-    setActionError('')
-    try {
-      const folderPath = path ? `${path}/${newFolderName.trim()}` : newFolderName.trim()
-      await createFolder(folderPath)
-      refreshEntries()
-    } catch {
-      setActionError('Failed to create folder')
-    } finally {
-      setNewFolderName(null)
-    }
-  }
-
-  const handleDelete = async () => {
-    if (!deleteConfirm) return
-    setActionError('')
-    try {
-      for (const entry of deleteConfirm) {
-        await deleteFile(entry.path)
-      }
-      setSelectedPaths(new Set())
-      refreshEntries()
-    } catch {
-      setActionError('Failed to delete')
-    } finally {
-      setDeleteConfirm(null)
-    }
-  }
-
-  const handleRename = async () => {
-    if (!renameEntry || !renameValue.trim()) { setRenameEntry(null); return }
-    setActionError('')
-    try {
-      const parts = renameEntry.path.split('/')
-      parts.pop()
-      const dest = parts.length > 0 ? `${parts.join('/')}/${renameValue.trim()}` : renameValue.trim()
-      await moveFile(renameEntry.path, dest)
-      refreshEntries()
-    } catch {
-      setActionError('Failed to rename')
-    } finally {
-      setRenameEntry(null)
-    }
-  }
 
   const handleClick = (entry: FileEntry) => {
     if (entry.is_dir) {
@@ -432,7 +298,8 @@ export default function Browse() {
 
   const openBatchDialog = (mode: BatchMode) => {
     // Use context menu entries (set at right-click time) if available
-    const files = contextMenu?.entries ?? entries.filter(e => selectedPaths.has(e.path))
+    const files = (contextMenu?.entries ?? entries.filter(e => selectedPaths.has(e.path)))
+      .filter(e => !e.is_dir && isVideoFile(e.name))
     if (files.length > 0) {
       setBatchDialog({ mode, files })
     }
@@ -449,26 +316,7 @@ export default function Browse() {
   }
 
   return (
-    <div
-      onDragEnter={isAdmin ? handleDragEnter : undefined}
-      onDragLeave={isAdmin ? handleDragLeave : undefined}
-      onDragOver={isAdmin ? handleDragOver : undefined}
-      onDrop={isAdmin ? handleDrop : undefined}
-      className="relative"
-    >
-      {/* Drag overlay */}
-      {isDragging && isAdmin && (
-        <div className="fixed inset-0 z-50 bg-primary-500/10 border-2 border-dashed border-primary-400 flex items-center justify-center pointer-events-none">
-          <div className="bg-dark-900 border border-primary-500 rounded-xl px-8 py-6 text-center shadow-2xl">
-            <Upload className="w-10 h-10 text-primary-400 mx-auto mb-2" />
-            <p className="text-white font-medium">Drop files to upload</p>
-            <p className="text-sm text-gray-400 mt-1">
-              Files will be uploaded to {path ? `/${path}` : 'root'}
-            </p>
-          </div>
-        </div>
-      )}
-
+    <div className="relative">
       {/* Header with breadcrumb */}
       <div className="flex items-center justify-between mb-4 gap-3">
         <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
@@ -509,29 +357,6 @@ export default function Browse() {
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
-          {/* Admin file management buttons */}
-          {isAdmin && (
-            <div className="flex items-center gap-1.5">
-              <input ref={fileInputRef} type="file" className="hidden" onChange={handleUpload} />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploadProgress !== null}
-                className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-white bg-dark-800 hover:bg-dark-700 border border-dark-700 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
-                title="Upload file"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                {uploadProgress !== null ? `${uploadProgress}%` : 'Upload'}
-              </button>
-              <button
-                onClick={() => setNewFolderName('')}
-                className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-white bg-dark-800 hover:bg-dark-700 border border-dark-700 px-3 py-1.5 rounded-lg transition-colors"
-                title="New folder"
-              >
-                <FolderPlus className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-
           {/* Selected count + batch action */}
           {selectedCount > 0 && (
             <div className="flex items-center gap-2">
@@ -539,6 +364,9 @@ export default function Browse() {
                 <CheckSquare className="w-3.5 h-3.5" />
                 {selectedCount} selected
               </span>
+                {entries.some(e => selectedPaths.has(e.path) && !e.is_dir && isVideoFile(e.name)) && (
+                  <button onClick={() => openBatchDialog('generate')} className="flex items-center gap-1 rounded px-2 py-1 text-sm text-primary-400"><Subtitles size={16} />자막 패널</button>
+                )}
               <button
                 onClick={() => setSelectedPaths(new Set())}
                 className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
@@ -593,32 +421,6 @@ export default function Browse() {
         </div>
       </div>
 
-      {/* Action error */}
-      {actionError && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-2 rounded-lg text-sm mb-4 flex items-center justify-between">
-          {actionError}
-          <button onClick={() => setActionError('')} className="text-red-400 hover:text-red-300 ml-2">&times;</button>
-        </div>
-      )}
-
-      {/* New folder inline input */}
-      {newFolderName !== null && (
-        <div className="flex items-center gap-2 mb-4">
-          <FolderPlus className="w-4 h-4 text-yellow-400" />
-          <input
-            type="text"
-            value={newFolderName}
-            onChange={(e) => setNewFolderName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleCreateFolder(); if (e.key === 'Escape') setNewFolderName(null) }}
-            placeholder="Folder name"
-            className="bg-dark-800 border border-dark-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary-500 w-64"
-            autoFocus
-          />
-          <button onClick={handleCreateFolder} className="text-sm text-primary-400 hover:text-primary-300">Create</button>
-          <button onClick={() => setNewFolderName(null)} className="text-sm text-gray-500 hover:text-gray-300">Cancel</button>
-        </div>
-      )}
-
       {/* Content */}
       {viewMode === 'icons' && (
         <IconsView
@@ -655,20 +457,7 @@ export default function Browse() {
           y={contextMenu.y}
           selectedEntries={contextMenu.entries}
           onClose={() => setContextMenu(null)}
-          onGenerateSubtitles={() => openBatchDialog('generate')}
-          onTranslateSubtitles={() => openBatchDialog('translate')}
-          onGenerateAndTranslate={() => openBatchDialog('generate-translate')}
-          onManageSubtitles={() => {
-            const videoFiles = contextMenu.entries.filter(e => !e.is_dir && isVideoFile(e.name))
-            if (videoFiles.length === 1) setSubtitleManager(videoFiles[0])
-          }}
-          onDelete={() => setDeleteConfirm(contextMenu.entries)}
-          onRename={() => {
-            if (contextMenu.entries.length === 1) {
-              setRenameEntry(contextMenu.entries[0])
-              setRenameValue(contextMenu.entries[0].name)
-            }
-          }}
+          onSubtitles={() => openBatchDialog('generate')}
         />
       )}
 
@@ -682,59 +471,6 @@ export default function Browse() {
         />
       )}
 
-      {/* Subtitle Manager Dialog (single file) */}
-      {subtitleManager && (
-        <SubtitleManagerDialog
-          file={subtitleManager}
-          onClose={() => setSubtitleManager(null)}
-          onTranslate={(subtitleId) => {
-            setBatchDialog({ mode: 'translate', files: [subtitleManager], subtitleId })
-            setSubtitleManager(null)
-          }}
-        />
-      )}
-
-      {/* Delete Confirmation Dialog */}
-      {deleteConfirm && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setDeleteConfirm(null)}>
-          <div className="bg-dark-800 border border-dark-600 rounded-xl p-6 max-w-sm w-full mx-4" onClick={e => e.stopPropagation()}>
-            <h3 className="text-white font-medium mb-2">Delete {deleteConfirm.length} item{deleteConfirm.length > 1 ? 's' : ''}?</h3>
-            <p className="text-sm text-gray-400 mb-1">This cannot be undone.</p>
-            <ul className="text-sm text-gray-500 mb-4 max-h-32 overflow-y-auto">
-              {deleteConfirm.map(e => <li key={e.path} className="truncate">{e.name}</li>)}
-            </ul>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setDeleteConfirm(null)} className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
-              <button onClick={handleDelete} className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">Delete</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Rename Dialog */}
-      {renameEntry && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setRenameEntry(null)}>
-          <div className="bg-dark-800 border border-dark-600 rounded-xl p-6 max-w-sm w-full mx-4" onClick={e => e.stopPropagation()}>
-            <h3 className="text-white font-medium mb-3">Rename</h3>
-            <input
-              type="text"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleRename(); if (e.key === 'Escape') setRenameEntry(null) }}
-              className="w-full bg-dark-900 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-primary-500 mb-4"
-              autoFocus
-              onFocus={(e) => {
-                const dotIdx = e.target.value.lastIndexOf('.')
-                if (dotIdx > 0) e.target.setSelectionRange(0, dotIdx)
-              }}
-            />
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setRenameEntry(null)} className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
-              <button onClick={handleRename} className="px-4 py-2 text-sm bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors">Rename</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

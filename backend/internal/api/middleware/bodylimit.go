@@ -12,8 +12,6 @@ func RequestBodyLimit(next http.Handler) http.Handler {
 		limit := int64(1 << 20)
 		if r.Method == http.MethodPost {
 			switch {
-			case strings.HasPrefix(r.URL.Path, "/api/files/upload/"):
-				limit = 10 << 30
 			case strings.HasPrefix(r.URL.Path, "/api/subtitle/upload/"):
 				limit = 10 << 20
 			}

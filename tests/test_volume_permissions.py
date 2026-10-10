@@ -146,6 +146,12 @@ class VolumePermissionsTests(unittest.TestCase):
 
 
 class RuntimeImageTests(unittest.TestCase):
+    def test_media_mount_is_fixed_read_only_and_data_volume_is_preserved(self):
+        content = (ROOT / "docker-compose.yml").read_text()
+        self.assertRegex(content, r"target: /media\s+read_only: true")
+        self.assertIn("- ftml_data:/data", content)
+        self.assertNotIn("MEDIA_READ_ONLY", content)
+
     def test_writers_have_nonroot_default(self):
         for dockerfile in ("backend/Dockerfile", "whisper/Dockerfile.openvino-genai"):
             with self.subTest(dockerfile=dockerfile):

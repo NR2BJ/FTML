@@ -24,11 +24,11 @@ services:
     expose:
       - "8080"
     volumes:
-      # 관리자 파일 관리를 위해 기본값은 읽기/쓰기다.
+      # 미디어는 읽기 전용이다. 자막과 캐시는 /data에 저장한다.
       - type: bind
         source: ${MEDIA_PATH:-/mnt/storage/video}
         target: /media
-        read_only: ${MEDIA_READ_ONLY:-false}
+        read_only: true
         bind:
           create_host_path: false
       - ftml_data:/data
@@ -69,6 +69,7 @@ services:
       - CHUNK_DURATION_S=${WHISPER_CHUNK_SECONDS:-300}
       - CHUNK_OVERLAP_S=${WHISPER_OVERLAP_SECONDS:-5}
       - WHISPER_WORD_TIMESTAMPS=${WHISPER_WORD_TIMESTAMPS:-true}
+      - WHISPER_SPEECH_BOUNDARIES=${WHISPER_SPEECH_BOUNDARIES:-true}
       - GAP_THRESHOLD_S=${WHISPER_GAP_SECONDS:-15}
       # 배경음만 있는 빈 구간에 환각을 추가하지 않도록 재인식은 명시적으로만 사용한다.
       - GAP_MAX_RETRY_S=${WHISPER_GAP_RETRY_SECONDS:-0}
