@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/video-stream/backend/internal/job"
@@ -21,6 +24,28 @@ func TestRetryableStatusesSurviveErrorWrapping(t *testing.T) {
 	}
 	if isRetryableError(0, &serverResponseError{Status: 422}) {
 		t.Fatal("invalid result must not retry")
+	}
+}
+
+func TestLocalASRStorageFullDoesNotRetryOrBecomeGPUError(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusInsufficientStorage)
+		json.NewEncoder(w).Encode(map[string]string{"detail": "음성 인식 서버의 저장 공간이 부족합니다"})
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "audio.wav")
+	if err := os.WriteFile(path, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewOpenVINOGenAIClient(server.URL).sendWithRetry(context.Background(), path, "ja", func(float64) {})
+	if err == nil || !strings.Contains(err.Error(), "저장 공간") || strings.Contains(err.Error(), "GPU out of memory") {
+		t.Fatalf("저장 공간 오류가 잘못 전달됨: %v", err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("공간 부족 작업을 %d번 요청함", attempts.Load())
 	}
 }
 

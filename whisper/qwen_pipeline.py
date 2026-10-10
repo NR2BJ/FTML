@@ -6,12 +6,16 @@ import logging
 import math
 import os
 from pathlib import Path
+import selectors
+import signal
 import subprocess
 import shutil
 import tempfile
 import time
 from types import SimpleNamespace
 from difflib import SequenceMatcher
+
+from inference_runtime import StorageFullError
 
 
 MODELS = {"Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ASR-0.6B"}
@@ -27,6 +31,64 @@ LANGUAGES = {"ja": "Japanese", "ko": "Korean", "en": "English", "zh": "Chinese",
 log = logging.getLogger("whisper")
 
 
+def run_export(command, scratch, cancel=None, timeout=3600):
+    if cancel is not None and cancel.is_set():
+        raise InterruptedError("Transcription cancelled")
+    # 변환기의 내부 임시 모델도 작업 폴더에 둔다. 서버의 업로드 임시 경로는 바꾸지 않는다.
+    env = {**os.environ, "TMPDIR": str(scratch), "TMP": str(scratch), "TEMP": str(scratch)}
+    process = subprocess.Popen(
+        command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    storage_full, tail = False, ""
+    try:
+        deadline = time.monotonic() + timeout
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while selector.get_map() or process.poll() is None:
+                if cancel is not None and cancel.is_set():
+                    raise InterruptedError("Transcription cancelled")
+                if time.monotonic() > deadline:
+                    raise TimeoutError("Qwen 변환 시간이 초과되었습니다")
+                for key, _ in selector.select(timeout=0.25):
+                    data = os.read(key.fd, 8192)
+                    if not data:
+                        selector.unregister(key.fileobj)
+                        continue
+                    output = data.decode("utf-8", errors="replace")
+                    log.info("Qwen 변환: %s", output.rstrip())
+                    # 전체 로그를 메모리에 쌓지 않고, 경계를 걸친 오류 문구만 이어 본다.
+                    combined = tail + output.lower()
+                    storage_full |= any(message in combined for message in (
+                        "no space left on device", "disk quota exceeded", "[errno 28]", "[errno 122]",
+                    ))
+                    tail = combined[-64:]
+        if process.wait():
+            if storage_full:
+                raise StorageFullError()
+            raise RuntimeError("Qwen 모델 변환에 실패했습니다. 추출 서버 로그를 확인해 주세요")
+    finally:
+        # 취소/시간 초과 때 변환기가 만든 하위 프로세스도 작업 폴더를 놓게 한다.
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+        # 부모가 먼저 끝났어도 남은 변환 하위 프로세스가 임시 파일을 다시 쓰지 못하게 한다.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.stdout.close()
+
+
 def prepare_model(model_id, cancel=None):
     if model_id not in MODELS:
         raise ValueError("지원하지 않는 Qwen 모델입니다")
@@ -40,6 +102,9 @@ def prepare_model(model_id, cancel=None):
     # 불완전한 변환 결과는 다음 실행에서 정상 모델로 취급하지 않는다.
     with tempfile.TemporaryDirectory(prefix="export-", dir=root) as temp:
         log.info("Qwen 최초 준비: %s INT8 (다운로드/변환에 시간이 걸립니다)", model_id)
+        path = Path(temp) / "model"
+        scratch = Path(temp) / "tmp"
+        scratch.mkdir()
         from huggingface_hub import snapshot_download
         source = snapshot_download(model_id, revision=revision)
         if cancel is not None and cancel.is_set():
@@ -50,27 +115,13 @@ def prepare_model(model_id, cancel=None):
         command = [
             exporter, "export", "openvino", "--model", source,
             "--task", "automatic-speech-recognition-with-past",
-            "--weight-format", "int8", "--trust-remote-code", temp,
+            "--weight-format", "int8", "--trust-remote-code", str(path),
         ]
-        process = subprocess.Popen(command)
-        try:
-            deadline = time.monotonic()+3600
-            while process.poll() is None:
-                if cancel is not None and cancel.is_set():
-                    raise InterruptedError("Transcription cancelled")
-                if time.monotonic() > deadline:
-                    raise TimeoutError("Qwen 변환 시간이 초과되었습니다")
-                time.sleep(0.25)
-            if process.returncode:
-                raise RuntimeError("Qwen 모델 변환에 실패했습니다. 추출 서버 로그를 확인해 주세요")
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try: process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-        path = Path(temp)
+        log.info("Qwen 변환 저장소 여유: %.1f GiB (최대 임시 사용량은 모델과 변환기에 따라 다릅니다)",
+                 shutil.disk_usage(root).free / 1024**3)
+        run_export(command, scratch, cancel)
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError("Transcription cancelled")
         if not (path / "config.json").is_file() or not list(path.glob("*.xml")):
             raise RuntimeError("Qwen 변환 결과가 불완전합니다")
         (path / "ftml-ready.json").write_text(json.dumps({"model": model_id, "revision": revision, "source_revision":Path(source).name}), encoding="utf-8")

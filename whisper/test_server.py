@@ -1,6 +1,7 @@
 """HTTP/inference-flow tests with a fake model; no GPU/model download or API calls."""
 
 import io
+import errno
 import json
 import threading
 import unittest
@@ -8,6 +9,7 @@ import wave
 import sys
 from types import SimpleNamespace
 from unittest.mock import patch
+from inference_runtime import STORAGE_FULL_MESSAGE, StorageFullError
 
 try:
     import numpy as np
@@ -94,6 +96,28 @@ class ServerTests(unittest.TestCase):
             response = self.client.post("/v1/audio/transcriptions", files={"file": ("audio.wav", self.wav(2), "audio/wav")})
         self.assertEqual(response.status_code, 422)
         self.assertNotIn("99:59:59", response.text)
+
+    def test_storage_exhaustion_is_actionable_without_exposing_internal_paths(self):
+        failures = [StorageFullError(), OSError(errno.ENOSPC, "No space left", "/private/model"),
+                    OSError(errno.EDQUOT, "Disk quota exceeded", "/private/model")]
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__), patch.object(server, "_run_upload", side_effect=failure), self.assertLogs("whisper", level="ERROR"):
+                response = self.client.post("/v1/audio/transcriptions", files={"file": ("audio.wav", self.wav(1))})
+                self.assertEqual(response.status_code, 507)
+                self.assertEqual(response.json()["detail"], STORAGE_FULL_MESSAGE)
+                self.assertNotIn("/private", response.text)
+
+    def test_model_loading_reports_storage_exhaustion(self):
+        with patch.object(server, "pipeline", None), patch.object(server, "loading_model", False), patch.object(server, "load_model_by_id", side_effect=StorageFullError()), self.assertLogs("whisper", level="ERROR"):
+            response = self.client.post("/v1/model/load", json={"model_id": "Qwen/Qwen3-ASR-1.7B"})
+        self.assertEqual(response.status_code, 507)
+        self.assertEqual(response.json()["detail"], STORAGE_FULL_MESSAGE)
+
+    def test_unrelated_inference_error_is_not_reported_as_storage_exhaustion(self):
+        with patch.object(server, "_run_upload", side_effect=RuntimeError("private failure details")), self.assertLogs("whisper", level="ERROR"):
+            response = self.client.post("/v1/audio/transcriptions", files={"file": ("audio.wav", self.wav(1))})
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn("private failure details", response.text)
 
     def test_verbose_json_uses_real_audio_duration(self):
         cue = SimpleNamespace(text="No", start_ts=0.1, end_ts=0.5)

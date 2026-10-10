@@ -1,7 +1,25 @@
 """One owner for model use, model replacement, and idle unloading."""
 
 from functools import wraps
+import errno
 import threading
+
+
+STORAGE_FULL_MESSAGE = (
+    "음성 인식 서버의 저장 공간 또는 파일 개수 한도(inode)가 부족합니다. "
+    "모델·임시 파일 저장소의 여유 공간을 확보한 뒤 다시 시도해 주세요."
+)
+
+
+class StorageFullError(RuntimeError):
+    def __init__(self):
+        super().__init__(STORAGE_FULL_MESSAGE)
+
+
+def is_storage_full(error):
+    return isinstance(error, StorageFullError) or (
+        isinstance(error, OSError) and error.errno in (errno.ENOSPC, errno.EDQUOT)
+    )
 
 
 class ModelGate:

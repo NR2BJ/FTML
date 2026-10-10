@@ -31,7 +31,7 @@ import uvicorn
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel
-from inference_runtime import ModelGate
+from inference_runtime import ModelGate, STORAGE_FULL_MESSAGE, is_storage_full
 from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, normalize_chunks, timed_words_to_chunks, stitch_chunks
 from qwen_pipeline import MODELS as QWEN_MODELS
 
@@ -407,6 +407,8 @@ async def transcribe_openai(
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
         log.exception("Inference failed")
+        if is_storage_full(exc):
+            raise HTTPException(507, STORAGE_FULL_MESSAGE) from exc
         raise HTTPException(500, "Transcription failed; inspect server logs") from exc
     finally:
         cancel.set()
@@ -445,6 +447,8 @@ async def load_new_model(req: ModelLoadRequest):
         await asyncio.to_thread(load_model_by_id, req.model_id, True)
     except Exception as e:
         log.error(f"Failed to load model {req.model_id}: {e}")
+        if is_storage_full(e):
+            raise HTTPException(507, STORAGE_FULL_MESSAGE) from e
         raise HTTPException(500, f"Failed to load model: {e}")
     return {"status": "ok", "model": model_id_str}
 
