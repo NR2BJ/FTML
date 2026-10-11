@@ -35,6 +35,9 @@ test('정렬 복구 안내는 복구한 작업에만 표시하고 기존 진단�
     assert.match(acoustic, /인식 문구는 바꾸지 않았/)
     assert.match(acoustic, /구간 2개는 기존 시각을 유지/)
     assert.match(render({ timing_acoustic_accepted: 0 }), /0개 발언/)
+    assert.match(render({ timing_acoustic_rechecks: 3, timing_acoustic_recovered: 2 }), /3회 재대조하여.*2개 발언/)
+    assert.match(render({ timing_acoustic_rechecks: 1 }), /0개 발언을 보완/)
+    assert.doesNotMatch(render({ timing_acoustic_rechecks: 0 }), /재대조/)
     assert.match(render({ timing_acoustic_unavailable: true }), /기존 추출 시각으로 저장/)
     assert.doesNotMatch(render({}), /음향 대조/)
   } finally {

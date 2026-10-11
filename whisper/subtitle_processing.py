@@ -258,10 +258,17 @@ def stitch_chunks(existing, incoming, seam):
         after = [c for c in incoming if (c["start_ts"]+c["end_ts"])/2 >= seam]
         missing_before = [c for c in incoming if (c["start_ts"]+c["end_ts"])/2 < seam]
         missing_after = [c for c in existing if (c["start_ts"]+c["end_ts"])/2 >= seam]
+    represented = _seam_text_coverage(existing, incoming, seam)
+    def already_present(cue, selected):
+        counterparts = represented.get(id(cue))
+        return counterparts is not None and counterparts <= {id(c) for c in selected}
+
     # 한쪽 인식이 놓친 대사는 소유권 경계만으로 버리지 않는다.
+    # 시각이 밀린 같은 문장 조각은 무음에 놓여도 누락 대사가 아니다.
+    # 다른 추론 창의 연속 원문과 대응할 때만 복구 대상에서 제외한다.
     selected = before + after
-    before = before + [c for c in missing_before if not overlaps(c, selected)]
-    after = after + [c for c in missing_after if not overlaps(c, before + after)]
+    before = before + [c for c in missing_before if not overlaps(c, selected) and not already_present(c, selected)]
+    after = after + [c for c in missing_after if not overlaps(c, before + after) and not already_present(c, before + after)]
     # 경계에 걸친 이전 문장이 있으면 새 창의 중복 부분은 이전 문장을 우선한다.
     boundary = max((c["end_ts"] for c in before), default=seam)
     result = list(before)
@@ -272,6 +279,39 @@ def stitch_chunks(existing, incoming, seam):
         cue["start_ts"] = max(cue["start_ts"], boundary)
         result.append(cue)
     return normalize_chunks(result)
+
+
+def _seam_text_coverage(existing, incoming, seam):
+    """연결 부근 두 추론의 연속 글자를 대응한다. 같은 추론의 반복은 건드리지 않는다."""
+    def indexed(cues):
+        text, owners = "", []
+        for cue in cues:
+            if cue["end_ts"] < seam - 5 or cue["start_ts"] > seam + 5:
+                continue
+            value = "".join(c for c in cue["text"] if c.isalnum())
+            text += value
+            owners.extend([cue] * len(value))
+        return text, owners
+
+    a, left = indexed(existing)
+    b, right = indexed(incoming)
+    covered, required = {}, {}
+    for owners in (left, right):
+        for cue in owners:
+            required[id(cue)] = required.get(id(cue), 0) + 1
+    for block in SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks():
+        # 짧은 맞장구 하나만 같다는 이유로 다른 발언을 누락시키지 않는다.
+        if block.size < 4:
+            continue
+        pairs = list(zip(left[block.a:block.a+block.size], right[block.b:block.b+block.size]))
+        if any(abs(x["start_ts"]-y["start_ts"]) > 4 or abs(x["end_ts"]-y["end_ts"]) > 4 for x, y in pairs):
+            continue
+        for x, y in pairs:
+            for source, target in ((x, y), (y, x)):
+                count, targets = covered.setdefault(id(source), [0, set()])
+                covered[id(source)][0] = count + 1
+                targets.add(id(target))
+    return {key: targets for key, (count, targets) in covered.items() if count == required[key]}
 
 
 def find_gaps(chunks, total_duration, threshold):

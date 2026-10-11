@@ -196,7 +196,7 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(data["timing_realigned_sentences"], 1)
                 self.assertEqual(data["timing_context_attempts"], 2)
                 self.assertEqual(data["timing_context_repaired_sentences"], 1)
-                self.assertEqual(data["timing_policy_version"], 6)
+                self.assertEqual(data["timing_policy_version"], 7)
 
     def test_split_windows_share_original_refinement_budget(self):
         model = self.model([])

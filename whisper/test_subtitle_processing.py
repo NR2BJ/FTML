@@ -8,6 +8,24 @@ def cue(text, start, end):
 
 
 class SubtitleProcessingTests(unittest.TestCase):
+    def test_seam_does_not_recover_a_late_duplicate_with_different_tokenization(self):
+        word = lambda text, start, end: dict(cue(text, start, end), _timed_word=True, _segment="qwen")
+        existing = [word("説明", 1, 1.4), word("を", 1.4, 1.6), word("聞く", 1.6, 2),
+                    word("ところです。", 3, 3.08)]
+        incoming = [word("説明", 1.05, 1.45), word("を", 1.45, 1.65), word("聞く", 1.65, 2.05),
+                    word("ところ", 2.05, 2.7), word("です。", 3.8, 3.88), word("次。", 4, 5)]
+        result = stitch_chunks(existing, incoming, 1.5)
+        self.assertEqual("".join(c["text"] for c in result), "説明を聞くところです。次。")
+
+    def test_seam_text_recovery_keeps_genuinely_missing_and_repeated_utterances(self):
+        word = lambda text, start, end: dict(cue(text, start, end), _timed_word=True, _segment="qwen")
+        existing = [word("説明", 1, 1.4), word("を", 1.4, 1.6), word("聞く", 1.6, 2),
+                    word("あっ", 2.2, 2.4), word("はい", 3, 3.2), word("はい", 4, 4.2)]
+        incoming = [word("説明", 1.05, 1.45), word("を", 1.45, 1.65), word("聞く", 1.65, 2.05),
+                    word("次。", 5, 6)]
+        result = stitch_chunks(existing, incoming, 1.5)
+        self.assertEqual("".join(c["text"] for c in result), "説明を聞くあっはいはい次。")
+
     def test_point_word_never_uses_unrelated_segment_start_as_onset(self):
         for engine in ("whisper", "qwen"):
             for first, second in [("Hello ", "there."), ("오늘 ", "갑니다."), ("明日", "です。")]:

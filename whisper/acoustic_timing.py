@@ -53,6 +53,25 @@ def token_spans(text, pieces):
     return result
 
 
+def corroborate_evidence(original, repeated):
+    """입력 범위를 바꿔도 모든 분절 시각이 일치할 때만 서로의 음향 근거를 보완한다."""
+    if len(original) != len(repeated) or not original:
+        return None
+    result = []
+    for first, second in zip(original, repeated):
+        if ((first["first"], first["last"]) != (second["first"], second["last"])
+                or not all(math.isfinite(second[k]) for k in ("start", "end", "score"))
+                or second["end"] <= second["start"]
+                or abs(first["start"]-second["start"]) > .12
+                or abs(first["end"]-second["end"]) > .12):
+            return None
+        # 시각을 평균 내거나 새 글자를 만들지 않는다. 첫 대조의 위치를
+        # 유지하고, 일치한 재검사에서 확인된 글자의 근거만 보완한다.
+        result.append(dict(first, score=max(first["score"], second["score"]),
+                           agrees=first["agrees"] or second["agrees"]))
+    return result
+
+
 def propose(chunks, evidence, duration):
     """독립 음향 근거가 충분한 발언만 교체하고 약한 구간은 원래 단어를 남긴다.
 
@@ -93,7 +112,9 @@ def propose(chunks, evidence, duration):
         gap = aligned[0]["start"] - points[-1]["end"] if points else 0
         boundary = words and (words[-1]["text"].rstrip().endswith(("。", "！", "？", ".", "!", "?"))
                               or words[-1].get("_segment") != source[0].get("_segment"))
-        if points and (gap >= .65 or boundary
+        clause_pause = (words and gap >= .3 and source[0]["start_ts"]-words[-1]["end_ts"] >= .65
+                        and words[-1]["text"].rstrip().endswith(("、", ",", ";", "；", ":", "：")))
+        if points and (gap >= .65 or boundary or clause_pause
                        or (gap >= .16 and (aligned[-1]["end"] - points[0]["start"] > 6
                                           or len("".join(w["text"] for w in words + source)) > 56))):
             runs.append((words, points))
@@ -121,10 +142,29 @@ def propose(chunks, evidence, duration):
                     and first["start"] >= 0 and last["end"] <= duration
                     and end - start >= .35 and end - start <= 12
                     and abs(start - native_start) <= 4 and abs(end - native_end) <= 4)
+        kind = "phrase"
+        support_end = last["end"]
+        # 문장 끝을 확신하지 못해도 긴 선행 무음의 근거까지 버리지 않는다.
+        # 앞의 연속 두 글자 이상이 독립 음향 경로와 일치할 때만 시작을
+        # 늦추며, 끝 시각은 원래대로 둔다. 시각을 앞당기거나 원문을 바꾸지 않는다.
+        prefix = []
+        for point in points:
+            if not point["agrees"] or point["score"] < -2:
+                break
+            prefix.append(point)
+        if (not accepted and prefix and agreement >= .5
+                and sum(p["last"]-p["first"] for p in prefix) >= 2
+                and words[0]["end_ts"]-native_start >= 1
+                and .6 <= start-native_start <= 4
+                and .35 <= native_end-start <= 6
+                and prefix[-1]["end"] <= native_end
+                and first["start"] >= 0
+                and not any(a["end_ts"] > b["start_ts"] for a, b in zip(words, words[1:]))):
+            end, support_end, accepted, kind = native_end, native_end, True, "onset"
         candidate = {"text": "".join(w["text"] for w in words), "start_ts": start, "end_ts": end,
                      "_segment": ("acoustic", first["first"], native_start)}
         proposals.append({"original": words, "candidate": [candidate], "accepted": accepted,
-                          "support_start": first["start"], "support_end": last["end"]})
+                          "support_start": first["start"], "support_end": support_end, "kind": kind})
     return proposals
 
 

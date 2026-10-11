@@ -429,7 +429,7 @@ def _run_upload(file_obj, language, cancel, model="", prompt="", observe_speech=
         diagnostics["timing_adjusted_prefixes"] = getattr(observer, "adjusted_prefixes", 0)
         diagnostics["speech_boundaries_available"] = observer is not None and not getattr(observer, "failed", False)
     diagnostics.update({"model":model_id_str,"word_timestamps":word_timestamps_active,"gap_recovery":GAP_MAX_RETRY_S>0,
-                        "timing_policy_version": 6 if model_id_str in QWEN_MODELS else 4})
+                        "timing_policy_version": 7 if model_id_str in QWEN_MODELS else 5})
     diagnostics.update(timing_diagnostics)
     log.info("추출 진단: %s", diagnostics)
     return chunks, text, time.monotonic()-started, duration, diagnostics

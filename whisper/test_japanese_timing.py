@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from japanese_timing import JapaneseTiming
+from acoustic_timing import propose
 
 
 class FakeTokenizer:
@@ -12,8 +13,64 @@ class FakeTokenizer:
     def __call__(self, text, **kwargs):
         return SimpleNamespace(input_ids=[0 if c == "x" else ord(c) for c in text])
 
+    def convert_ids_to_tokens(self, ids):
+        return [chr(i) for i in ids]
+
 
 class JapaneseTimingTests(unittest.TestCase):
+    def test_recheck_budget_and_fixed_text(self):
+        reviewer=self.reviewer()
+        source=[dict(text="あい。",start_ts=1+i*3,end_ts=1.8+i*3,_segment=i) for i in range(4)]
+        points=[]
+        for i in range(4):
+            points.extend([dict(first=i*2,last=i*2+1,start=1.3+i*3,end=1.4+i*3,score=-.1,agrees=True),
+                           dict(first=i*2+1,last=i*2+2,start=1.6+i*3,end=1.7+i*3,score=-2,agrees=False)])
+        calls=[]
+        def evidence(audio,text,offset,cancel):
+            index=len(calls)
+            calls.append(text)
+            return [dict(p,first=p["first"]-index*2,last=p["last"]-index*2,agrees=True,score=-.1)
+                    for p in points[index*2:index*2+2]]
+        reviewer.evidence=evidence
+        result,attempts=reviewer._recheck(propose(source,points,15),points,lambda a,b:None,15,None,None)
+        self.assertEqual(attempts,2)
+        self.assertEqual(calls,["あい","あい"])
+        self.assertEqual([p["accepted"] for p in result],[True,True,False,False])
+        self.assertEqual("".join(c["text"] for p in result for c in p["original"]),"あい。"*4)
+
+    def test_whole_untimed_neighbor_can_supply_context_within_thirty_seconds(self):
+        source=[dict(text="前の言葉です",start_ts=10,end_ts=13),
+                dict(text="次の言葉",start_ts=13.4,end_ts=15)]
+        start,end=JapaneseTiming._window(source,[True,True],1,2,11.4,17,30)
+        self.assertAlmostEqual(start,9.7)
+        self.assertLessEqual(end-start,30)
+        self.assertEqual(JapaneseTiming._window(source,[False,True],1,2,11.4,17,30),(11.4,17))
+        self.assertEqual(JapaneseTiming._window(source,[True,True],1,2,11.4,41.4,50),(11.4,41.4))
+
+    def test_neighbor_text_is_context_only_and_owned_cues_are_emitted_once(self):
+        reviewer = self.reviewer()
+        source = [dict(text="あい。", start_ts=i, end_ts=i+.5, _segment=i) for i in range(45)]
+        seen = []
+        def evidence(audio, text, offset, cancel):
+            seen.append((text,offset))
+            return [dict(first=i,last=i+1,start=offset+.2+i*.25,end=offset+.22+i*.25,score=-9,agrees=False)
+                    for i in range(len(text))]
+        reviewer.evidence = evidence
+        result,_ = reviewer.review(source,lambda a,b:None,50)
+        self.assertEqual(result,source)
+        self.assertGreater(sum(len(s) for s,_ in seen),sum(len(c["text"])-1 for c in source))
+
+    def test_context_cannot_split_a_shared_token_into_fake_character_times(self):
+        reviewer=self.reviewer()
+        class Joined(FakeTokenizer):
+            def __call__(self,text,**kwargs):
+                return SimpleNamespace(input_ids=[1] if text=="あいう" else [ord(c) for c in text])
+            def convert_ids_to_tokens(self,ids):
+                return ["あいう"] if ids==[1] else super().convert_ids_to_tokens(ids)
+        reviewer.processor.tokenizer=Joined()
+        source=[dict(text="あ",start_ts=1,end_ts=2),dict(text="い",start_ts=2,end_ts=3),dict(text="う",start_ts=3,end_ts=4)]
+        self.assertEqual(reviewer._context(source,[True]*3,1,2,0,5),("い",0,1))
+
     def reviewer(self):
         instance = object.__new__(JapaneseTiming)
         instance.processor = SimpleNamespace(tokenizer=FakeTokenizer())
