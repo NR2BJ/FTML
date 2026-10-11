@@ -53,6 +53,8 @@ def restore_original_words(words, text):
             pending = dict(word)
         else:
             pending["end_ts"] = word["end_ts"]
+            if word.get("_timing_uncertain"):
+                pending["_timing_uncertain"] = True
         end = boundaries.get(key_end)
         if end is not None:
             pending["word"] = text[position:end]
@@ -171,6 +173,7 @@ def normalize_aligned_words(words, text, duration):
     while index < len(words):
         word = dict(words[index])
         if word["start_ts"] == word["end_ts"]:
+            word["_timing_uncertain"] = True
             following = words[index+1] if index+1 < len(words) else None
             room_before = word["start_ts"] - (result[-1]["end_ts"] if result else 0)
             room_after = (following["start_ts"] if following else duration) - word["start_ts"]
@@ -183,11 +186,14 @@ def normalize_aligned_words(words, text, duration):
                 # 시각이 같아도 '...ますよ。でも...'를 한 단어로 만들지 않는다.
                 result[-1]["word"] += word["word"]
                 result[-1]["end_ts"] = word["start_ts"]
+                result[-1]["_timing_uncertain"] = True
             elif following and (not sentence_end(word["word"]) or not separable) and word["start_ts"] <= following["start_ts"] <= word["end_ts"] + 0.5:
-                words[index+1] = {**following, "word": word["word"] + following["word"], "start_ts": word["start_ts"]}
+                words[index+1] = {**following, "word": word["word"] + following["word"],
+                                  "start_ts": word["start_ts"], "_timing_uncertain": True}
             elif result and (not sentence_end(result[-1]["word"]) or not separable) and result[-1]["end_ts"] <= word["start_ts"] <= result[-1]["end_ts"] + 0.5:
                 result[-1]["word"] += word["word"]
                 result[-1]["end_ts"] = word["start_ts"]
+                result[-1]["_timing_uncertain"] = True
             else:
                 word["end_ts"] = min(word["start_ts"] + 0.08, duration)
                 if following:

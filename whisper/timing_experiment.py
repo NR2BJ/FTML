@@ -12,6 +12,7 @@ import time
 import wave
 
 from acoustic_timing import japanese_text
+from acoustic_timing import display_units
 from speech_observer import refine_whisper_onsets, refine_whisper_prefixes
 from subtitle_processing import group_timed_words, stabilize_short_cues
 from timing_evaluation import MAX_BYTES, evaluate_case, literal_transcript, read_json, transcript, validate_cues, write_private
@@ -41,10 +42,11 @@ def snapshot_from_trace(path, **metadata):
     return dict(metadata, schema_version=1, source_stage="before_speech_boundaries",
                 cues=records["before_speech_boundaries"]["cues"],
                 speech_spans=context["speech_spans"], speech_boundaries_enabled=context["speech_boundaries_enabled"],
+                display_policy=context.get("display_policy", "legacy"),
                 acoustic_timing_enabled=context["acoustic_timing_enabled"], expected_current=records["final"]["cues"])
 
 
-def compare_snapshot(snapshot, review=None, trim=None):
+def compare_snapshot(snapshot, review=None, trim=None, *, display_review=None, supported_review=None):
     """review는 고정 원문을 받아 (새 시각, 진단)을 반환한다. 인식 모델을 호출하지 않는다."""
     source = snapshot["cues"]
     duration, engine = snapshot["duration"], snapshot["engine"]
@@ -106,6 +108,17 @@ def compare_snapshot(snapshot, review=None, trim=None):
         variants["without_speech"] = {"cues": finish(without_speech), "description": "말소리 경계 보정만 제거하고 음향 대조 재실행"}
     if engine == "qwen":
         variants["without_hold"] = {"cues": finish(corrected, False), "description": "현재 보정에서 짧은 자막 표시 연장만 제거"}
+    for name, callback, description in (
+        ("source_boundaries", display_review, "같은 채택 시각에 원래 발언 경계로 표시 묶기"),
+        ("supported_boundaries", supported_review, "양쪽 끝이 확인된 이웃끼리만 처리 경계 제거"),
+    ):
+        if callback is None:
+            continue
+        units = callback()
+        validate_cues(units, duration)
+        if literal_transcript(units) != literal_transcript(adjusted):
+            raise ValueError("표시 묶음 비교에서 원문이 바뀌었습니다")
+        variants[name] = {"cues": finish(units), "description": description}
     result = {k: snapshot[k] for k in ("id", "work_id", "language", "split", "duration", "engine")}
     result.update(schema_version=1, baseline="no_optional_timing", variants=variants, diagnostics=diagnostics,
                   provenance={**snapshot.get("provenance", {}), "source_stage": snapshot["source_stage"],
@@ -188,8 +201,16 @@ def main():
             from japanese_timing import JapaneseTiming
             reviewer = JapaneseTiming(args.acoustic_model_path)
         started = time.monotonic()
-        review = (lambda words: reviewer.review(words, audio.read, snapshot["duration"])) if reviewer else None
-        result = compare_snapshot(snapshot, review, audio.trim)
+        resolved = []
+        def trace(stage, **values):
+            if stage == "acoustic_resolved" and not resolved:
+                resolved.extend(deepcopy(values["proposals"]))
+        def review(words):
+            return reviewer.review(words, audio.read, snapshot["duration"], trace=trace,
+                                   display_policy=snapshot.get("display_policy", "legacy"))
+        result = compare_snapshot(snapshot, review if reviewer else None, audio.trim,
+                                  display_review=(lambda: display_units(resolved, "source")) if reviewer else None,
+                                  supported_review=(lambda: display_units(resolved, "supported")) if reviewer else None)
         result["provenance"]["comparison_seconds_excluding_load"] = time.monotonic()-started
         result["provenance"]["snapshot_sha256"] = sha256(Path(args.snapshot).read_bytes()).hexdigest()
         write_private(args.output, result)

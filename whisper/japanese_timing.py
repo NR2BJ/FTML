@@ -55,7 +55,7 @@ class JapaneseTiming:
                                                                         and np.any(greedy[first:last] == token))))
         return result
 
-    def review(self, chunks, audio_getter, duration, cancel=None, trace=None):
+    def review(self, chunks, audio_getter, duration, cancel=None, trace=None, *, display_policy="legacy"):
         proposals, checked, skipped, rechecks = [], 0, 0, 0
         # 한 글자 미지원 때문에 수십 초 전체를 포기하지 않는다. 미지원
         # 단어 자체는 삭제/보간하지 않고 원래 시각을 가진 별도 구간으로 둔다.
@@ -108,7 +108,8 @@ class JapaneseTiming:
                 proposals.append(dict(original=source, candidate=source, accepted=False))
                 log.info("음향 대조 구간 유지: %.2f~%.2f (%s)", start, end, exc)
         emit(trace, "acoustic_proposals", proposals=proposals)
-        result, accepted = resolve(proposals)
+        result, accepted = resolve(proposals, display_policy=display_policy)
+        emit(trace, "acoustic_resolved", proposals=proposals, display_policy=display_policy)
         emit(trace, "acoustic_review", cues=result)
         return result, {"timing_acoustic_checked": checked, "timing_acoustic_skipped": skipped,
                         "timing_acoustic_accepted": accepted, "timing_acoustic_model": MODEL,

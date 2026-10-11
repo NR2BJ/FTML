@@ -329,8 +329,11 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
     emit(trace, "after_speech_boundaries", cues=chunks)
     emit(trace, "timing_experiment_context", speech_spans=speech_spans,
          speech_boundaries_enabled=speech_spans is not None,
+         display_policy="legacy",
          acoustic_timing_enabled=os.environ.get("JAPANESE_ACOUSTIC_TIMING", "true").lower() == "true")
     timing_diagnostics = timing_diagnostics if timing_diagnostics is not None else {}
+    timing_diagnostics["timing_uncertain_units"] = sum(bool(c.get("_timing_uncertain")) for c in chunks)
+    timing_diagnostics["timing_display_policy"] = "legacy"
     if model_id_str in QWEN_MODELS:
         for key, attribute in (("review_words", "collapsed_words"), ("realignment_attempts", "realignment_attempts"),
                                ("realigned_sentences", "realigned_sentences"), ("context_attempts", "context_alignment_attempts"),
@@ -434,7 +437,7 @@ def _run_upload(file_obj, language, cancel, model="", prompt="", observe_speech=
         diagnostics["timing_adjusted_prefixes"] = getattr(observer, "adjusted_prefixes", 0)
         diagnostics["speech_boundaries_available"] = observer is not None and not getattr(observer, "failed", False)
     diagnostics.update({"model":model_id_str,"word_timestamps":word_timestamps_active,"gap_recovery":GAP_MAX_RETRY_S>0,
-                        "timing_policy_version": 7 if model_id_str in QWEN_MODELS else 5})
+                        "timing_policy_version": 8 if model_id_str in QWEN_MODELS else 6})
     diagnostics.update(timing_diagnostics)
     log.info("추출 진단: %s", diagnostics)
     return chunks, text, time.monotonic()-started, duration, diagnostics

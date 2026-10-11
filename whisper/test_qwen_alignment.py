@@ -17,7 +17,8 @@ class QwenAlignmentTests(unittest.TestCase):
         text = "".join(w["word"] for w in words)
         result, collapsed = normalize_aligned_words(words, text, 4)
         self.assertEqual(collapsed, 3)
-        self.assertEqual(result, [word("慣れますよ。", 1, 2), word("でも", 2, 2.5), word("次。", 2.5, 3)])
+        self.assertEqual(result, [dict(word("慣れますよ。", 1, 2), _timing_uncertain=True),
+                                  dict(word("でも", 2, 2.5), _timing_uncertain=True), word("次。", 2.5, 3)])
         cues = timed_words_to_chunks(result, [{"text": text, "start_ts": 0, "end_ts": 4}], engine="qwen")
         self.assertEqual([c["text"] for c in cues], ["慣れますよ。", "でも次。"])
 
@@ -118,7 +119,7 @@ class QwenAlignmentTests(unittest.TestCase):
     def test_one_quantization_tick_at_end_joins_nearby_word(self):
         words = [word("a", 29, 29.8), word("b", 30.08, 30.08)]
         aligned, count = normalize_aligned_words(words, "ab", 30)
-        self.assertEqual(aligned, [word("ab", 29, 30)])
+        self.assertEqual(aligned, [dict(word("ab", 29, 30), _timing_uncertain=True)])
         self.assertEqual(count, 1)
 
     def test_bad_times_are_not_hidden_by_unicode_merge(self):

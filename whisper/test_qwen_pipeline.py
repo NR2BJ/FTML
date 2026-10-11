@@ -245,14 +245,14 @@ class QwenPipelineTests(unittest.TestCase):
                  [("私",7.44,8.08),("もっと",8.48,8.48),("頑張り",8.96,8.96),("ます",11.76,11.92)]]
         result, count = normalize_aligned_words(words, "私もっと頑張ります。", 12)
         self.assertEqual(count, 2)
-        self.assertEqual(result[1], {"word":"もっと頑張り","start_ts":8.48,"end_ts":8.96})
+        self.assertEqual(result[1], {"word":"もっと頑張り","start_ts":8.48,"end_ts":8.96,"_timing_uncertain":True})
         self.assertLess(result[1]["end_ts"], result[2]["start_ts"])
 
     def test_isolated_collapsed_word_never_fills_long_silence(self):
         words = [{"word":"a","start_ts":1,"end_ts":2},{"word":"b","start_ts":5,"end_ts":5}]
         result,count = normalize_aligned_words(words,"ab",6)
         self.assertEqual(count,1)
-        self.assertEqual(result[1],{"word":"b","start_ts":5,"end_ts":5.08})
+        self.assertEqual(result[1],{"word":"b","start_ts":5,"end_ts":5.08,"_timing_uncertain":True})
 
     def test_collapsed_sentence_is_not_attached_to_next_sentence_when_separable(self):
         words = [{"word":"はい","start_ts":1,"end_ts":1},{"word":"次","start_ts":1.3,"end_ts":2}]

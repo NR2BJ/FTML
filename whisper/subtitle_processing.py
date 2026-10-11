@@ -20,7 +20,7 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
             start, end = float(get("start_ts")) + offset, float(get("end_ts")) + offset
         except (TypeError, ValueError):
             start, end = -1, -1
-        entries.append((len(word_text), len(word_text)+len(key), start, end))
+        entries.append((len(word_text), len(word_text)+len(key), start, end, bool(get("_timing_uncertain"))))
         word_text += key
     blocks = SequenceMatcher(None, canonical(source), word_text, autojunk=False).get_matching_blocks()
     result, timed, cursor = [], [], 0
@@ -29,7 +29,7 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
         text = segment["text"]
         letters = [i for i, char in enumerate(text) if char.isalnum()]
         anchors, points = [], []
-        for a, b, start, end in entries:
+        for a, b, start, end, uncertain in entries:
             if a == b or not math.isfinite(start) or not math.isfinite(end) or end < start:
                 continue
             # 문장 시각과 단어 시각은 별도 추정치다. 경계를 조금 넘는 첫
@@ -47,7 +47,7 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
                             bounded_start = max(offset, start, segment["start_ts"])
                             bounded_end = min(end, segment["end_ts"])
                             if bounded_end > bounded_start:
-                                anchors.append((left, right, bounded_start, bounded_end))
+                                anchors.append((left, right, bounded_start, bounded_end, uncertain))
                     break
         if not anchors:
             timed.append(dict(segment))
@@ -61,7 +61,7 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
 
             # 시간 정렬이 실패한 부분만 남겨 원문을 누락하거나 임의로 바꾸지 않는다.
             position, previous_end, previous_letter = 0, segment["start_ts"], 0
-            for left, right, start, end in anchors:
+            for left, right, start, end, uncertain in anchors:
                 char_start = letters[left]
                 char_end = letters[right] if right < len(letters) else len(text)
                 gap = text[position:char_start]
@@ -86,8 +86,8 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
                 elif gap and timed and position > 0:
                     timed[-1]["text"] += gap
                 timed.append({"text": prefix + text[char_start:char_end], "start_ts": start, "end_ts": end,
-                              **({"_timed_word": True} if word_output and not joined_point else {}),
-                              **({"_timing_uncertain": True} if joined_point else {})})
+                              **({"_timed_word": True} if word_output and not (joined_point or uncertain) else {}),
+                              **({"_timing_uncertain": True} if joined_point or uncertain else {})})
                 position, previous_end, previous_letter = char_end, end, right
             tail = text[position:]
             if anchors and canonical(tail):
@@ -118,17 +118,25 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
 
 
 def group_timed_words(timed, total_duration=None, *, gap_threshold=0.3):
-    result, current = [], None
+    result, current, previous = [], None, None
     for word in timed:
         gap = word["start_ts"] - current["end_ts"] if current else 0
+        acoustic_gap = 0
+        if previous is not None and "_acoustic_end" in previous and "_acoustic_start" in word:
+            acoustic_gap = word["_acoustic_start"] - previous["_acoustic_end"]
+        # CTC 활성 구간은 발음 전체가 아니다. 기존 음향 대조에서 문장을
+        # 나누던 긴 쉼만 보존하며, 표시 여유가 그 쉼을 가리지 않게 한다.
+        acoustic_pause = acoustic_gap >= .65 - 1e-6
         # 길이 목표를 넘겨도 일본어의 단어 조각 한가운데를 먼저 자르지 않는다.
-        boundary = bool(current and (gap >= 0.12 or current["text"].endswith((" ", "、", ",", ";", "；", ":", "："))
+        boundary = bool(current and (gap >= 0.12 or acoustic_gap >= .16
+                                     or current["text"].endswith((" ", "、", ",", ";", "；", ":", "："))
                                      or word["text"].startswith(" ")))
         length = len(current["text"] + word["text"]) if current else 0
         duration = word["end_ts"] - current["start_ts"] if current else 0
         if current and (word.get("_segment") != current.get("_segment")
                         or word["start_ts"] < current["end_ts"]
                         or gap >= gap_threshold
+                        or acoustic_pause
                         or (gap >= 0.3 and current["end_ts"]-current["start_ts"] >= 0.4
                             and current["text"].rstrip().endswith(("、", ",", ";", "；", ":", "：")))
                         or (boundary and (duration > 6 or length > 56))
@@ -140,9 +148,13 @@ def group_timed_words(timed, total_duration=None, *, gap_threshold=0.3):
         else:
             current["text"] += word["text"]
             current["end_ts"] = max(current["end_ts"], word["end_ts"])
+            current.pop("_acoustic_end", None)
+            if "_acoustic_end" in word:
+                current["_acoustic_end"] = word["_acoustic_end"]
         if current["text"].rstrip(' \t\n\"\'」』）)]').endswith(("。", "！", "？", ".", "!", "?")):
             result.append(current)
             current = None
+        previous = word
     if current:
         result.append(current)
     return normalize_chunks(result, total_duration=total_duration)
@@ -206,6 +218,9 @@ def normalize_chunks(chunks, offset=0, total_duration=None):
             cue["_timed_word"] = True
         if get("_timing_uncertain"):
             cue["_timing_uncertain"] = True
+        for name in ("_acoustic_start", "_acoustic_end"):
+            if get(name) is not None:
+                cue[name] = get(name)
         result.append(cue)
     return sorted(result, key=lambda cue: (cue["start_ts"], cue["end_ts"]))
 
@@ -238,16 +253,19 @@ def stitch_chunks(existing, incoming, seam):
         return incoming
     if not incoming:
         return existing
+    def reliable_word(cue):
+        return cue.get("_timed_word") and not cue.get("_timing_uncertain")
+
     def overlaps(cue, others):
         return any(min(cue["end_ts"], c["end_ts"])-max(cue["start_ts"], c["start_ts"])
-                   > (0.001 if cue.get("_timed_word") and c.get("_timed_word") else 0.05) for c in others)
+                   > (0.001 if reliable_word(cue) and reliable_word(c) else 0.05) for c in others)
 
     # 두 창이 같은 시각의 같은 단어를 인식했다면 그 단어 뒤에서 연결한다.
     # 고정 시각으로 문장/단어를 자르면 앞 문장 전체가 다음 자막에 반복될 수 있다.
     key = lambda c: "".join(char for char in c["text"] if char.isalnum())
     anchors = [(abs((a["end_ts"]+b["end_ts"])/2-seam), i, j)
-               for i, a in enumerate(existing) if a.get("_timed_word") and abs(a["end_ts"]-seam) <= 2.5
-               for j, b in enumerate(incoming) if b.get("_timed_word") and abs(b["end_ts"]-seam) <= 2.5
+               for i, a in enumerate(existing) if reliable_word(a) and abs(a["end_ts"]-seam) <= 2.5
+               for j, b in enumerate(incoming) if reliable_word(b) and abs(b["end_ts"]-seam) <= 2.5
                and key(a) == key(b) and key(a) and overlaps(a, [b])]
     if anchors:
         _, left, right = min(anchors)

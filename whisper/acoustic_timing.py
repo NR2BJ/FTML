@@ -135,7 +135,9 @@ def propose(chunks, evidence, duration):
         start = max(0, first["start"] - min(.32, .10 + .055 * (first["last"] - first["first"])))
         end = min(duration, last["end"] + .24)
         native_start, native_end = words[0]["start_ts"], max(w["end_ts"] for w in words)
+        preserves_boundary = all(a.get("_segment") == b.get("_segment") for a, b in zip(words, words[1:]))
         accepted = (count >= 2 and score >= -2 and agreement >= .75
+                    and preserves_boundary
                     and not any(a["end_ts"] > b["start_ts"] for a, b in zip(words, words[1:]))
                     and min(p["score"] for p in points) >= -8
                     and first["agrees"] and last["agrees"]
@@ -152,23 +154,65 @@ def propose(chunks, evidence, duration):
             if not point["agrees"] or point["score"] < -2:
                 break
             prefix.append(point)
+        first_boundary = next((i for i in range(1, len(words))
+                               if words[i].get("_segment") != words[0].get("_segment")), len(words))
+        first_utterance_end = max(w["end_ts"] for w in words[:first_boundary])
         if (not accepted and prefix and agreement >= .5
                 and sum(p["last"]-p["first"] for p in prefix) >= 2
                 and words[0]["end_ts"]-native_start >= 1
                 and .6 <= start-native_start <= 4
                 and .35 <= native_end-start <= 6
+                and first_utterance_end-start >= .35
                 and prefix[-1]["end"] <= native_end
                 and first["start"] >= 0
                 and not any(a["end_ts"] > b["start_ts"] for a, b in zip(words, words[1:]))):
             end, support_end, accepted, kind = native_end, native_end, True, "onset"
         candidate = {"text": "".join(w["text"] for w in words), "start_ts": start, "end_ts": end,
                      "_segment": ("acoustic", first["first"], native_start)}
-        proposals.append({"original": words, "candidate": [candidate], "accepted": accepted,
-                          "support_start": first["start"], "support_end": support_end, "kind": kind})
+        candidates = [candidate]
+        if kind == "onset":
+            # 시작만 확인했으므로 첫 발언의 끝과 뒤 발언들의 시각/경계는
+            # 건드리지 않는다. 공유 분절을 잘라 짧은 끝 글자를 만들지도 않는다.
+            candidates = [dict(candidate, text="".join(w["text"] for w in words[:first_boundary]),
+                               end_ts=first_utterance_end)] + [dict(w) for w in words[first_boundary:]]
+        proposals.append({"original": words, "candidate": candidates, "accepted": accepted,
+                          "support_start": first["start"], "support_end": support_end, "kind": kind,
+                          "support_end_known": kind == "phrase"})
     return proposals
 
 
-def resolve(proposals):
+def display_units(proposals, policy="supported"):
+    """채택한 시각과 표시 경계를 분리한다. 보정 작업의 번호는 발언 경계가 아니다."""
+    if policy not in ("source", "supported", "legacy"):
+        raise ValueError("알 수 없는 자막 묶음 정책입니다")
+    result = []
+    for entry in proposals:
+        chosen = entry["candidate"] if entry["accepted"] else entry["original"]
+        for index, item in enumerate(chosen):
+            cue = dict(item)
+            if policy != "legacy" and entry["accepted"]:
+                original = entry["original"]
+                segment = original[0].get("_segment")
+                full_support = ("support_start" in entry and "support_end" in entry
+                                and entry.get("support_end_known", entry.get("kind") != "onset"))
+                # 하나의 음향 분절이 여러 발언 경계를 걸치면 내부 시각을
+                # 만들어 나누지 않는다. 이 덩어리의 양쪽 경계는 보수적으로 유지한다.
+                if (segment is not None and all(c.get("_segment") == segment for c in original)
+                        and (policy == "source" or full_support)):
+                    # 약한 이웃과 합치면 방금 확인한 발화 시작이 다시 당겨진다.
+                    # 양쪽 끝을 확인한 덩어리끼리만 작업 경계를 제거한다.
+                    cue["_segment"] = segment if policy == "source" else ("acoustic_supported", segment)
+                if index == 0 and "support_start" in entry:
+                    cue["_acoustic_start"] = entry["support_start"]
+                if index == len(chosen)-1 and full_support:
+                    cue["_acoustic_end"] = entry["support_end"]
+            result.append(cue)
+    if "".join(c["text"] for c in result) != "".join(c["text"] for p in proposals for c in p["original"]):
+        raise ValueError("음향 대조 중 원문이 바뀌었습니다")
+    return result
+
+
+def resolve(proposals, *, display_policy="legacy"):
     """교체 시각이 유지할 이웃을 침범하면 교체를 취소한다. 글자/시각을 자르지 않는다."""
     changed = True
     while changed:
@@ -217,8 +261,4 @@ def resolve(proposals):
                     if entry["accepted"]:
                         entry["accepted"] = False
                         changed = True
-    result = [cue for entry in proposals for cue in (entry["candidate"] if entry["accepted"] else entry["original"])]
-    original_text = "".join(c["text"] for p in proposals for c in p["original"])
-    if "".join(c["text"] for c in result) != original_text:
-        raise ValueError("음향 대조 중 원문이 바뀌었습니다")
-    return result, sum(p["accepted"] for p in proposals)
+    return display_units(proposals, display_policy), sum(p["accepted"] for p in proposals)

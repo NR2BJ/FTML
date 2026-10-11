@@ -13,6 +13,40 @@ def point(first, last, start, end, score=-.1, agrees=True):
 
 
 class AcousticTimingTests(unittest.TestCase):
+    def test_onset_only_preserves_first_end_next_utterance_and_short_tail_ownership(self):
+        source = [dict(word("あいう", 1, 2.5), _segment=1),
+                  dict(word("え", 2.5, 2.7), _segment=1),
+                  dict(word("おか", 3, 3.7), _segment=2), dict(word("きく", 3.7, 4), _segment=2)]
+        evidence = [point(0, 3, 2.2, 2.3), point(3, 5, 2.6, 3.1), point(5, 8, 3.6, 3.8, -2.5, False)]
+        proposals = propose(source, evidence, 10)
+        result, accepted = resolve(proposals)
+        self.assertEqual(accepted, 1)
+        self.assertEqual(proposals[0]["kind"], "onset")
+        self.assertEqual([c["text"] for c in result], ["あいうえ", "おか", "きく"])
+        self.assertGreater(result[0]["start_ts"], 1.9)
+        self.assertEqual(result[0]["end_ts"], source[1]["end_ts"])
+        self.assertEqual(result[1:], source[2:])
+
+    def test_onset_that_would_leave_a_flash_before_the_next_boundary_is_rejected(self):
+        source = [dict(word("あ", 1, 2.25), _segment=1), dict(word("いう", 2.3, 3.5), _segment=2)]
+        result, accepted = resolve(propose(source, [point(0, 3, 2.2, 2.5)], 5))
+        self.assertEqual(accepted, 0)
+        self.assertEqual(result, source)
+
+    def test_a_shared_token_cannot_erase_a_native_utterance_boundary(self):
+        source = [dict(word("あ", 1, 1.4), _segment=1), dict(word("いう", 1.4, 2), _segment=2)]
+        result, accepted = resolve(propose(source, [point(0, 3, 1.3, 1.8)], 5))
+        self.assertEqual(accepted, 0)
+        self.assertEqual(result, source)
+
+    def test_shared_boundary_atom_does_not_reject_an_unrelated_valid_phrase(self):
+        source = [dict(word("あ", 1, 1.4), _segment=1), dict(word("いう", 1.4, 2), _segment=2),
+                  dict(word("えおか。", 4, 5), _segment=3)]
+        result, accepted = resolve(propose(source, [point(0, 3, 1.3, 1.8), point(3, 6, 4.2, 4.7)], 6))
+        self.assertEqual(accepted, 1)
+        self.assertEqual(result[:2], source[:2])
+        self.assertEqual(result[-1]["text"], "えおか。")
+
     def test_recheck_requires_all_times_and_token_boundaries_to_agree(self):
         original=[point(0,2,1,1.1),point(2,3,1.5,1.6,-2,False)]
         repeated=[point(0,2,1.01,1.11,-2,False),point(2,3,1.51,1.61)]

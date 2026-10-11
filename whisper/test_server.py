@@ -27,7 +27,7 @@ class ServerTests(unittest.TestCase):
         events = []
         model = self.model([dict(text="あいうえおかきくけこ。", start_ts=1, end_ts=2)])
         mid = "Qwen/Qwen3-ASR-1.7B"
-        def review(*args):
+        def review(*args, **kwargs):
             self.assertIsNone(server.pipeline)
             events.append("review")
             return args[0], {"timing_acoustic_accepted": 1}
@@ -43,6 +43,24 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(events, ["load", "review"])
         self.assertEqual(response.json()["diagnostics"]["timing_acoustic_accepted"], 1)
         self.assertIn("timing_review_words", response.json()["diagnostics"])
+        self.assertEqual(response.json()["diagnostics"]["timing_display_policy"], "legacy")
+
+    def test_qwen_uncertainty_reaches_diagnostics_but_not_subtitle_payload(self):
+        text = "first reply"
+        mid = "Qwen/Qwen3-ASR-1.7B"
+        chunks = [dict(text=text, start_ts=1, end_ts=3)]
+        words = [
+            dict(word="first ", start_ts=1, end_ts=2),
+            dict(word="reply", start_ts=2, end_ts=3, _timing_uncertain=True)]
+        model = self.model(chunks)
+        model.generate = lambda *args: SimpleNamespace(chunks=chunks, words=words)
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", mid):
+            response = self.client.post("/v1/audio/transcriptions", data={"model": mid, "response_format": "ftml_json"},
+                                        files={"file": ("audio.wav", self.wav(4))})
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["diagnostics"]["timing_uncertain_units"], 1)
+        self.assertNotIn("_timing_uncertain", data["vtt"])
 
     def test_acoustic_failure_preserves_the_whole_result_and_cancellation_propagates(self):
         import japanese_timing
@@ -239,7 +257,7 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(data["timing_realigned_sentences"], 1)
                 self.assertEqual(data["timing_context_attempts"], 2)
                 self.assertEqual(data["timing_context_repaired_sentences"], 1)
-                self.assertEqual(data["timing_policy_version"], 7)
+                self.assertEqual(data["timing_policy_version"], 8)
 
     def test_split_windows_share_original_refinement_budget(self):
         model = self.model([])

@@ -10,7 +10,7 @@ from unittest.mock import patch
 import wave
 
 from timing_evaluation import (compare_boundaries, evaluate, evaluate_case, evaluate_files, indicators,
-                               markdown_report, read_json, reference_metrics, validate_cues, write_private)
+                               markdown_report, read_json, reference_metrics, validate_cues, write_private, compare_exposure)
 from timing_experiment import compare_snapshot, snapshot_from_trace, WaveSource
 
 
@@ -26,6 +26,21 @@ def case():
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_merging_does_not_hide_earlier_display_of_later_text(self):
+        result = compare_exposure([cue("first ", 1, 2), cue("second", 2.1, 3)], [cue("first second", 1, 3)])
+        self.assertEqual(result["advanced_characters"], 6)
+        self.assertAlmostEqual(result["maximum_advance_seconds"], 1.1)
+        self.assertEqual(len(result["changes"]), 2)
+        self.assertAlmostEqual(result["changes"][1]["start_delta"], -1.1)
+
+    def test_exposure_follows_literal_order_even_for_repeated_or_overlapping_cues(self):
+        original = [cue("yes", 1, 4), cue("yes", 2, 3)]
+        result = compare_exposure(original, [cue("yes", 1, 4), cue("yes", 2.5, 3)])
+        self.assertEqual(result["changes"], [dict(first=3, last=6, baseline_cue=1, cue=1, start_delta=.5, end_delta=0)])
+        self.assertEqual(result["maximum_advance_seconds"], 0)
+        self.assertEqual(compare_exposure([], [])["changes"], [])
+        self.assertEqual(compare_exposure(original, [cue("no", 1, 3)])["status"], "text_changed")
+
     def test_no_reference_never_claims_quality_even_if_short_cues_disappear(self):
         sample = case()
         sample["variants"]["base"]["cues"][0]["end_ts"] = 1.1
@@ -147,6 +162,20 @@ class EvaluationTests(unittest.TestCase):
 
 
 class ExperimentTests(unittest.TestCase):
+    def test_display_comparison_cannot_change_original_text(self):
+        source = self.snapshot()
+        for name in ("display_review", "supported_review"):
+            with self.assertRaisesRegex(ValueError, "원문"):
+                compare_snapshot(source, **{name: lambda: [cue("rewritten", 1, 3)]})
+
+    def test_display_comparison_is_separate_from_existing_variants(self):
+        source = self.snapshot()
+        expected = compare_snapshot(source)
+        revised = compare_snapshot(source, display_review=lambda: deepcopy(source["cues"]),
+                                   supported_review=lambda: deepcopy(source["cues"]))
+        self.assertEqual(expected["variants"], {k: v for k, v in revised["variants"].items()
+                                                if k not in ("source_boundaries", "supported_boundaries")})
+
     def snapshot(self, engine="qwen", language="en"):
         return dict(id="test", work_id="work", split="development", engine=engine, language=language,
                     duration=10, source_stage="before_speech_boundaries",

@@ -119,7 +119,32 @@ def compare_boundaries(baseline, candidate):
             "shared_starts": len(start_deltas), "shared_ends": len(end_deltas),
             "earlier_start_seconds": summary([-d for d in start_deltas if d < 0]),
             "later_start_seconds": summary([d for d in start_deltas if d > 0]),
-            "shorter_end_seconds": summary([-d for d in end_deltas if d < 0])}
+            "shorter_end_seconds": summary([-d for d in end_deltas if d < 0]),
+            "display_exposure": compare_exposure(baseline, candidate)}
+
+
+def compare_exposure(baseline, candidate):
+    """묶음이 달라도 같은 글자가 화면에 보이는 시각을 비교한다. 발화 시각은 아니다."""
+    if transcript(baseline) != transcript(candidate):
+        return {"status": "text_changed", "changes": []}
+    original, revised = cue_ranges(baseline), cue_ranges(candidate)
+    left, right, changes = 0, 0, []
+    while left < len(original) and right < len(revised):
+        a, b, before = original[left]
+        c, d, after = revised[right]
+        first, last = max(a, c), min(b, d)
+        start_delta, end_delta = after["start_ts"]-before["start_ts"], after["end_ts"]-before["end_ts"]
+        if first < last and (abs(start_delta) > .001 or abs(end_delta) > .001):
+            changes.append(dict(first=first, last=last, baseline_cue=left, cue=right,
+                                start_delta=start_delta, end_delta=end_delta))
+        if b <= d:
+            left += 1
+        if d <= b:
+            right += 1
+    return {"status": "compared", "changes": changes,
+            "advanced_characters": sum(c["last"]-c["first"] for c in changes if c["start_delta"] < -.001),
+            "maximum_advance_seconds": max((max(0, -c["start_delta"]) for c in changes), default=0),
+            "notice": "기존 표시와의 차이이며 발화 정답과의 오차가 아닙니다. 묶음 감소만으로 개선이라고 판정하지 않습니다."}
 
 
 def reference_metrics(cues, reference, duration):
@@ -216,6 +241,9 @@ def review_candidates(case, original, limit=60):
         for change in variant["comparison"]["changes"]:
             if change["new_boundary"] or any(abs(change[k] or 0) >= .4 for k in ("start_delta", "end_delta")):
                 marked[change["cue"]].add("boundary_changed")
+        for change in variant["comparison"].get("display_exposure", {}).get("changes", []):
+            if abs(change["start_delta"]) >= .4 or abs(change["end_delta"]) >= .4:
+                marked[change["cue"]].add("display_exposure_changed")
         queue = []
         for index, reasons in sorted(marked.items()):
             cue = original["variants"][name]["cues"][index]
