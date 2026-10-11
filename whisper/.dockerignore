@@ -8,3 +8,7 @@
 !qwen_pipeline.py
 !speech_observer.py
 !benchmark.py
+!extraction_trace.py
+!alignment_probe.py
+!alignment_scores.py
+!ctc_alignment.py

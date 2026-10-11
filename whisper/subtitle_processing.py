@@ -28,18 +28,21 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
         first_item = len(timed)
         text = segment["text"]
         letters = [i for i, char in enumerate(text) if char.isalnum()]
-        anchors = []
+        anchors, points = [], []
         for a, b, start, end in entries:
-            if a == b or not math.isfinite(start) or not math.isfinite(end) or end <= start:
+            if a == b or not math.isfinite(start) or not math.isfinite(end) or end < start:
                 continue
             # 문장 시각과 단어 시각은 별도 추정치다. 경계를 조금 넘는 첫
             # 단어를 버리면 긴 선행 무음의 보정 대상에서도 빠져 버린다.
-            if end <= segment["start_ts"] or start >= segment["end_ts"]:
+            if end < segment["start_ts"] or start > segment["end_ts"]:
                 continue
             for block in blocks:
                 if block.b <= a and b <= block.b+block.size:
                     left, right = block.a+a-block.b-cursor, block.a+b-block.b-cursor
                     if 0 <= left < right <= len(letters):
+                        if start == end:
+                            points.append((left, right, start))
+                            break
                         if not anchors or (left >= anchors[-1][1] and start >= anchors[-1][3]):
                             bounded_start = max(offset, start, segment["start_ts"])
                             bounded_end = min(end, segment["end_ts"])
@@ -49,27 +52,53 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
         if not anchors:
             timed.append(dict(segment))
         else:
+            def point_range(left, right):
+                selected = [p for p in points if left <= p[0] and p[1] <= right]
+                if (not selected or selected[0][0] != left or selected[-1][1] != right
+                        or any(a[1] != b[0] or a[2] > b[2] for a, b in zip(selected, selected[1:]))):
+                    return None
+                return selected[0][2], selected[-1][2]
+
             # 시간 정렬이 실패한 부분만 남겨 원문을 누락하거나 임의로 바꾸지 않는다.
-            position, previous_end = 0, segment["start_ts"]
+            position, previous_end, previous_letter = 0, segment["start_ts"], 0
             for left, right, start, end in anchors:
                 char_start = letters[left]
                 char_end = letters[right] if right < len(letters) else len(text)
                 gap = text[position:char_start]
+                prefix = gap if position == 0 and not canonical(gap) else ""
+                joined_point = False
                 if canonical(gap):
-                    if start <= previous_end:
+                    evidence = point_range(previous_letter, left)
+                    gap_start = previous_end
+                    supported = evidence and previous_end <= evidence[0] <= evidence[1] <= start
+                    if supported:
+                        # 길이 0도 '어디에 있었는지'는 남아 있다. 그 근거를 버려
+                        # 문장 시작부터 다음 단어까지 무음 전체를 채우지 않는다.
+                        gap_start = evidence[0]
+                    if supported and gap_start == start:
+                        prefix, joined_point = gap, True
+                    elif start <= gap_start:
                         anchors = []
                         break
-                    timed.append({"text": gap, "start_ts": previous_end, "end_ts": start})
+                    else:
+                        timed.append({"text": gap, "start_ts": gap_start, "end_ts": start,
+                                      "_timing_uncertain": True})
                 elif gap and timed and position > 0:
                     timed[-1]["text"] += gap
-                prefix = gap if position == 0 and not canonical(gap) else ""
                 timed.append({"text": prefix + text[char_start:char_end], "start_ts": start, "end_ts": end,
-                              **({"_timed_word": True} if word_output else {})})
-                position, previous_end = char_end, end
+                              **({"_timed_word": True} if word_output and not joined_point else {}),
+                              **({"_timing_uncertain": True} if joined_point else {})})
+                position, previous_end, previous_letter = char_end, end, right
             tail = text[position:]
             if anchors and canonical(tail):
-                if previous_end < segment["end_ts"]:
-                    timed.append({"text": tail, "start_ts": previous_end, "end_ts": segment["end_ts"]})
+                evidence = point_range(previous_letter, len(letters))
+                if evidence and evidence == (previous_end, previous_end):
+                    timed[-1]["text"] += tail
+                    timed[-1]["_timing_uncertain"] = True
+                    timed[-1].pop("_timed_word", None)
+                elif previous_end < segment["end_ts"]:
+                    timed.append({"text": tail, "start_ts": previous_end, "end_ts": segment["end_ts"],
+                                  "_timing_uncertain": True})
                 else:
                     anchors = []
             if not anchors:
@@ -82,7 +111,10 @@ def timed_words_to_chunks(words, segments, offset=0, total_duration=None, *, eng
         else:
             result.extend(group_timed_words(timed[first_item:], total_duration,
                                             gap_threshold=0.65 if engine == "qwen" else 0.3))
-    return normalize_chunks(result, total_duration=total_duration)
+    result = normalize_chunks(result, total_duration=total_duration)
+    if not word_output:
+        result = [{k: v for k, v in cue.items() if not k.startswith("_")} for cue in result]
+    return result
 
 
 def group_timed_words(timed, total_duration=None, *, gap_threshold=0.3):
@@ -172,6 +204,8 @@ def normalize_chunks(chunks, offset=0, total_duration=None):
             cue["_segment"] = get("_segment")
         if get("_timed_word"):
             cue["_timed_word"] = True
+        if get("_timing_uncertain"):
+            cue["_timing_uncertain"] = True
         result.append(cue)
     return sorted(result, key=lambda cue: (cue["start_ts"], cue["end_ts"]))
 

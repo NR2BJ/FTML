@@ -22,6 +22,25 @@ except ImportError:
 
 @unittest.skipIf(server is None, "Install Whisper web/audio dependencies to run service tests")
 class ServerTests(unittest.TestCase):
+    def test_trace_separates_original_and_projected_times_without_changing_output(self):
+        from extraction_trace import serializable
+        recorded = []
+        def trace(stage, **values):
+            recorded.append(serializable(dict(stage=stage, **values)))
+        result = SimpleNamespace(texts=['Hello there.'], chunks=[dict(text='Hello there.', start_ts=0, end_ts=10)],
+                                 words=[dict(word='Hello ', start_ts=8, end_ts=8), dict(word='there.', start_ts=8.2, end_ts=9)])
+        model = self.model([])
+        model.generate = lambda *args: result
+        with patch.object(server, 'pipeline', model), patch.object(server, 'GAP_MAX_RETRY_S', 0):
+            traced = server.run_inference(np.ones(10*16000), trace=trace)
+            plain = server.run_inference(np.ones(10*16000))
+        self.assertEqual(traced[:2], plain[:2])
+        self.assertEqual(traced[0][0]['start_ts'], 8)
+        self.assertEqual(recorded[0]['stage'], 'model_output')
+        self.assertEqual(recorded[0]['segments'][0]['start_ts'], 0)
+        self.assertEqual(recorded[-1]['stage'], 'final')
+        self.assertFalse(any(k.startswith('_') for cue in traced[0] for k in cue))
+
     def test_whisper_language_contract_with_real_config_and_no_model(self):
         try:
             from openvino_genai import WhisperGenerationConfig
@@ -74,7 +93,7 @@ class ServerTests(unittest.TestCase):
             audio.write_bytes(self.wav(1))
             output = Path(directory) / "result"
             result = ([dict(text="hello", start_ts=0, end_ts=1)], "hello", 0.1, 1, {"model":server.DEFAULT_MODEL_ID})
-            with patch.object(server, "_run_upload", return_value=result) as run, patch.object(sys, "argv", ["benchmark", str(audio), "--output", str(output)]), patch("builtins.print"):
+            with patch.object(server, "_run_upload", return_value=result) as run, patch.object(sys, "platform", "linux"), patch.object(sys, "argv", ["benchmark", str(audio), "--output", str(output)]), patch("builtins.print"):
                 benchmark.main()
             run.assert_called_once()
             self.assertIn("hello", (output / "subtitles.vtt").read_text())
@@ -130,7 +149,7 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(data["timing_realigned_sentences"], 1)
                 self.assertEqual(data["timing_context_attempts"], 2)
                 self.assertEqual(data["timing_context_repaired_sentences"], 1)
-                self.assertEqual(data["timing_policy_version"], 4)
+                self.assertEqual(data["timing_policy_version"], 5)
 
     def test_split_windows_share_original_refinement_budget(self):
         model = self.model([])

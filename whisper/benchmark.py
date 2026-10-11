@@ -5,25 +5,35 @@ import json
 from pathlib import Path
 import threading
 import time
+import sys
 
-import server
 from subtitle_processing import chunks_to_vtt
+from extraction_trace import TraceWriter
 
 
 def main():
+    if sys.platform != "linux":
+        raise SystemExit("모델 검사는 메모리를 제한한 Linux 컨테이너에서만 실행합니다")
+    import server
     parser = argparse.ArgumentParser()
     parser.add_argument("audio", help="16kHz PCM16 WAV")
     parser.add_argument("--model", default="Qwen/Qwen3-ASR-1.7B", choices=[server.DEFAULT_MODEL_ID, *server.QWEN_MODELS])
     parser.add_argument("--language", default="ja")
     parser.add_argument("--output", required=True)
     parser.add_argument("--observe-speech", action="store_true")
+    parser.add_argument("--trace", action="store_true", help="단계별 원문/시각을 비공개 JSONL 파일로 기록")
     args = parser.parse_args()
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    with open(args.audio, "rb") as audio:
-        cues, text, elapsed, duration, diagnostics = server._run_upload(
-            audio, args.language, threading.Event(), args.model, observe_speech=args.observe_speech)
+    trace = TraceWriter(output / "stages.jsonl") if args.trace else None
+    try:
+        with open(args.audio, "rb") as audio:
+            cues, text, elapsed, duration, diagnostics = server._run_upload(
+                audio, args.language, threading.Event(), args.model, observe_speech=args.observe_speech, trace=trace)
+    finally:
+        if trace:
+            trace.close()
     report = {"duration": duration, "processing_seconds_including_load": elapsed,
               "total_seconds":time.monotonic()-started, "cue_count": len(cues),
               "diagnostics":diagnostics, "cues":cues}

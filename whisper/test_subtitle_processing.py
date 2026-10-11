@@ -8,6 +8,34 @@ def cue(text, start, end):
 
 
 class SubtitleProcessingTests(unittest.TestCase):
+    def test_point_word_never_uses_unrelated_segment_start_as_onset(self):
+        for engine in ("whisper", "qwen"):
+            for first, second in [("Hello ", "there."), ("오늘 ", "갑니다."), ("明日", "です。")]:
+                with self.subTest(engine=engine, first=first):
+                    words = [dict(word=first, start_ts=8, end_ts=8),
+                             dict(word=second, start_ts=8.2, end_ts=9)]
+                    result = timed_words_to_chunks(words, [cue(first+second, 0, 10)], engine=engine)
+                    self.assertEqual(result[0]["start_ts"], 8)
+                    self.assertEqual("".join(c["text"] for c in result).replace(" ", ""), (first+second).replace(" ", ""))
+
+    def test_coincident_point_prefix_does_not_discard_good_later_times(self):
+        words = [dict(word="今", start_ts=8, end_ts=8), dict(word="日", start_ts=8, end_ts=8.5),
+                 dict(word="次。", start_ts=12, end_ts=13)]
+        result = timed_words_to_chunks(words, [cue("今日次。", 0, 15)], word_output=True)
+        self.assertEqual([(c["text"], c["start_ts"], c["end_ts"]) for c in result], [("今日", 8, 8.5), ("次。", 12, 13)])
+        self.assertTrue(result[0]["_timing_uncertain"])
+        self.assertNotIn("_timed_word", result[0])
+
+    def test_point_tail_does_not_fill_rest_of_segment(self):
+        words = [dict(word="終わり", start_ts=2, end_ts=3), dict(word="です。", start_ts=3, end_ts=3)]
+        self.assertEqual(timed_words_to_chunks(words, [cue("終わりです。", 0, 20)]), [cue("終わりです。", 2, 3)])
+
+    def test_unrelated_or_reversed_point_is_not_a_timing_anchor(self):
+        for points in [[dict(word="unrelated", start_ts=8, end_ts=8)],
+                       [dict(word="a", start_ts=9, end_ts=9), dict(word="b", start_ts=8, end_ts=8)]]:
+            result = timed_words_to_chunks(points + [dict(word="c", start_ts=10, end_ts=11)], [cue("abc", 0, 12)])
+            self.assertEqual(result[0]["start_ts"], 0)
+
     def test_first_word_crossing_segment_boundary_keeps_its_timing_evidence(self):
         words = [dict(word="前。", start_ts=1, end_ts=2),
                  dict(word="次", start_ts=2, end_ts=5),

@@ -183,6 +183,24 @@ class QwenPipelineTests(unittest.TestCase):
         self.assertEqual(pipe.aligner.align.call_args.kwargs["language"],"Japanese")
         self.assertEqual(result.words[0]["start_ts"],2)
 
+    def test_stage_trace_preserves_original_and_final_output(self):
+        from extraction_trace import serializable
+        records = []
+        def trace(stage, **values):
+            records.append(serializable(dict(stage=stage, **values)))
+        pipe, audio = self.make_pipeline()
+        traced = pipe.generate(audio, SimpleNamespace(language="ja", trace=trace))
+        plain_pipe, _ = self.make_pipeline()
+        plain = plain_pipe.generate(audio, SimpleNamespace(language="ja"))
+        self.assertEqual(traced.words, plain.words)
+        self.assertEqual([record['stage'] for record in records], [
+            'qwen_recognized', 'qwen_aligned', 'qwen_sentence_refined',
+            'qwen_context_refined', 'qwen_normalized'])
+        self.assertTrue(all(record['text'] == 'こんにちは。' for record in records))
+        self.assertEqual(records[1]['words'][0]['word'], 'こんにちは')
+        self.assertEqual(records[-1]['words'], traced.words)
+        pipe.asr.generate.assert_called_once()
+
     def test_auto_language_is_omitted_and_detected_language_reaches_aligner(self):
         for language in ["", "auto"]:
             with self.subTest(language=language):

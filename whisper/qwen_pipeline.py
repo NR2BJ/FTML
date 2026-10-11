@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from inference_runtime import StorageFullError
 from qwen_alignment import canonical_text, normalize_aligned_words, refine_aligned_sentences
 from qwen_context_alignment import repair_stranded_tails
+from extraction_trace import emit
 
 
 MODELS = {"Qwen/Qwen3-ASR-1.7B"}
@@ -168,9 +169,11 @@ class QwenPipeline:
         if detected.lower() not in supported:
             raise ValueError("Qwen 시간 정렬 언어를 확인하지 못했습니다. 음성 언어를 직접 선택해 주세요")
         self.detected_language = detected
-        return self._align(audio, text, detected, getattr(config, "cancel", None))
+        trace = getattr(config, "trace", None)
+        emit(trace, "qwen_recognized", text=text, language=detected)
+        return self._align(audio, text, detected, getattr(config, "cancel", None), trace)
 
-    def _align(self, audio, text, detected, cancel=None):
+    def _align(self, audio, text, detected, cancel=None, trace=None):
         def align(source, start, end, tokens=None):
             if cancel is not None and cancel.is_set():
                 raise InterruptedError("Transcription cancelled")
@@ -186,9 +189,11 @@ class QwenPipeline:
             aligned = aligner.align(audio=(audio[int(start*16000):int(end*16000)], 16000), text=source, language=detected)[0]
             return [{"word": item.text, "start_ts": item.start_time, "end_ts": item.end_time} for item in aligned]
         words = align(text, 0, len(audio)/16000)
+        emit(trace, "qwen_aligned", text=text, words=words)
         budget = getattr(self, "realignment_budget", 2)
         words, attempts, refined = refine_aligned_sentences(words, text, len(audio)/16000, align, cancel, max_attempts=budget)
         self.realignment_budget = budget-attempts
+        emit(trace, "qwen_sentence_refined", text=text, words=words)
         if attempts:
             log.info("Qwen 원문 유지 재정렬: %d회 시도, %d개 문장 채택", attempts, refined)
         context_attempts, context_refined = 0, 0
@@ -199,12 +204,14 @@ class QwenPipeline:
             )
             self.context_alignment_budget = context_budget-context_attempts
         self.context_alignment_attempts = getattr(self, "context_alignment_attempts", 0)+context_attempts
+        emit(trace, "qwen_context_refined", text=text, words=words)
         self.context_repaired_sentences = getattr(self, "context_repaired_sentences", 0)+context_refined
         self.realignment_attempts = getattr(self, "realignment_attempts", 0)+attempts+context_attempts
         self.realigned_sentences = getattr(self, "realigned_sentences", 0)+refined+context_refined
         if context_attempts:
             log.info("Qwen 입력 범위 대조: %d회 시도, %d개 문장 끝 보완", context_attempts, context_refined)
         words, collapsed = normalize_aligned_words(words, text, len(audio)/16000)
+        emit(trace, "qwen_normalized", text=text, words=words)
         self.collapsed_words = getattr(self, "collapsed_words", 0) + collapsed
         segment = {"text": text, "start_ts": 0, "end_ts": len(audio)/16000}
         return SimpleNamespace(chunks=[segment], words=words)
