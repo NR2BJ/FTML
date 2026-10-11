@@ -115,6 +115,7 @@ def propose(chunks, evidence, duration):
         end = min(duration, last["end"] + .24)
         native_start, native_end = words[0]["start_ts"], max(w["end_ts"] for w in words)
         accepted = (count >= 2 and score >= -2 and agreement >= .75
+                    and not any(a["end_ts"] > b["start_ts"] for a, b in zip(words, words[1:]))
                     and min(p["score"] for p in points) >= -8
                     and first["agrees"] and last["agrees"]
                     and first["start"] >= 0 and last["end"] <= duration
@@ -133,6 +134,14 @@ def resolve(proposals):
     while changed:
         changed = False
         for left, right in zip(proposals, proposals[1:]):
+            original_overlap = max(c["end_ts"] for c in left["original"]) - right["original"][0]["start_ts"]
+            if original_overlap > 1e-6:
+                # 단일 순서 CTC로 겹친 화자를 다시 배열하지 않는다.
+                for entry in (left, right):
+                    if entry["accepted"]:
+                        entry["accepted"] = False
+                        changed = True
+                continue
             # 신뢰 못 한 짧은 조각을 새로운 독립 자막으로 드러내지 않는다.
             # 원래 한 묶음이던 이웃만 보호하고, 조각의 시각은 추정하지 않는다.
             old_left, old_right = left["original"][-1], right["original"][0]
@@ -150,7 +159,6 @@ def resolve(proposals):
             a = left["candidate"] if left["accepted"] else left["original"]
             b = right["candidate"] if right["accepted"] else right["original"]
             overlap = max(c["end_ts"] for c in a) - b[0]["start_ts"]
-            original_overlap = max(c["end_ts"] for c in left["original"]) - right["original"][0]["start_ts"]
             if overlap > max(0, original_overlap) + 1e-6:
                 # 읽기 여유만 겹친 경우에는 그 여유만 줄인다. 음향 근거를
                 # 잘라내거나 원래 단어의 시각을 밀어서 충돌을 숨기지 않는다.

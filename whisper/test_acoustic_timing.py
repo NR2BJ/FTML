@@ -74,6 +74,21 @@ class AcousticTimingTests(unittest.TestCase):
         self.assertEqual(accepted, 0)
         self.assertEqual(result, original)
 
+    def test_existing_overlap_cannot_allow_a_new_reversed_speaker_order(self):
+        original = [word("あいう。", 0, 10), word("えおか。", 1, 2)]
+        proposals = [dict(original=original[:1], candidate=[word("あいう。", 4, 5)], accepted=True,
+                          support_start=4.2, support_end=4.8),
+                     dict(original=original[1:], candidate=[], accepted=False)]
+        result, accepted = resolve(proposals)
+        self.assertEqual(accepted, 0)
+        self.assertEqual(result, original)
+
+    def test_overlapping_native_words_are_not_folded_into_one_acoustic_run(self):
+        original = [word("あいう", 0, 4), word("えおか", 1, 2)]
+        result, accepted = resolve(propose(original, [point(0, 3, 1.6, 1.8), point(3, 6, 2, 2.2)], 10))
+        self.assertEqual(accepted, 0)
+        self.assertEqual(result, original)
+
     def test_only_display_padding_can_be_reduced_next_to_an_unchanged_word(self):
         original = [word("あいう。", 1, 2), word("えお。", 2.2, 3)]
         proposals = [dict(original=original[:1], candidate=[word("あいう。", 1, 2.3)], accepted=True,
