@@ -35,6 +35,7 @@ from subtitle_processing import chunks_to_vtt, find_gaps, merge_chunks, timed_wo
 from qwen_pipeline import MODELS as QWEN_MODELS
 from qwen_alignment import QwenAlignmentError
 from extraction_trace import emit
+from acoustic_timing import japanese_text
 
 logging.basicConfig(
     level=logging.INFO,
@@ -260,7 +261,7 @@ def _recover_gaps(audio_getter, chunks, config, total_duration, sr=16000, cancel
     return chunks
 
 
-def _transcribe(audio_getter, total_duration, language, cancel=None, model="", prompt="", observer=None, trace=None):
+def _transcribe(audio_getter, total_duration, language, cancel=None, model="", prompt="", observer=None, trace=None, timing_diagnostics=None):
     check_cancelled(cancel)
     if model and model != model_id_str:
         load_model_by_id(model, is_swap=True, cancel=cancel)
@@ -324,6 +325,34 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
         chunks, observer.adjusted_prefixes = refine_whisper_prefixes(chunks, spans)
         chunks, observer.adjusted_onsets = refine_whisper_onsets(chunks, spans)
     emit(trace, "after_speech_boundaries", cues=chunks)
+    timing_diagnostics = timing_diagnostics if timing_diagnostics is not None else {}
+    if model_id_str in QWEN_MODELS:
+        for key, attribute in (("review_words", "collapsed_words"), ("realignment_attempts", "realignment_attempts"),
+                               ("realigned_sentences", "realigned_sentences"), ("context_attempts", "context_alignment_attempts"),
+                               ("context_repaired_sentences", "context_repaired_sentences"),
+                               ("recovered_windows", "recovered_alignment_windows")):
+            timing_diagnostics["timing_" + key] = getattr(pipeline, attribute, 0)
+    if os.environ.get("JAPANESE_ACOUSTIC_TIMING", "true").lower() == "true" and japanese_text(chunks, language):
+        # 인식 결과를 확정한 후 모델을 해제한다. GPU/CPU 인식·정렬 가중치와
+        # 별도 음향 모델을 동시에 보유하지 않고 다음 요청은 평소처럼 재로드한다.
+        unload_model()
+        reviewer = None
+        try:
+            check_cancelled(cancel)
+            from japanese_timing import JapaneseTiming
+            log.info("일본어 원문 고정 음향 대조 시작: 인식 모델을 해제하고 CPU에서 실행합니다")
+            reviewer = JapaneseTiming()
+            chunks, reviewed = reviewer.review(chunks, audio_getter, total_duration, cancel, trace)
+            timing_diagnostics.update(reviewed)
+        except InterruptedError:
+            raise
+        except Exception:
+            # 다운로드/메모리/호환성 문제가 음성 인식 결과까지 버리게 하지 않는다.
+            timing_diagnostics["timing_acoustic_unavailable"] = True
+            log.exception("일본어 음향 대조를 완료하지 못해 이전 시각을 유지합니다")
+        finally:
+            reviewer = None
+            gc.collect()
     chunks = group_timed_words(chunks, total_duration, gap_threshold=0.65 if model_id_str in QWEN_MODELS else 0.3)
     emit(trace, "grouped", cues=chunks)
     chunks = [{key: value for key, value in cue.items() if not key.startswith("_")} for cue in chunks]
@@ -353,12 +382,12 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
 
 
 @gate.operation
-def run_inference(audio, language="", cancel=None, model="", prompt="", observer=None, trace=None):
-    return _transcribe(lambda start, end: audio[start:end], len(audio)/16000, language, cancel, model, prompt, observer, trace)
+def run_inference(audio, language="", cancel=None, model="", prompt="", observer=None, trace=None, timing_diagnostics=None):
+    return _transcribe(lambda start, end: audio[start:end], len(audio)/16000, language, cancel, model, prompt, observer, trace, timing_diagnostics)
 
 
 @gate.operation
-def run_inference_wav(file_obj, language="", cancel=None, model="", prompt="", observer=None, trace=None):
+def run_inference_wav(file_obj, language="", cancel=None, model="", prompt="", observer=None, trace=None, timing_diagnostics=None):
     check_cancelled(cancel)
     file_obj.seek(0)
     with wave.open(file_obj, "rb") as wav:
@@ -368,7 +397,7 @@ def run_inference_wav(file_obj, language="", cancel=None, model="", prompt="", o
         def read_audio(start, end):
             wav.setpos(start)
             return wav_frames_to_audio(wav.readframes(end-start), channels)
-        return _transcribe(read_audio, wav.getnframes()/16000, language, cancel, model, prompt, observer, trace)
+        return _transcribe(read_audio, wav.getnframes()/16000, language, cancel, model, prompt, observer, trace, timing_diagnostics)
 
 
 @gate.operation
@@ -385,13 +414,14 @@ def _run_upload(file_obj, language, cancel, model="", prompt="", observe_speech=
             observer.adjust_timing = timing_boundaries
         except Exception:
             log.exception("말소리 경계를 읽지 못해 원래 추출 시각을 유지합니다")
+    timing_diagnostics = {}
     try:
-        result = run_inference_wav(file_obj, language, cancel, model, prompt, observer, trace)
+        result = run_inference_wav(file_obj, language, cancel, model, prompt, observer, trace, timing_diagnostics)
     except (wave.Error, EOFError):
         check_cancelled(cancel)
         file_obj.seek(0)
         audio, _ = librosa.load(file_obj, sr=16000, mono=True)
-        result = run_inference(audio.astype(np.float32), language, cancel, model, prompt, observer, trace)
+        result = run_inference(audio.astype(np.float32), language, cancel, model, prompt, observer, trace, timing_diagnostics)
     chunks, text, elapsed, duration = result
     diagnostics = observer.finish(chunks) if observer is not None and not getattr(observer, "failed", False) else {}
     if timing_boundaries:
@@ -399,15 +429,8 @@ def _run_upload(file_obj, language, cancel, model="", prompt="", observe_speech=
         diagnostics["timing_adjusted_prefixes"] = getattr(observer, "adjusted_prefixes", 0)
         diagnostics["speech_boundaries_available"] = observer is not None and not getattr(observer, "failed", False)
     diagnostics.update({"model":model_id_str,"word_timestamps":word_timestamps_active,"gap_recovery":GAP_MAX_RETRY_S>0,
-                        "timing_policy_version": 5 if model_id_str in QWEN_MODELS else 3})
-    if model_id_str in QWEN_MODELS:
-        diagnostics["timing_review_words"] = getattr(pipeline, "collapsed_words", 0)
-        diagnostics["timing_realignment_attempts"] = getattr(pipeline, "realignment_attempts", 0)
-        diagnostics["timing_realigned_sentences"] = getattr(pipeline, "realigned_sentences", 0)
-        diagnostics["timing_context_attempts"] = getattr(pipeline, "context_alignment_attempts", 0)
-        diagnostics["timing_context_repaired_sentences"] = getattr(pipeline, "context_repaired_sentences", 0)
-        diagnostics["timing_recovered_windows"] = getattr(pipeline, "recovered_alignment_windows", 0)
-        pipeline.collapsed_words = 0
+                        "timing_policy_version": 6 if model_id_str in QWEN_MODELS else 4})
+    diagnostics.update(timing_diagnostics)
     log.info("추출 진단: %s", diagnostics)
     return chunks, text, time.monotonic()-started, duration, diagnostics
 

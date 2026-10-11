@@ -29,6 +29,14 @@ test('정렬 복구 안내는 복구한 작업에만 표시하고 기존 진단�
     assert.doesNotMatch(render({ timing_context_repaired_sentences: 0 }), /불확실한 끝부분/)
     assert.match(render({ speech_boundaries_available: false }), /원래 시각을 유지/)
     assert.doesNotMatch(render({ speech_boundaries_available: true }), /원래 시각을 유지/)
+    const acoustic = render({ timing_acoustic_accepted: 4, timing_acoustic_skipped: 2 })
+    assert.match(acoustic, /음향 대조\(실험\)/)
+    assert.match(acoustic, /4개 발언의 시각·묶음/)
+    assert.match(acoustic, /인식 문구는 바꾸지 않았/)
+    assert.match(acoustic, /구간 2개는 기존 시각을 유지/)
+    assert.match(render({ timing_acoustic_accepted: 0 }), /0개 발언/)
+    assert.match(render({ timing_acoustic_unavailable: true }), /기존 추출 시각으로 저장/)
+    assert.doesNotMatch(render({}), /음향 대조/)
   } finally {
     await server.close()
   }

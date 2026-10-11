@@ -2,6 +2,9 @@ export default function ExtractionDiagnostics({ value }: { value: unknown }) {
   if (!value || typeof value !== 'object') return null
   const data = value as Record<string, unknown>
   return <div className="subtitle-extraction-diagnostics mt-1 space-y-1 text-xs text-amber-300">
+    {typeof data.timing_acoustic_accepted === 'number' && <p>일본어 음향 대조(실험): 원음과 추출 원문을 대조해 {data.timing_acoustic_accepted}개 발언의 시각·묶음을 조정했습니다. 인식 문구는 바꾸지 않았으며, 근거가 약하거나 이웃 발언을 침범하는 후보는 적용하지 않았습니다. 노래·작은 목소리의 정확한 동기화를 보장하지는 않습니다.</p>}
+    {Number(data.timing_acoustic_skipped) > 0 && <p>음향 대조가 어려운 구간 {Number(data.timing_acoustic_skipped)}개는 기존 시각을 유지했습니다.</p>}
+    {data.timing_acoustic_unavailable === true && <p>추가 음향 대조를 완료하지 못해 기존 추출 시각으로 저장했습니다. 추출 서버의 모델 준비·메모리 상태를 확인해 주세요.</p>}
     {Number(data.timing_adjusted_onsets) > 0 && <p>긴 선행 무음이 붙은 단어 {Number(data.timing_adjusted_onsets)}개의 시작 시각을 말소리 경계와 대조해 보정했습니다. 대사와 원음은 삭제하지 않았습니다.</p>}
     {Number(data.timing_adjusted_prefixes) > 0 && <p>문장 앞의 여러 글자에 무음이 나뉘어 붙은 {Number(data.timing_adjusted_prefixes)}개 구간의 표시 시작을 보정했습니다. 문구는 유지했으며 재생하며 동기화를 확인해 주세요.</p>}
     {data.speech_boundaries_available === false && <p>말소리 경계를 확인하지 못해 Whisper의 원래 시각을 유지했습니다.</p>}

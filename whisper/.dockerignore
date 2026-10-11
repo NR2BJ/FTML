@@ -12,3 +12,5 @@
 !alignment_probe.py
 !alignment_scores.py
 !ctc_alignment.py
+!acoustic_timing.py
+!japanese_timing.py

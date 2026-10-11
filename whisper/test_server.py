@@ -22,6 +22,53 @@ except ImportError:
 
 @unittest.skipIf(server is None, "Install Whisper web/audio dependencies to run service tests")
 class ServerTests(unittest.TestCase):
+    def test_acoustic_review_releases_inference_model_and_keeps_diagnostics(self):
+        import japanese_timing
+        events = []
+        model = self.model([dict(text="あいうえおかきくけこ。", start_ts=1, end_ts=2)])
+        mid = "Qwen/Qwen3-ASR-1.7B"
+        def review(*args):
+            self.assertIsNone(server.pipeline)
+            events.append("review")
+            return args[0], {"timing_acoustic_accepted": 1}
+        def make_reviewer():
+            self.assertIsNone(server.pipeline)
+            events.append("load")
+            return SimpleNamespace(review=review)
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", mid), \
+                patch.object(japanese_timing, "JapaneseTiming", side_effect=make_reviewer):
+            response = self.client.post("/v1/audio/transcriptions", data={"model": mid, "response_format": "ftml_json"},
+                                        files={"file": ("audio.wav", self.wav(3))})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(events, ["load", "review"])
+        self.assertEqual(response.json()["diagnostics"]["timing_acoustic_accepted"], 1)
+        self.assertIn("timing_review_words", response.json()["diagnostics"])
+
+    def test_acoustic_failure_preserves_the_whole_result_and_cancellation_propagates(self):
+        import japanese_timing
+        for error in (RuntimeError("offline"), MemoryError("bounded test"), InterruptedError("cancelled")):
+            text = "あいうえおかきくけこ。"
+            model = self.model([dict(text=text, start_ts=1, end_ts=2)])
+            diagnostics = {}
+            with patch.object(server, "pipeline", model), \
+                    patch.object(japanese_timing, "JapaneseTiming", side_effect=error):
+                if isinstance(error, InterruptedError):
+                    with self.assertRaises(InterruptedError):
+                        server.run_inference(np.ones(3*16000), timing_diagnostics=diagnostics)
+                else:
+                    result = server.run_inference(np.ones(3*16000), timing_diagnostics=diagnostics)
+                    self.assertEqual(result[1], text)
+                    self.assertTrue(diagnostics["timing_acoustic_unavailable"])
+
+    def test_disabled_or_other_language_does_not_load_or_release_a_model(self):
+        import japanese_timing
+        for language, enabled in (("ko", "true"), ("en", "true"), ("ja", "false")):
+            model = self.model([dict(text="あいうえおかきくけこ。", start_ts=1, end_ts=2)])
+            with patch.object(server, "pipeline", model), patch.dict(server.os.environ, JAPANESE_ACOUSTIC_TIMING=enabled), \
+                    patch.object(japanese_timing, "JapaneseTiming", side_effect=AssertionError("model load forbidden")):
+                server.run_inference(np.ones(3*16000), language)
+                self.assertIs(server.pipeline, model)
+
     def test_trace_separates_original_and_projected_times_without_changing_output(self):
         from extraction_trace import serializable
         recorded = []
@@ -149,7 +196,7 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(data["timing_realigned_sentences"], 1)
                 self.assertEqual(data["timing_context_attempts"], 2)
                 self.assertEqual(data["timing_context_repaired_sentences"], 1)
-                self.assertEqual(data["timing_policy_version"], 5)
+                self.assertEqual(data["timing_policy_version"], 6)
 
     def test_split_windows_share_original_refinement_budget(self):
         model = self.model([])
