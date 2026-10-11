@@ -408,7 +408,7 @@ func (h *SubtitleHandler) UploadSubtitle(w http.ResponseWriter, r *http.Request)
 	}, http.StatusCreated)
 }
 
-// DeleteSubtitle removes a generated subtitle file
+// DeleteSubtitle은 생성 자막을 영구 삭제하지 않고 휴지통으로 옮긴다.
 func (h *SubtitleHandler) DeleteSubtitle(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
 	subtitleID := r.URL.Query().Get("id")
@@ -443,12 +443,24 @@ func (h *SubtitleHandler) DeleteSubtitle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := os.Remove(subPath); err != nil {
-		jsonError(w, "failed to delete subtitle: "+err.Error(), http.StatusInternalServerError)
+	label, _ := generatedSubtitleLabel(filename)
+	fullPath, valid := h.safeVideoPath(path)
+	if !valid {
+		jsonError(w, "invalid path", http.StatusForbidden)
+		return
+	}
+	for _, entry := range h.subtitleEntries(path, fullPath, false) {
+		if entry.ID == subtitleID {
+			label = entry.Label
+			break
+		}
+	}
+	if _, err := storage.TrashSubtitle(filepath.Dir(subPath), filename, label); err != nil {
+		jsonError(w, "자막을 휴지통으로 옮기지 못했습니다", http.StatusInternalServerError)
 		return
 	}
 
-	h.logSubtitleOp(r, "subtitle_delete", path, subtitleID)
+	h.logSubtitleOp(r, "subtitle_trash", path, subtitleID)
 
 	w.WriteHeader(http.StatusNoContent)
 }

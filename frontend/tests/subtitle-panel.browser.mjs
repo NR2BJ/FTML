@@ -15,6 +15,7 @@ const generated={id:'generated:whisper_ja.vtt',label:'Whisper 추출 (일본어)
 const external={id:'external:original.ass',label:'외부 원본.ass',type:'external',format:'ass',language:'zh'}
 const newer={...generated,id:'generated:translated.vtt',label:'Gemini 번역 (한국어)'}
 let entries={'a.mkv':[generated,external],'b.mkv':[generated]}, pending=[], deletions=[], requests=[]
+const trash={'a.mkv':[], 'b.mkv':[]}
 let browser
 try {
   await server.listen()
@@ -33,7 +34,15 @@ try {
     if(p.startsWith('/api/subtitle/delete/')) {
       const path=p.split('/').at(-1), id=url.searchParams.get('id')
       deletions.push({path,id});entries[path]=entries[path].filter(s=>s.id!==id)
+      trash[path].push({id:`trash-${deletions.length}`,filename:id.slice('generated:'.length),label:generated.label,deleted_at:new Date().toISOString()})
       return route.fulfill({json:{status:'deleted'}})
+    }
+    if(p.startsWith('/api/subtitle/trash/'))return route.fulfill({json:trash[p.split('/').at(-1)]})
+    if(p.startsWith('/api/subtitle/restore/')) {
+      const path=p.split('/').at(-1), item=trash[path].find(s=>s.id===url.searchParams.get('id'))
+      if(entries[path].some(s=>s.id===`generated:${item.filename}`))return route.fulfill({status:409,json:{error:'같은 이름의 자막이 있습니다.'}})
+      entries[path].push(generated);trash[path]=trash[path].filter(s=>s!==item)
+      return route.fulfill({json:{id:generated.id}})
     }
     if(p==='/api/subtitle/my-delete-requests')return route.fulfill({json:pending})
     if(p.startsWith('/api/subtitle/delete-request/')) {
@@ -56,13 +65,22 @@ try {
   await page.getByTitle(external.label,{exact:true}).waitFor()
   assert.equal(await page.getByRole('button',{name:'삭제',exact:true}).count(),1)
   await page.getByRole('button',{name:'삭제',exact:true}).click()
-  assert.equal(deletions.length,0)
-  await page.getByRole('button',{name:'취소',exact:true}).click()
-  assert.equal(deletions.length,0)
-  await page.getByRole('button',{name:'삭제',exact:true}).click()
-  await page.getByRole('button',{name:'확인',exact:true}).click()
   await page.getByTitle(generated.label,{exact:true}).waitFor({state:'detached'})
+  assert.equal(await page.getByRole('button',{name:'확인',exact:true}).count(),0)
   assert.deepEqual(deletions,[{path:'a.mkv',id:generated.id}])
+  await page.getByRole('button',{name:'휴지통',exact:true}).click()
+  await page.getByRole('button',{name:'복구',exact:true}).waitFor()
+  entries['a.mkv'].push(generated)
+  await page.getByRole('button',{name:'복구',exact:true}).click()
+  await page.getByRole('alert').filter({hasText:'같은 이름의 자막'}).waitFor()
+  assert.equal(trash['a.mkv'].length,1)
+  entries['a.mkv']=entries['a.mkv'].filter(s=>s.id!==generated.id)
+  await page.getByRole('button',{name:'복구',exact:true}).click()
+  await page.getByText('휴지통이 비어 있습니다.',{exact:true}).waitFor()
+  await page.getByRole('button',{name:'저장된 자막',exact:true}).click()
+  await page.getByTitle(generated.label,{exact:true}).waitFor()
+  await page.getByRole('button',{name:'삭제',exact:true}).click()
+  await page.getByTitle(generated.label,{exact:true}).waitFor({state:'detached'})
   entries['a.mkv'].push(newer)
   await page.evaluate(()=>window.jobs.setState({jobs:[{id:'new-result',file_path:'a.mkv',status:'completed'}]}))
   await page.getByTitle(newer.label,{exact:true}).waitFor()
@@ -71,16 +89,16 @@ try {
   assert.equal(await page.getByTitle(newer.label,{exact:true}).count(),0)
   await page.evaluate(()=>window.auth.setState({user:{role:'user'}}))
   await page.getByRole('button',{name:'삭제 요청',exact:true}).click()
-  await page.getByRole('button',{name:'확인',exact:true}).click()
   await page.getByRole('button',{name:'삭제 요청 중',exact:true}).waitFor()
   assert.equal(await page.getByRole('button',{name:'삭제 요청 중',exact:true}).isDisabled(),true)
   assert.equal(requests[0].path,'b.mkv')
-  assert.equal(deletions.length,1)
+  assert.equal(deletions.length,2)
+  assert.equal(await page.getByRole('button',{name:'휴지통',exact:true}).count(),0)
   await page.evaluate(()=>window.auth.setState({user:{role:'viewer'}}))
   await page.getByTitle(generated.label,{exact:true}).waitFor()
   assert.equal(await page.getByRole('button',{name:'삭제',exact:true}).count(),0)
   assert.equal(await page.getByRole('button',{name:'삭제 요청',exact:true}).count(),0)
   assert.equal(await page.getByLabel('작업 종류',{exact:true}).getByRole('button').count(),1)
   assert.deepEqual(errors,[])
-  console.log('우클릭 직접 패널, 오른쪽 삭제 탭, 확인/취소, 완료 결과 즉시 갱신, 영상별 목록, 관리자/사용자/열람 권한 통과')
+  console.log('확인 없는 삭제, 휴지통 목록/복구/충돌 보존, 영상별 목록, 완료 갱신, 관리자/사용자/열람 권한 통과')
 } finally {await browser?.close();await server.close()}

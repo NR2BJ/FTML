@@ -124,7 +124,11 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   setHasResumed: (v) => set({ hasResumed: v }),
   setMediaInfo: (info) => set({ mediaInfo: info }),
   setShowStats: (v) => set({ showStats: v }),
-  setSubtitles: (subs) => set({ subtitles: subs }),
+  setSubtitles: (subs) => set(state => ({
+    subtitles: subs,
+    activeSubtitle: subs.some(sub => sub.id === state.activeSubtitle) ? state.activeSubtitle : null,
+    secondarySubtitle: subs.some(sub => sub.id === state.secondarySubtitle) ? state.secondarySubtitle : null,
+  })),
   requestSubtitleRefresh: (path) => set(state => state.currentFile === path
     ? { subtitleRefreshVersion: state.subtitleRefreshVersion + 1 } : {}),
   setActiveSubtitle: (id) => set({ activeSubtitle: id }),

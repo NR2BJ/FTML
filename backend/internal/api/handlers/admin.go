@@ -442,7 +442,7 @@ func (h *AdminHandler) PendingDeleteRequestCount(w http.ResponseWriter, r *http.
 	jsonResponse(w, map[string]int{"count": count}, http.StatusOK)
 }
 
-// ApproveDeleteRequest approves a pending delete request and removes the subtitle file
+// ApproveDeleteRequest는 삭제 요청을 승인하고 자막을 휴지통으로 옮긴다.
 func (h *AdminHandler) ApproveDeleteRequest(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -469,7 +469,7 @@ func (h *AdminHandler) ApproveDeleteRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Delete the actual subtitle file
+	// 직접 삭제와 같은 보관 경로를 사용해 승인한 자막도 복구할 수 있다.
 	if strings.HasPrefix(req.SubtitleID, "generated:") {
 		filename := strings.TrimPrefix(req.SubtitleID, "generated:")
 		if filename != filepath.Base(filename) || strings.Contains(filename, "..") {
@@ -483,7 +483,7 @@ func (h *AdminHandler) ApproveDeleteRequest(w http.ResponseWriter, r *http.Reque
 			jsonError(w, "invalid subtitle path", http.StatusBadRequest)
 			return
 		}
-		if err := os.Remove(subPath); err != nil && !os.IsNotExist(err) {
+		if _, err := storage.TrashSubtitle(filepath.Dir(subPath), filename, req.SubtitleLabel); err != nil && !os.IsNotExist(err) {
 			log.Printf("[admin] failed to delete subtitle file %s: %v", subPath, err)
 			jsonError(w, "failed to delete subtitle file", http.StatusInternalServerError)
 			return
@@ -497,7 +497,7 @@ func (h *AdminHandler) ApproveDeleteRequest(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Log the operation
-	h.db.CreateFileLog(claims.UserID, claims.Username, "subtitle_delete", req.VideoPath, req.SubtitleLabel)
+	h.db.CreateFileLog(claims.UserID, claims.Username, "subtitle_trash", req.VideoPath, req.SubtitleLabel)
 
 	jsonResponse(w, map[string]string{"status": "approved"}, http.StatusOK)
 }

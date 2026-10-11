@@ -8,9 +8,10 @@ import { downloadSubtitle } from '@/utils/downloadSubtitle'
 import SubtitleSettings from './SubtitleSettings'
 import SubtitleGenerate from './SubtitleGenerate'
 import SubtitleTranslate from './SubtitleTranslate'
+import SubtitleLibrary from '../Subtitles/SubtitleLibrary'
 import type { SubtitleEntry } from '@/api/subtitle'
 
-type Panel = 'menu' | 'settings' | 'generate' | 'translate'
+type Panel = 'menu' | 'settings' | 'generate' | 'translate' | 'trash'
 
 export default function SubtitleSelector({ownerDocument = document}: {ownerDocument?: Document} = {}) {
   const { user } = useAuthStore()
@@ -99,19 +100,19 @@ export default function SubtitleSelector({ownerDocument = document}: {ownerDocum
   }
 
   const handleDelete = async (sub: SubtitleEntry) => {
-    if (!currentFile) return
+    if (!currentFile || deleting) return
     setDeleting(sub.id)
     try {
       await deleteSubtitle(currentFile, sub.id)
+      requestSubtitleRefresh(currentFile)
       if (usePlayerStore.getState().currentFile !== currentFile) return
       // If the deleted subtitle was active, clear it
-      if (activeSubtitle === sub.id) {
+      if (usePlayerStore.getState().activeSubtitle === sub.id) {
         setActiveSubtitle(null)
       }
-      // Refresh the subtitle list
-      requestSubtitleRefresh(currentFile)
+      addToast({ type: 'success', message: '휴지통으로 옮겼습니다. 자막 메뉴의 휴지통에서 복구할 수 있습니다.' })
     } catch {
-      // Silent fail
+      addToast({ type: 'error', message: '자막을 휴지통으로 옮기지 못했습니다.' })
     } finally {
       setDeleting(null)
     }
@@ -292,9 +293,9 @@ export default function SubtitleSelector({ownerDocument = document}: {ownerDocum
                         {sub.type === 'generated' && isAdmin && (
                           <button
                             onClick={() => handleDelete(sub)}
-                            disabled={deleting === sub.id}
+                            disabled={deleting !== null}
                             className="p-1 mr-1 text-gray-500 hover:text-red-400 disabled:opacity-50"
-                            title="Delete this subtitle"
+                            title="휴지통으로 이동"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -324,6 +325,9 @@ export default function SubtitleSelector({ownerDocument = document}: {ownerDocum
           )}
 
           <div className="border-t border-gray-700 my-1" />
+          {isAdmin && <button onClick={() => setPanel('trash')} className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700">
+            <Trash2 className="w-3.5 h-3.5" />자막 휴지통
+          </button>}
 
           {/* Generate button — editor/admin only */}
           {canEdit && (
@@ -365,6 +369,10 @@ export default function SubtitleSelector({ownerDocument = document}: {ownerDocum
       {panel === 'settings' && (
         <SubtitleSettings onClose={() => setPanel(null)} />
       )}
+      {panel === 'trash' && isAdmin && currentFile && <div role="dialog" aria-label="자막 휴지통" style={{ color: 'var(--color-text-primary)' }} className="subtitle-task-dialog absolute bottom-8 right-0 w-[420px] max-w-[85vw] max-h-[65vh] overflow-y-auto rounded-lg border border-dark-700 bg-dark-900 p-3 z-50">
+        <button onClick={() => setPanel('menu')} className="mb-3 text-sm text-gray-300">자막 메뉴로</button>
+        <SubtitleLibrary paths={[currentFile]} version="" initialView="trash" />
+      </div>}
 
       {panel === 'generate' && (
         <SubtitleGenerate onClose={() => setPanel(null)} />
