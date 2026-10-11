@@ -455,7 +455,7 @@ func (h *SubtitleHandler) DeleteSubtitle(w http.ResponseWriter, r *http.Request)
 			break
 		}
 	}
-	if _, err := storage.TrashSubtitle(filepath.Dir(subPath), filename, label); err != nil {
+	if _, err := storage.TrashSubtitle(filepath.Dir(subPath), filename, label, path); err != nil {
 		jsonError(w, "자막을 휴지통으로 옮기지 못했습니다", http.StatusInternalServerError)
 		return
 	}

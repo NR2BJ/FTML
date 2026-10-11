@@ -171,6 +171,8 @@ func NewRouter(database *db.Database, jwtService *auth.JWTService, cfg *config.C
 				// Subtitle delete — admin only
 				r.Delete("/subtitle/delete/*", subtitleHandler.DeleteSubtitle)
 				r.Get("/subtitle/trash/*", subtitleHandler.ListSubtitleTrash)
+				r.Get("/subtitle/trash", subtitleHandler.ListAllSubtitleTrash)
+				r.Post("/subtitle/trash/restore", subtitleHandler.RestoreGlobalSubtitle)
 				r.Post("/subtitle/restore/*", subtitleHandler.RestoreSubtitle)
 				r.Put("/subtitle/reference/*", subtitleHandler.Reference)
 

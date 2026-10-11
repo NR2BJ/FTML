@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -74,6 +75,71 @@ func TestSubtitleTrashHTTPPersistencePermissionsAndConflict(t *testing.T) {
 	content, _ := os.ReadFile(filepath.Join(dir, "whisper_ja.vtt"))
 	if string(content) != "WEBVTT\n\n原文" {
 		t.Fatal("원문 소실")
+	}
+}
+
+func TestGlobalSubtitleTrashLegacyAndSettings(t *testing.T) {
+	data := t.TempDir()
+	database, err := db.NewSQLite(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	userID, err := database.CreateUser("admin", "hash", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"old.mkv", "new.mkv", "unknown.mkv"} {
+		dir := filepath.Join(data, videoHash(path))
+		os.Mkdir(dir, 0700)
+		os.WriteFile(filepath.Join(dir, "a.vtt"), []byte(path), 0600)
+		if path == "new.mkv" {
+			_, err = storage.TrashSubtitle(dir, "a.vtt", "new", path)
+		} else {
+			_, err = storage.TrashSubtitle(dir, "a.vtt", "legacy")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	database.CreateFileLog(userID, "admin", "subtitle_trash", "old.mkv", "a.vtt")
+	h := NewSubtitleHandler(t.TempDir(), data, nil, database)
+	w := httptest.NewRecorder()
+	h.ListAllSubtitleTrash(w, httptest.NewRequest("GET", "/api/subtitle/trash", nil))
+	var entries []storage.TrashedSubtitle
+	if err := json.Unmarshal(w.Body.Bytes(), &entries); w.Code != 200 || err != nil || len(entries) != 3 {
+		t.Fatal(w.Body.String(), err)
+	}
+	for _, entry := range entries {
+		if entry.StorageKey == videoHash("old.mkv") && entry.VideoPath != "old.mkv" {
+			t.Fatal(entry)
+		}
+		if entry.StorageKey == videoHash("new.mkv") && entry.VideoPath != "new.mkv" {
+			t.Fatal(entry)
+		}
+		w = httptest.NewRecorder()
+		h.RestoreGlobalSubtitle(w, httptest.NewRequest("POST", "/api/subtitle/trash/restore?storage_key="+entry.StorageKey+"&id="+entry.ID, nil))
+		if w.Code != 200 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	}
+	w = httptest.NewRecorder()
+	h.RestoreGlobalSubtitle(w, httptest.NewRequest("POST", "/api/subtitle/trash/restore?storage_key=../&id=x", nil))
+	if w.Code != 400 {
+		t.Fatal(w.Code)
+	}
+	settings := NewSettingsHandler(database)
+	for _, value := range []string{"", "0", "7", "15", "30", "1", "-1", "garbage"} {
+		w = httptest.NewRecorder()
+		body := fmt.Sprintf(`{"subtitle_trash_retention_days":%q}`, value)
+		settings.UpdateSettings(w, httptest.NewRequest("PUT", "/settings", strings.NewReader(body)))
+		valid := value == "" || value == "0" || value == "7" || value == "15" || value == "30"
+		if valid && (w.Code != 204 || database.GetSetting("subtitle_trash_retention_days", "") != value) {
+			t.Fatal(value, w.Code)
+		}
+		if !valid && (w.Code != 400 || database.GetSetting("subtitle_trash_retention_days", "") != "30") {
+			t.Fatal(value, w.Code)
+		}
 	}
 }
 

@@ -14,10 +14,12 @@ import (
 )
 
 type TrashedSubtitle struct {
-	ID        string    `json:"id"`
-	Filename  string    `json:"filename"`
-	Label     string    `json:"label"`
-	DeletedAt time.Time `json:"deleted_at"`
+	ID         string    `json:"id"`
+	Filename   string    `json:"filename"`
+	Label      string    `json:"label"`
+	DeletedAt  time.Time `json:"deleted_at"`
+	VideoPath  string    `json:"video_path,omitempty"`
+	StorageKey string    `json:"storage_key,omitempty"`
 }
 
 func trashFilename(name string) bool {
@@ -50,13 +52,16 @@ func trashDirectory(directory string, create bool) (string, error) {
 
 // 생성/업로드와 같은 잠금을 사용한다. 메타데이터를 먼저 기록한 뒤 원본을
 // 원자적으로 옮겨, 중단되어도 휴지통 파일의 복구 이름이 남도록 한다.
-func TrashSubtitle(directory, filename, label string) (TrashedSubtitle, error) {
+func TrashSubtitle(directory, filename, label string, videoPath ...string) (TrashedSubtitle, error) {
 	versionedWriteMu.Lock()
 	defer versionedWriteMu.Unlock()
 	if label == "" || len(label) > 8192 {
 		label = filename
 	}
 	entry := TrashedSubtitle{ID: uuid.NewString(), Filename: filename, Label: label, DeletedAt: time.Now().UTC()}
+	if len(videoPath) > 0 && len(videoPath[0]) <= 8192 {
+		entry.VideoPath = videoPath[0]
+	}
 	if !trashFilename(filename) {
 		return entry, os.ErrPermission
 	}
@@ -77,6 +82,10 @@ func TrashSubtitle(directory, filename, label string) (TrashedSubtitle, error) {
 		return entry, err
 	}
 	data, err := json.Marshal(entry)
+	if err == nil && len(data) > 64*1024 {
+		entry.Label = filename
+		data, err = json.Marshal(entry)
+	}
 	if err == nil {
 		_, err = WriteNewFile(filepath.Join(item, "metadata.json"), bytes.NewReader(data))
 	}

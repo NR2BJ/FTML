@@ -146,3 +146,15 @@ func TestSubtitleTrashLongUntrustedLabelRemainsRecoverable(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSubtitleTrashEscapedMetadataRemainsReadable(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.vtt"), []byte("original"), 0600)
+	entry, err := TrashSubtitle(dir, "a.vtt", strings.Repeat("<", 8192), strings.Repeat("<", 8192))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RestoreSubtitle(dir, entry.ID); err != nil {
+		t.Fatal(err)
+	}
+}

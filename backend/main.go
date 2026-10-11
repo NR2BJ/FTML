@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/video-stream/backend/internal/db"
 	"github.com/video-stream/backend/internal/ffmpeg"
 	"github.com/video-stream/backend/internal/job"
+	"github.com/video-stream/backend/internal/storage"
 	"github.com/video-stream/backend/internal/subtitle/translate"
 	"github.com/video-stream/backend/internal/subtitle/whisper"
 )
@@ -35,6 +37,29 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer database.Close()
+	trashContext, stopTrash := context.WithCancel(context.Background())
+	trashDone := make(chan struct{})
+	go func() {
+		defer close(trashDone)
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			days, _ := strconv.Atoi(database.GetSetting("subtitle_trash_retention_days", "0"))
+			count, err := storage.PurgeExpiredSubtitleTrash(cfg.SubtitlePath, days, time.Now())
+			if err != nil {
+				log.Printf("자막 휴지통 자동 비우기 실패: %v", err)
+			}
+			if count > 0 {
+				log.Printf("자막 휴지통 자동 비우기: %d개", count)
+			}
+			select {
+			case <-trashContext.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer func() { stopTrash(); <-trashDone }()
 
 	// Ensure admin user exists
 	if err := database.EnsureAdmin(cfg.AdminUsername, cfg.AdminPassword); err != nil {

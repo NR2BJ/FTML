@@ -12,6 +12,7 @@ const maskedPrefix = "••••••••"
 
 // settingsKeys defines which keys are allowed and their display metadata
 var settingsKeys = []SettingDef{
+	{Key: "subtitle_trash_retention_days", Label: "자막 휴지통 자동 비우기", Group: "subtitle", Secret: false},
 	{Key: "timezone", Label: "Timezone", Group: "general", Placeholder: "Asia/Seoul", Secret: false},
 	{Key: "gemini_api_key", Label: "Gemini API Key", Group: "translation", Placeholder: "AIza...", Secret: true},
 	{Key: "gemini_model", Label: "Gemini Model", Group: "translation", Placeholder: "사용할 모델을 선택해 주세요", Secret: false},
@@ -81,6 +82,10 @@ func (h *SettingsHandler) UpdateSettings(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Validate keys — only allow known settings
+	if value, ok := updates["subtitle_trash_retention_days"]; ok && value != "" && value != "0" && value != "7" && value != "15" && value != "30" {
+		jsonError(w, "휴지통 보관 기간은 끄기, 7일, 15일, 30일 중 선택해 주세요", http.StatusBadRequest)
+		return
+	}
 	allowed := make(map[string]bool)
 	for _, def := range settingsKeys {
 		allowed[def.Key] = true
@@ -92,11 +97,6 @@ func (h *SettingsHandler) UpdateSettings(w http.ResponseWriter, r *http.Request)
 		}
 		// Skip masked values — don't overwrite existing secrets with the mask
 		if strings.HasPrefix(value, maskedPrefix) {
-			continue
-		}
-		// Explicit clear: empty string removes the setting
-		if value == "" {
-			h.database.SetSetting(key, "")
 			continue
 		}
 		if err := h.database.SetSetting(key, value); err != nil {

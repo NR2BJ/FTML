@@ -483,7 +483,7 @@ func (h *AdminHandler) ApproveDeleteRequest(w http.ResponseWriter, r *http.Reque
 			jsonError(w, "invalid subtitle path", http.StatusBadRequest)
 			return
 		}
-		if _, err := storage.TrashSubtitle(filepath.Dir(subPath), filename, req.SubtitleLabel); err != nil && !os.IsNotExist(err) {
+		if _, err := storage.TrashSubtitle(filepath.Dir(subPath), filename, req.SubtitleLabel, req.VideoPath); err != nil && !os.IsNotExist(err) {
 			log.Printf("[admin] failed to delete subtitle file %s: %v", subPath, err)
 			jsonError(w, "failed to delete subtitle file", http.StatusInternalServerError)
 			return

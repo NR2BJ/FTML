@@ -84,7 +84,7 @@ func TestSubtitleTrashRoutesRequireAdministrator(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, item := range [][2]string{{"GET", "/api/subtitle/trash/episode.mkv"}, {"POST", "/api/subtitle/restore/episode.mkv?id=missing"}} {
+		for _, item := range [][2]string{{"GET", "/api/subtitle/trash/episode.mkv"}, {"POST", "/api/subtitle/restore/episode.mkv?id=missing"}, {"GET", "/api/subtitle/trash"}, {"POST", "/api/subtitle/trash/restore?storage_key=0000000000000001&id=missing"}} {
 			r := httptest.NewRequest(item[0], item[1], nil)
 			r.Header.Set("Authorization", "Bearer "+token)
 			w := httptest.NewRecorder()

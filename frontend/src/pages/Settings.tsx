@@ -4,6 +4,7 @@ import { getSettings, updateSettings, type SettingItem } from '@/api/settings'
 import { listGeminiModels, type GeminiModel } from '@/api/geminiModels'
 import WhisperModelManager from '@/components/WhisperModelManager'
 import WhisperBackendManager from '@/components/WhisperBackendManager'
+import SubtitleTrash from '@/components/Subtitles/SubtitleTrash'
 
 export default function Settings() {
   const [settings, setSettings] = useState<SettingItem[]>([])
@@ -102,7 +103,7 @@ export default function Settings() {
   const groupLabels: Record<string, string> = {
     general: 'General',
     translation: 'Translation API Keys',
-    subtitle: 'Subtitle & Translation',
+    subtitle: '자막 보관',
   }
 
   const timezoneOptions = [
@@ -114,12 +115,21 @@ export default function Settings() {
   ]
 
   const settingHelp: Record<string, string> = {
+    subtitle_trash_retention_days: '저장하면 기존 휴지통에도 적용됩니다. 삭제한 날부터 지정 기간이 지난 자막을 서버가 매시간 확인하여 영구 삭제합니다. 기본값은 끄기이며 영상 파일은 지우지 않습니다.',
     timezone: 'IANA timezone for displaying dates and times (e.g. Asia/Seoul). Leave empty for browser default.',
     gemini_api_key: 'Google Gemini API key for subtitle translation. Get one at aistudio.google.com',
     gemini_model: 'Select a Gemini model for translation. Models are fetched from Google API automatically.',
   }
 
   const renderSettingInput = (setting: SettingItem) => {
+    if (setting.key === 'subtitle_trash_retention_days') return (
+      <select aria-label="자막 휴지통 자동 비우기" value={values[setting.key] || '0'}
+        onChange={e => setValues(prev => ({ ...prev, [setting.key]: e.target.value }))}
+        className="w-full bg-dark-800 border border-dark-600 rounded px-3 py-2 text-sm text-white">
+        <option value="0">끄기 · 계속 보관</option>
+        {[7, 15, 30].map(days => <option key={days} value={String(days)}>{days}일 후 영구 삭제</option>)}
+      </select>
+    )
     // Special: Timezone dropdown
     if (setting.key === 'timezone') {
       return (
@@ -255,6 +265,8 @@ export default function Settings() {
         </div>
       ))}
 
+      <SubtitleTrash />
+
       {/* Whisper Backend & Model Manager — always shown */}
       <div className="mb-6">
         <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-3">
@@ -296,8 +308,8 @@ export default function Settings() {
       </button>
 
       <p className="text-xs text-gray-600 mt-4">
-        Settings are stored in the database. All changes take effect on the next transcription/translation job.
-        Whisper backends can be managed above without restarting the server.
+        설정은 데이터베이스에 저장됩니다. 추출·번역 설정은 다음 작업부터, 휴지통 보관 기간은 다음 자동 비우기부터 적용됩니다.
+        서버를 재시작하지 않아도 됩니다.
       </p>
     </div>
   )

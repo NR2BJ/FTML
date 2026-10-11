@@ -17,6 +17,7 @@ try {
   await page.route('**/api/**',async route=>{
     const req=route.request(),p=new URL(req.url()).pathname
     if(!p.startsWith('/api/'))return route.continue()
+    if(p==='/api/subtitle/trash')return route.fulfill({json:[]})
     if(p==='/api/settings')return route.fulfill({json:[{key:'gemini_api_key',label:'Gemini API 키',group:'subtitle',secret:true,value:'',has_value:false}]})
     if(p==='/api/gpu/info')return route.fulfill({json:{device:'Intel Arc A380',vram_total:6*1024**3,vram_free:-1,driver:'i915'}})
     if(p==='/api/whisper/backends'&&req.method()==='GET')return route.fulfill({json:backends})
@@ -33,7 +34,7 @@ try {
   await page.getByText('Whisper large-v3 INT8 · 기본 모델 고정',{exact:true}).waitFor()
   await page.getByText('감지된 GPU: Intel Arc A380 · 총 VRAM 6.0 GiB',{exact:true}).waitFor()
   assert.equal(await page.locator('select').count(),0,'모델/클라우드 종류 선택 제거')
-  assert.equal(await page.locator('input').count(),1,'Gemini 키만 표시')
+  assert.equal(await page.locator('input:not([aria-label="휴지통 검색"])').count(),1,'Gemini 키만 표시')
   await page.getByRole('button',{name:'연결 확인',exact:true}).click()
   await page.getByRole('status').getByText('연결 실패: 음성 인식 서버 응답: 503',{exact:true}).waitFor()
   await page.getByRole('button',{name:'사용 중지',exact:true}).click()

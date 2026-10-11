@@ -45,11 +45,11 @@ export const getSubtitleFontUrl = (path: string, font: number | 'default') =>
 export const deleteSubtitle = (path: string, subtitleId: string) =>
   client.delete(`/subtitle/delete/${encodeMediaPath(path)}?id=${encodeURIComponent(subtitleId)}`)
 
-export interface TrashedSubtitle { id: string; filename: string; label: string; deleted_at: string }
-export const listSubtitleTrash = (path: string, signal?: AbortSignal) =>
-  client.get<TrashedSubtitle[]>(`/subtitle/trash/${encodeMediaPath(path)}`, { signal })
-export const restoreSubtitle = (path: string, id: string) =>
-  client.post(`/subtitle/restore/${encodeMediaPath(path)}?id=${encodeURIComponent(id)}`)
+export interface TrashedSubtitle { id: string; filename: string; label: string; deleted_at: string; video_path?: string; storage_key: string }
+export const listSubtitleTrash = (signal?: AbortSignal) =>
+  client.get<TrashedSubtitle[]>('/subtitle/trash', { signal })
+export const restoreSubtitle = (storageKey: string, id: string) =>
+  client.post<{video_path: string}>(`/subtitle/trash/restore?storage_key=${encodeURIComponent(storageKey)}&id=${encodeURIComponent(id)}`)
 
 export const uploadSubtitle = (videoPath: string, file: File) => {
   const formData = new FormData()
