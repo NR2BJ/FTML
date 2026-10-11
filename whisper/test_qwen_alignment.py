@@ -11,6 +11,16 @@ def word(text, start, end):
 
 
 class QwenAlignmentTests(unittest.TestCase):
+    def test_sentence_tail_prefers_own_sentence_at_exact_next_speaker_start(self):
+        words = [word("慣れ", 1, 2), word("ます", 2, 2), word("よ。", 2, 2),
+                 word("で", 2, 2), word("も", 2, 2.5), word("次。", 2.5, 3)]
+        text = "".join(w["word"] for w in words)
+        result, collapsed = normalize_aligned_words(words, text, 4)
+        self.assertEqual(collapsed, 3)
+        self.assertEqual(result, [word("慣れますよ。", 1, 2), word("でも", 2, 2.5), word("次。", 2.5, 3)])
+        cues = timed_words_to_chunks(result, [{"text": text, "start_ts": 0, "end_ts": 4}], engine="qwen")
+        self.assertEqual([c["text"] for c in cues], ["慣れますよ。", "でも次。"])
+
     def test_quick_english_words_are_not_treated_as_collapsed_cjk_phrases(self):
         self.assertEqual(alignment_issue_count([word("hello", 0, .2)]), 0)
         self.assertEqual(alignment_issue_count([word("あいうえ", 0, .16)]), 1)

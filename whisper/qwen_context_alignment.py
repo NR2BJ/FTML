@@ -71,8 +71,94 @@ def _agree(left, right):
     )
 
 
+def _suffix_at(words, position):
+    for index, word in enumerate(words):
+        if position == 0:
+            return words[index:]
+        position -= len(canonical_text(word["word"]))
+        if position < 0:
+            break
+    return []
+
+
+def repair_isolated_tails(words, text, duration, align, cancel=None, max_attempts=2):
+    """멀리 떨어진 길이 0 문장 끝을 전체 문장과 짧은 구절에서 대조한다."""
+    words = validated_original_words(words, text, duration)
+    attempts, begin = 0, 0
+    for end, last in enumerate(words, 1):
+        if not _sentence_end(last["word"]):
+            continue
+        sentence = words[begin:end]
+        sentence_begin, begin = begin, end
+        if attempts+2 > max_attempts:
+            break
+        if (len(sentence) < 5 or end == len(words) or duration > 30.1
+                or last["start_ts"] != last["end_ts"]
+                or not 0 <= words[end]["start_ts"]-last["end_ts"] <= 0.24
+                or sentence[-2]["end_ts"]-sentence[-2]["start_ts"] < 0.12
+                or not 0.65 <= last["start_ts"]-sentence[-2]["end_ts"] <= 2):
+            continue
+        focus = sentence[-4:]
+        if alignment_issue_count(focus[:-1]):
+            continue
+        source = "".join(w["word"] for w in sentence)
+        suffix = "".join(w["word"] for w in focus)
+        prefix_length = len(canonical_text(source))-len(canonical_text(suffix))
+        left = words[sentence_begin-1]["end_ts"] if sentence_begin else 0
+        start = max(left, sentence[0]["start_ts"]-0.4)
+        focus_start = max(sentence[-5]["end_ts"], focus[0]["start_ts"]-0.4)
+        finish = min(duration, (last["end_ts"]+words[end]["start_ts"])/2)
+        if (not 0.4 <= finish-start <= 12 or not 0.4 <= finish-focus_start <= 5
+                or focus_start-start < 0.24 or len(canonical_text(suffix)) < 4
+                or any(_sentence_end(w["word"]) for w in focus[:-1])):
+            continue
+
+        def check_cancelled():
+            if cancel is not None and cancel.is_set():
+                raise InterruptedError("Transcription cancelled")
+
+        def run(value, beginning):
+            nonlocal attempts
+            check_cancelled()
+            attempts += 1
+            revised = align(value, beginning, finish, None)
+            check_cancelled()
+            revised = validated_original_words(revised, value, finish-beginning)
+            return [dict(w, start_ts=w["start_ts"]+beginning, end_ts=w["end_ts"]+beginning) for w in revised]
+
+        try:
+            # 앞부분의 다른 불확실 단어 때문에 정상적으로 복구된 끝부분까지
+            # 버리지 않는다. 대조한 접미 구절만 교체하고 앞부분은 그대로 둔다.
+            whole = _suffix_at(run(source, start), prefix_length)
+            if len(whole) < 2 or alignment_issue_count(whole) or not preserves_stable_words(focus, whole):
+                continue
+            short = run(suffix, focus_start)
+            if (alignment_issue_count(short) or not _agree(whole, short)
+                    or not preserves_stable_words(focus, short)
+                    or whole[-1]["end_ts"] > last["start_ts"]-0.32
+                    or short[-1]["end_ts"] > last["start_ts"]-0.32
+                    or whole[-1]["start_ts"]-whole[-2]["end_ts"] >= 0.65
+                    or short[-1]["start_ts"]-short[-2]["end_ts"] >= 0.65):
+                continue
+            result = words[:end-4]+whole+words[end:]
+            return validated_original_words(result, text, duration), attempts, 1
+        except InterruptedError:
+            raise
+        except Exception:
+            check_cancelled()
+    return words, attempts, 0
+
+
 def repair_stranded_tails(words, text, duration, align_grouped, cancel=None, max_attempts=2):
     """기존 재정렬 후 남은 실패만 보완한다. 두 결과의 일치는 정확도 보장이 아니다."""
+    words, attempts, repaired = _repair_grouped_tails(words, text, duration, align_grouped, cancel, max_attempts)
+    if repaired or attempts+2 > max_attempts:
+        return words, attempts, repaired
+    words, extra, repaired = repair_isolated_tails(words, text, duration, align_grouped, cancel, max_attempts-attempts)
+    return words, attempts+extra, repaired
+
+
+def _repair_grouped_tails(words, text, duration, align_grouped, cancel, max_attempts):
     words = validated_original_words(words, text, duration)
     if max_attempts < 2:
         return words, 0, 0

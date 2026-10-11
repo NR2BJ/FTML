@@ -203,7 +203,7 @@ class QwenPipeline:
         self.realignment_attempts = getattr(self, "realignment_attempts", 0)+attempts+context_attempts
         self.realigned_sentences = getattr(self, "realigned_sentences", 0)+refined+context_refined
         if context_attempts:
-            log.info("Qwen 입력 범위 대조: %d회 시도, %d개 문장 끝 묶음 채택", context_attempts, context_refined)
+            log.info("Qwen 입력 범위 대조: %d회 시도, %d개 문장 끝 보완", context_attempts, context_refined)
         words, collapsed = normalize_aligned_words(words, text, len(audio)/16000)
         self.collapsed_words = getattr(self, "collapsed_words", 0) + collapsed
         segment = {"text": text, "start_ts": 0, "end_ts": len(audio)/16000}

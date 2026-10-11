@@ -3,10 +3,115 @@ import threading
 import unittest
 
 from qwen_context_alignment import repair_stranded_tails
+from qwen_alignment import normalize_aligned_words
+from subtitle_processing import timed_words_to_chunks
 
 
 def word(text, start, end):
     return {"word": text, "start_ts": start, "end_ts": end}
+
+
+class QwenIsolatedTailTests(unittest.TestCase):
+    def setUp(self):
+        self.original = [word("前。", 0, .5), word("説明", 1, 1.4), word("は", 1.4, 1.4),
+                         word("今は", 2, 2.4), word("少し", 2.4, 2.6), word("心配", 3.28, 3.44),
+                         word("です。", 4.64, 4.64), word("次。", 4.64, 5.2)]
+        self.fixed = self.original[1:6]+[word("です。", 3.92, 4)]
+        self.calls = []
+
+    def align(self, source, start, finish, tokens):
+        self.calls.append((source, start, finish, tokens))
+        words = self.fixed if source.startswith("説明") else self.fixed[-4:]
+        return [dict(w, start_ts=w["start_ts"]-start, end_ts=w["end_ts"]-start) for w in words]
+
+    def repair(self, align=None, original=None, **kwargs):
+        words = self.original if original is None else original
+        return repair_stranded_tails(words, "".join(w["word"] for w in words), 6, align or self.align, **kwargs)
+
+    def test_partial_repair_preserves_unrelated_uncertainty_and_next_sentence(self):
+        before = copy.deepcopy(self.original)
+        result, attempts, adopted = self.repair()
+        self.assertEqual((attempts, adopted), (2, 1))
+        self.assertEqual(result, self.original[:1]+self.fixed+self.original[-1:])
+        self.assertEqual(self.original, before)
+        self.assertEqual([c[0] for c in self.calls], ["説明は今は少し心配です。", "今は少し心配です。"])
+        self.assertGreater(self.calls[1][1]-self.calls[0][1], .24)
+        text = "".join(w["word"] for w in result)
+        normal, _ = normalize_aligned_words(result, text, 6)
+        cues = timed_words_to_chunks(normal, [{"text": text, "start_ts": 0, "end_ts": 6}], engine="qwen")
+        self.assertIn({"text": "心配です。", "start_ts": 3.28, "end_ts": 4}, cues)
+        self.assertEqual(cues[-1], {"text": "次。", "start_ts": 4.64, "end_ts": 5.2})
+
+    def test_invalid_uncorroborated_or_still_disconnected_tail_is_rejected(self):
+        for fault in ("text", "zero", "drift", "boundary", "disagree", "still_late", "gap", "exception"):
+            self.calls.clear()
+            def align(source, start, finish, tokens):
+                values = self.align(source, start, finish, tokens)
+                if len(self.calls) == 2:
+                    if fault == "text":
+                        values[-1]["word"] = "違う"
+                    elif fault == "zero":
+                        values[-1]["start_ts"] = values[-1]["end_ts"]
+                    elif fault == "drift":
+                        values[0]["start_ts"] -= .7
+                    elif fault == "boundary":
+                        values[-1]["end_ts"] = 30
+                    elif fault == "disagree":
+                        values[-1]["end_ts"] -= .4
+                    elif fault == "still_late":
+                        values[-1]["end_ts"] = 4.5-start
+                    elif fault == "gap":
+                        values[-1]["start_ts"] = 4.12-start
+                        values[-1]["end_ts"] = 4.2-start
+                    elif fault == "exception":
+                        raise RuntimeError("optional failure")
+                return values
+            with self.subTest(fault=fault):
+                self.assertEqual(self.repair(align), (self.original, 2, 0))
+
+    def test_normal_tail_long_pause_or_missing_context_are_not_guessed(self):
+        cases = [self.original[:7], self.original[:1]+self.fixed+self.original[-1:]]
+        for index, values in [(5, {"end_ts": 4.5}), (5, {"start_ts": 2.6, "end_ts": 2.6}),
+                              (7, {"start_ts": 5}), (6, {"start_ts": 4.5})]:
+            changed = copy.deepcopy(self.original)
+            changed[index].update(values)
+            cases.append(changed)
+        cases.append(self.original[:1]+[word("説明", .5, .6), word("は", .6, .7),
+                                       word("今は", .7, 1), word("少し", 1, 1.4)]+self.original[5:])
+        for values in cases:
+            with self.subTest(values=values):
+                self.assertEqual(self.repair(original=values), (values, 0, 0))
+
+    def test_bounded_attempts_and_cancelled_second_pass(self):
+        for budget in (0, 1):
+            self.assertEqual(self.repair(max_attempts=budget), (self.original, 0, 0))
+        cancel = threading.Event()
+        def align(*args):
+            values = self.align(*args)
+            if len(self.calls) == 2:
+                cancel.set()
+            return values
+        with self.assertRaises(InterruptedError):
+            self.repair(align, cancel=cancel)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_suffix_cannot_be_spliced_through_a_word_or_across_previous_sentence(self):
+        for fault in ("word_boundary", "overlap"):
+            self.calls.clear()
+            def align(source, start, finish, tokens):
+                values = self.align(source, start, finish, tokens)
+                if fault == "word_boundary" and len(self.calls) == 1:
+                    # 끝 구절 경계를 가로지르는 정렬 단어는 임의로 잘라 쓰지 않는다.
+                    values[1:3] = [word(values[1]["word"]+values[2]["word"], values[1]["start_ts"], values[2]["end_ts"])]
+                if fault == "overlap":
+                    suffix_start = 2 if len(self.calls) == 1 else 0
+                    values[suffix_start]["start_ts"] = 1.3-start
+                return values
+            with self.subTest(fault=fault):
+                result, attempts, adopted = self.repair(align)
+                self.assertEqual(result, self.original)
+                self.assertEqual(adopted, 0)
+                self.assertLessEqual(attempts, 2)
 
 
 class QwenContextAlignmentTests(unittest.TestCase):
@@ -121,6 +226,21 @@ class QwenContextAlignmentTests(unittest.TestCase):
             self.assertEqual(self.repair(max_attempts=budget), (self.original, 0, 0))
         self.assertEqual(self.calls, [])
         self.assertEqual(self.repair(max_attempts=2)[1:], (2, 1))
+
+    def test_existing_grouped_repair_keeps_its_budget_before_new_isolated_candidate(self):
+        other = QwenIsolatedTailTests()
+        other.setUp()
+        shifted = [dict(w, start_ts=w["start_ts"]+10, end_ts=w["end_ts"]+10) for w in self.original]
+        original = other.original+shifted
+        calls = []
+        def align(source, start, end, tokens):
+            calls.append(source)
+            self.assertEqual(source, "開発第一係山田太郎です。")
+            return [dict(w, start_ts=w["start_ts"]+10-start, end_ts=w["end_ts"]+10-start) for w in self.fixed]
+        result, attempts, adopted = repair_stranded_tails(original, "".join(w["word"] for w in original), 20, align)
+        self.assertEqual((attempts, adopted), (2, 1))
+        self.assertEqual(result[:len(other.original)], other.original)
+        self.assertEqual(len(calls), 2)
 
     def test_embedded_sentence_boundary_is_not_merged_into_one_phrase(self):
         words = copy.deepcopy(self.original)

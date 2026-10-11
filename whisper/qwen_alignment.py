@@ -177,7 +177,13 @@ def normalize_aligned_words(words, text, duration):
             # 시각이 완전히 겹쳐 분리할 여유가 없으면 기존 병합을 유지한다.
             # 문장 부호만으로 새 정렬 실패나 인접 발언 시각의 이동을 만들지 않는다.
             separable = room_before >= 0.02 or room_after >= 0.02
-            if following and (not sentence_end(word["word"]) or not separable) and word["start_ts"] <= following["start_ts"] <= word["end_ts"] + 0.5:
+            if (sentence_end(word["word"]) and result and not sentence_end(result[-1]["word"])
+                    and 0 <= room_before <= 0.5):
+                # 끝 조각은 먼저 같은 문장의 앞 단어에 붙인다. 다음 문장과
+                # 시각이 같아도 '...ますよ。でも...'를 한 단어로 만들지 않는다.
+                result[-1]["word"] += word["word"]
+                result[-1]["end_ts"] = word["start_ts"]
+            elif following and (not sentence_end(word["word"]) or not separable) and word["start_ts"] <= following["start_ts"] <= word["end_ts"] + 0.5:
                 words[index+1] = {**following, "word": word["word"] + following["word"], "start_ts": word["start_ts"]}
             elif result and (not sentence_end(result[-1]["word"]) or not separable) and result[-1]["end_ts"] <= word["start_ts"] <= result[-1]["end_ts"] + 0.5:
                 result[-1]["word"] += word["word"]
