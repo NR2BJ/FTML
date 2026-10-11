@@ -14,3 +14,5 @@
 !ctc_alignment.py
 !acoustic_timing.py
 !japanese_timing.py
+!timing_evaluation.py
+!timing_experiment.py

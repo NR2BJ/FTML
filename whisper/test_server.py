@@ -88,6 +88,26 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(recorded[-1]['stage'], 'final')
         self.assertFalse(any(k.startswith('_') for cue in traced[0] for k in cue))
 
+    def test_completed_trace_replays_same_final_cues_without_models(self):
+        from pathlib import Path
+        import tempfile
+        from extraction_trace import TraceWriter
+        from timing_experiment import snapshot_from_trace, compare_snapshot
+        model = self.model([dict(text="first", start_ts=1, end_ts=2),
+                            dict(text="reply", start_ts=4, end_ts=5)])
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/"trace.jsonl"
+            trace = TraceWriter(path)
+            try:
+                with patch.object(server, "pipeline", model):
+                    server.run_inference(np.ones(10*16000), language="en", trace=trace)
+            finally:
+                trace.close()
+            snapshot = snapshot_from_trace(path, id="example", work_id="example-work", split="development",
+                                           language="en", engine="whisper", duration=10)
+            comparison = compare_snapshot(snapshot)
+        self.assertEqual(comparison["provenance"]["production_replay"], "matched_within_2ms")
+
     def test_whisper_language_contract_with_real_config_and_no_model(self):
         try:
             from openvino_genai import WhisperGenerationConfig
@@ -145,6 +165,29 @@ class ServerTests(unittest.TestCase):
             run.assert_called_once()
             self.assertIn("hello", (output / "subtitles.vtt").read_text())
             self.assertEqual(json.loads((output / "report.json").read_text())["cue_count"], 1)
+
+    def test_benchmark_evaluation_capture_is_private_and_replayable(self):
+        import benchmark
+        import tempfile
+        import stat
+        from pathlib import Path
+        from timing_experiment import compare_snapshot
+        with tempfile.TemporaryDirectory() as folder:
+            audio, output = Path(folder)/"audio.wav", Path(folder)/"capture"
+            audio.write_bytes(self.wav(10))
+            model = self.model([dict(text="first", start_ts=1, end_ts=2)])
+            args = ["benchmark", str(audio), "--output", str(output), "--model", server.DEFAULT_MODEL_ID,
+                    "--language", "en", "--trace", "--evaluation-id", "case", "--work-id", "work"]
+            with patch.object(server, "pipeline", model), patch.object(sys, "platform", "linux"), \
+                    patch.object(sys, "argv", args), patch("builtins.print"):
+                benchmark.main()
+                with self.assertRaises(FileExistsError):
+                    benchmark.main()
+            snapshot = json.loads((output/"evaluation-snapshot.json").read_text())
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((output/"report.json").stat().st_mode), 0o600)
+            self.assertEqual(len(snapshot["provenance"]["audio_sha256"]), 64)
+            self.assertEqual(compare_snapshot(snapshot)["provenance"]["production_replay"], "matched_within_2ms")
 
     def test_retry_preserves_word_ownership_in_both_halves(self):
         from unittest.mock import Mock

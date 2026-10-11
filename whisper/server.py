@@ -319,12 +319,17 @@ def _transcribe(audio_getter, total_duration, language, cancel=None, model="", p
         position = end - overlap_samples
     chunks = _recover_gaps(audio_getter, chunks, config, total_duration, sr, cancel, trace)
     emit(trace, "before_speech_boundaries", cues=chunks)
+    speech_spans = None
     if model_id_str not in QWEN_MODELS and observer is not None and getattr(observer, "adjust_timing", False) and not getattr(observer, "failed", False):
         from speech_observer import refine_whisper_onsets, refine_whisper_prefixes
         spans = observer.merged_spans()
+        speech_spans = spans
         chunks, observer.adjusted_prefixes = refine_whisper_prefixes(chunks, spans)
         chunks, observer.adjusted_onsets = refine_whisper_onsets(chunks, spans)
     emit(trace, "after_speech_boundaries", cues=chunks)
+    emit(trace, "timing_experiment_context", speech_spans=speech_spans,
+         speech_boundaries_enabled=speech_spans is not None,
+         acoustic_timing_enabled=os.environ.get("JAPANESE_ACOUSTIC_TIMING", "true").lower() == "true")
     timing_diagnostics = timing_diagnostics if timing_diagnostics is not None else {}
     if model_id_str in QWEN_MODELS:
         for key, attribute in (("review_words", "collapsed_words"), ("realignment_attempts", "realignment_attempts"),
