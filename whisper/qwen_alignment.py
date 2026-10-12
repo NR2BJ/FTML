@@ -91,7 +91,7 @@ def validated_original_words(words, text, duration):
 def alignment_issue_count(words):
     compact_letters = lambda word: sum(unicodedata.east_asian_width(c) in ("W", "F")
                                       for c in canonical_text(word["word"]))
-    return sum(word["end_ts"] == word["start_ts"] or
+    return sum(word.get("_timing_uncertain", False) or word["end_ts"] == word["start_ts"] or
                (compact_letters(word) >= 4 and word["end_ts"]-word["start_ts"] < 0.24)
                for word in words)
 

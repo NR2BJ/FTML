@@ -27,6 +27,11 @@ class ServerTests(unittest.TestCase):
         events = []
         model = self.model([dict(text="あいうえおかきくけこ。", start_ts=1, end_ts=2)])
         mid = "Qwen/Qwen3-ASR-1.7B"
+        generate = model.generate
+        def observed_generate(*args):
+            model.interpolated_words = 2
+            return generate(*args)
+        model.generate = observed_generate
         def review(*args, **kwargs):
             self.assertIsNone(server.pipeline)
             events.append("review")
@@ -43,6 +48,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(events, ["load", "review"])
         self.assertEqual(response.json()["diagnostics"]["timing_acoustic_accepted"], 1)
         self.assertIn("timing_review_words", response.json()["diagnostics"])
+        self.assertEqual(response.json()["diagnostics"]["timing_interpolated_words"], 2)
         self.assertEqual(response.json()["diagnostics"]["timing_display_policy"], "legacy")
 
     def test_qwen_uncertainty_reaches_diagnostics_but_not_subtitle_payload(self):
@@ -61,6 +67,22 @@ class ServerTests(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["diagnostics"]["timing_uncertain_units"], 1)
         self.assertNotIn("_timing_uncertain", data["vtt"])
+
+    def test_interpolation_counter_is_reset_for_each_job(self):
+        mid = "Qwen/Qwen3-ASR-1.7B"
+        model = self.model([dict(text="Hello.", start_ts=1, end_ts=2)])
+        generate = model.generate
+        def observed_generate(*args):
+            model.interpolated_words += 3
+            return generate(*args)
+        model.generate = observed_generate
+        model.interpolated_words = 99
+        with patch.object(server, "pipeline", model), patch.object(server, "model_id_str", mid):
+            for _ in range(2):
+                response = self.client.post("/v1/audio/transcriptions", data={"model": mid, "response_format": "ftml_json"},
+                                            files={"file": ("audio.wav", self.wav(3))})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["diagnostics"]["timing_interpolated_words"], 3)
 
     def test_acoustic_failure_preserves_the_whole_result_and_cancellation_propagates(self):
         import japanese_timing
@@ -257,7 +279,7 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(data["timing_realigned_sentences"], 1)
                 self.assertEqual(data["timing_context_attempts"], 2)
                 self.assertEqual(data["timing_context_repaired_sentences"], 1)
-                self.assertEqual(data["timing_policy_version"], 8)
+                self.assertEqual(data["timing_policy_version"], 9)
 
     def test_split_windows_share_original_refinement_budget(self):
         model = self.model([])

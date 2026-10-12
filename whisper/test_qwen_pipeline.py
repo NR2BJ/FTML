@@ -128,6 +128,17 @@ class QwenExportTests(unittest.TestCase):
 
 
 class QwenPipelineTests(unittest.TestCase):
+    def setUp(self):
+        # 기존 모형 정렬기는 공식 시각 배열을 만들지 않는다. 배열 관측은
+        # test_qwen_timestamp_provenance의 연결부 계약 시험에서 확인한다.
+        from copy import copy
+        def capture(aligner):
+            local = copy(aligner)
+            local.aligner_processor = copy(aligner.aligner_processor)
+            return local, []
+        self.enterContext(patch.object(qwen_pipeline, "capture_timestamps", side_effect=capture))
+        self.enterContext(patch.object(qwen_pipeline, "mark_interpolated", side_effect=lambda words, observed: words))
+
     def test_context_repair_uses_private_processor_and_never_retranscribes(self):
         import numpy as np
         original = [("前です。", 0, 1), ("開発", 2, 2.4), ("第一", 2.4, 2.8), ("係", 2.8, 3.2),

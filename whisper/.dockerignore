@@ -6,6 +6,7 @@
 !qwen_alignment.py
 !qwen_context_alignment.py
 !qwen_pipeline.py
+!qwen_timestamp_provenance.py
 !speech_observer.py
 !benchmark.py
 !extraction_trace.py

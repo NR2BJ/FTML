@@ -27,6 +27,26 @@ class QwenAlignmentTests(unittest.TestCase):
         self.assertEqual(alignment_issue_count([word("あいうえ", 0, .16)]), 1)
         self.assertEqual(alignment_issue_count([word("가나다라", 0, .16)]), 1)
 
+    def test_interpolated_nonzero_words_are_not_stable_anchors(self):
+        from qwen_alignment import preserves_stable_words
+        words = [word("Before ", 0, .5), dict(word("interpolated.", 3, 3.5), _timing_uncertain=True)]
+        revised = [word("Before ", 0, .5), word("interpolated.", 1, 1.5)]
+        self.assertEqual(alignment_issue_count(words), 1)
+        self.assertTrue(preserves_stable_words(words, revised))
+        self.assertFalse(preserves_stable_words(words, [word("Before ", 1, 1.5), revised[1]]))
+
+    def test_interpolated_positive_words_are_retried_but_not_replaced_by_more_interpolation(self):
+        words = [word("Before.", 0, .5), dict(word("Middle.", 1, 2), _timing_uncertain=True), word("After.", 3, 4)]
+        text = "Before.Middle.After."
+        calls = []
+        def align(source, start, end):
+            calls.append(source)
+            return [dict(word("Middle", .4, 1), _timing_uncertain=True)]
+        result, attempts, accepted = refine_aligned_sentences(words, text, 5, align)
+        self.assertEqual((attempts, accepted), (1, 0))
+        self.assertEqual(calls, ["Middle."])
+        self.assertEqual(result, words)
+
     def refinement_source(self):
         words = [word("Before.", 0, .5), word("Alpha ", 1, 1.4), word("beta ", 2.8, 2.8),
                  word("gamma.", 2.8, 2.8), word("Next.", 2.8, 3.2)]
