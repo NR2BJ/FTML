@@ -8,6 +8,42 @@ def cue(text, start, end):
 
 
 class SubtitleProcessingTests(unittest.TestCase):
+    def test_seam_short_uncertain_word_is_not_recovered_twice(self):
+        for text in ("민수", "出口", "ok", "yes"):
+            for old_uncertain in (False, True):
+                with self.subTest(text=text, old_uncertain=old_uncertain):
+                    word = lambda text, start, end, uncertain=False: dict(
+                        cue(text, start, end), _segment="qwen",
+                        **({"_timing_uncertain": True} if uncertain else {"_timed_word": True}))
+                    existing = [word("앞", 1, 1.4), word(text+".", 4.44, 4.52, old_uncertain)]
+                    incoming = [word("앞", 1.05, 1.45), word(text, 4.4, 4.48, not old_uncertain),
+                                word("다음", 5.28, 6)]
+                    result = stitch_chunks(existing, incoming, 2.5)
+                    self.assertEqual([c["text"] for c in result], ["앞", text, "다음"])
+                    self.assertEqual((result[1]["start_ts"], result[1]["end_ts"]), (4.4, 4.48))
+
+    def test_seam_short_match_must_overlap_and_be_unambiguous(self):
+        from subtitle_processing import _seam_text_coverage
+        word = lambda start, end: dict(cue("네", start, end), _timing_uncertain=True, _segment="qwen")
+        for left, right in [([word(4, 4.08)], [word(4.08, 4.16)]),
+                            ([word(4, 4.08)], [word(4.08-1e-12, 4.16)]),
+                            ([word(4, 4.08), word(4.02, 4.1)], [word(4.04, 4.12)]),
+                            ([word(4.04, 4.12)], [word(4, 4.08), word(4.02, 4.1)])]:
+            self.assertEqual(_seam_text_coverage(left, right, 2.5), {})
+
+    def test_seam_short_coverage_does_not_match_partial_or_untimed_text(self):
+        from subtitle_processing import _seam_text_coverage
+        for left, right in [(dict(cue("ok", 1, 1.1), _timing_uncertain=True),
+                             dict(cue("okay", 1.04, 1.14), _timed_word=True)),
+                            (cue("ok", 1, 1.1), cue("ok", 1.04, 1.14))]:
+            self.assertEqual(_seam_text_coverage([left], [right], 2.5), {})
+
+    def test_seam_short_duplicate_recovery_is_symmetric(self):
+        word = lambda text, start, end: dict(cue(text, start, end), _timing_uncertain=True, _segment="qwen")
+        existing = [word("네", 4.4, 4.48), dict(cue("확인", 6.9, 7.4), _timed_word=True)]
+        incoming = [word("네.", 4.44, 4.52), dict(cue("확인", 6.95, 7.45), _timed_word=True), word("다음", 8, 9)]
+        self.assertEqual(stitch_chunks(existing, incoming, 5), existing+[incoming[-1]])
+
     def test_seam_does_not_recover_a_late_duplicate_with_different_tokenization(self):
         word = lambda text, start, end: dict(cue(text, start, end), _timed_word=True, _segment="qwen")
         existing = [word("説明", 1, 1.4), word("を", 1.4, 1.6), word("聞く", 1.6, 2),

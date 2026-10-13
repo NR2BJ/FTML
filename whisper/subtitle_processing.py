@@ -313,15 +313,28 @@ def _seam_text_coverage(existing, incoming, seam):
 
     a, left = indexed(existing)
     b, right = indexed(incoming)
+    left_cues, right_cues = list({id(c): c for c in left}.values()), list({id(c): c for c in right}.values())
+    key = lambda c: "".join(char for char in c["text"] if char.isalnum())
+
+    def same_word(source, target):
+        return (bool(source.get("_timed_word") or source.get("_timing_uncertain"))
+                and bool(target.get("_timed_word") or target.get("_timing_uncertain"))
+                and key(source) == key(target) and bool(key(source))
+                and min(source["end_ts"], target["end_ts"])-max(source["start_ts"], target["start_ts"]) > .001)
+
     covered, required = {}, {}
     for owners in (left, right):
         for cue in owners:
             required[id(cue)] = required.get(id(cue), 0) + 1
     for block in SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks():
-        # 짧은 맞장구 하나만 같다는 이유로 다른 발언을 누락시키지 않는다.
-        if block.size < 4:
-            continue
         pairs = list(zip(left[block.a:block.a+block.size], right[block.b:block.b+block.size]))
+        if block.size < 4:
+            # 짧은 단어도 두 추론에서 온전한 단어/시각이 유일하게 겹치면
+            # 이미 선택된 대사다. 부분 글자 일치나 여러 맞장구는 제외한다.
+            if not pairs or not all(same_word(x, y)
+                    and sum(same_word(x, c) for c in right_cues) == 1
+                    and sum(same_word(c, y) for c in left_cues) == 1 for x, y in pairs):
+                continue
         if any(abs(x["start_ts"]-y["start_ts"]) > 4 or abs(x["end_ts"]-y["end_ts"]) > 4 for x, y in pairs):
             continue
         for x, y in pairs:
